@@ -2,13 +2,16 @@
 #![cfg(all(feature = "client", not(feature = "local")))]
 mod common;
 
+use std::time::Duration;
+
 use common::handlers::TestServer;
 use rmcp::{
-    ServerHandler, ServiceExt,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
-        ClientJsonRpcMessage, ProtocolVersion, ServerCapabilities, ServerInfo,
+        ClientJsonRpcMessage, DiscoverResult, ProtocolVersion, ServerCapabilities, ServerConfig,
         ServerJsonRpcMessage, ServerResult,
     },
+    service::RequestContext,
     transport::{IntoTransport, Transport},
 };
 
@@ -49,6 +52,275 @@ fn list_tools_request(id: u64) -> ClientJsonRpcMessage {
     msg(&format!(
         r#"{{ "jsonrpc": "2.0", "id": {id}, "method": "tools/list" }}"#
     ))
+}
+
+fn discover_request(id: u64, version: &str, complete: bool) -> ClientJsonRpcMessage {
+    let capabilities = if complete {
+        r#", "io.modelcontextprotocol/clientCapabilities": {}"#
+    } else {
+        ""
+    };
+    msg(&format!(
+        r#"{{
+            "jsonrpc": "2.0",
+            "id": {id},
+            "method": "server/discover",
+            "params": {{
+                "_meta": {{
+                    "io.modelcontextprotocol/protocolVersion": "{version}",
+                    "io.modelcontextprotocol/clientInfo": {{
+                        "name": "test-client",
+                        "version": "0.0.1"
+                    }}{capabilities}
+                }}
+            }}
+        }}"#
+    ))
+}
+
+fn inline_list_tools_request(id: u64, version: &str) -> ClientJsonRpcMessage {
+    msg(&format!(
+        r#"{{
+            "jsonrpc": "2.0",
+            "id": {id},
+            "method": "tools/list",
+            "params": {{
+                "_meta": {{
+                    "io.modelcontextprotocol/protocolVersion": "{version}",
+                    "io.modelcontextprotocol/clientInfo": {{
+                        "name": "test-client",
+                        "version": "0.0.1"
+                    }},
+                    "io.modelcontextprotocol/clientCapabilities": {{}}
+                }}
+            }}
+        }}"#
+    ))
+}
+
+async fn expect_response(client: &mut impl Transport<rmcp::RoleClient>) -> ServerResult {
+    let response = client.receive().await.expect("expected server response");
+    let ServerJsonRpcMessage::Response(response) = response else {
+        panic!("expected successful response, got {response:?}");
+    };
+    response.result
+}
+
+#[tokio::test]
+async fn discover_probe_then_initialize_selects_classic_lifecycle() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::DiscoverResult(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+    client.send(initialized_notification()).await.unwrap();
+    client.send(list_tools_request(2)).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn repeated_discover_probes_then_inline_request_select_inline_lifecycle() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    for id in 1..=2 {
+        client
+            .send(discover_request(id, "2026-07-28", true))
+            .await
+            .unwrap();
+        assert!(matches!(
+            expect_response(&mut client).await,
+            ServerResult::DiscoverResult(_)
+        ));
+    }
+    client
+        .send(inline_list_tools_request(3, "2026-07-28"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn malformed_discover_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", false))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+    client.send(initialized_notification()).await.unwrap();
+    client.send(list_tools_request(2)).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::ListToolsResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_inline_request_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::DiscoverResult(_)
+    ));
+    client
+        .send(inline_list_tools_request(2, "2099-99-99"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn bare_request_does_not_prevent_classic_initialize() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { TestServer::new().serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client.send(list_tools_request(1)).await.unwrap();
+    assert!(matches!(
+        client.receive().await.unwrap(),
+        ServerJsonRpcMessage::Error(_)
+    ));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
+}
+
+struct NotifyingDiscoverServer;
+
+impl ServerHandler for NotifyingDiscoverServer {
+    async fn discover(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, ErrorData> {
+        let _ = context.peer.notify_resource_list_changed().await;
+        Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn discover_handler_sending_notification_does_not_hang() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle =
+        tokio::spawn(async move { NotifyingDiscoverServer.serve(server_transport).await });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    client
+        .send(discover_request(1, "2026-07-28", true))
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(5), expect_response(&mut client))
+        .await
+        .expect("discover response timed out");
+    assert!(matches!(response, ServerResult::DiscoverResult(_)));
+    client.send(init_request()).await.unwrap();
+    assert!(matches!(
+        expect_response(&mut client).await,
+        ServerResult::InitializeResult(_)
+    ));
+
+    server_handle
+        .await
+        .unwrap()
+        .unwrap()
+        .cancel()
+        .await
+        .unwrap();
 }
 
 async fn do_initialize(client: &mut impl Transport<rmcp::RoleClient>) {
@@ -266,31 +538,43 @@ async fn server_echoes_client_protocol_version_when_known_old() {
     assert_eq!(negotiated, ProtocolVersion::V_2024_11_05);
 }
 
+// `initialize` can only answer with a version that still has a handshake, so a
+// client naming `LATEST` gets `LATEST_WITH_INITIALIZE` instead.
 #[tokio::test]
-async fn server_echoes_client_protocol_version_when_latest() {
-    let negotiated = negotiate_version(TestServer::new(), "2025-11-25").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+async fn server_falls_back_to_newest_handshake_version_when_client_requests_latest() {
+    let negotiated = negotiate_version(TestServer::new(), ProtocolVersion::LATEST.as_str()).await;
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
 }
 
 #[tokio::test]
 async fn server_falls_back_when_client_protocol_version_unknown() {
     let negotiated = negotiate_version(TestServer::new(), "2099-99-99").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
 }
 
 struct PinnedServer;
 
 impl ServerHandler for PinnedServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().build())
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
     }
 }
 
 #[tokio::test]
 async fn server_pinned_version_does_not_override_known_client_request() {
-    let negotiated = negotiate_version(PinnedServer, "2025-11-25").await;
-    assert_eq!(negotiated, ProtocolVersion::LATEST);
+    let negotiated = negotiate_version(
+        PinnedServer,
+        ProtocolVersion::LATEST_WITH_INITIALIZE.as_str(),
+    )
+    .await;
+    assert_eq!(negotiated, ProtocolVersion::LATEST_WITH_INITIALIZE);
+}
+
+#[tokio::test]
+async fn server_pinned_version_used_as_fallback_when_client_requests_latest() {
+    let negotiated = negotiate_version(PinnedServer, ProtocolVersion::LATEST.as_str()).await;
+    assert_eq!(negotiated, ProtocolVersion::V_2025_06_18);
 }
 
 #[tokio::test]

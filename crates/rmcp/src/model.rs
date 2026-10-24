@@ -3,10 +3,8 @@
 #![expect(deprecated)]
 use std::{
     borrow::Cow,
-    collections::hash_map::RandomState,
-    hash::{BuildHasher, Hasher},
     ops::{Deref, DerefMut},
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 mod annotated;
 mod capabilities;
@@ -57,7 +55,6 @@ pub fn object(value: serde_json::Value) -> JsonObject {
 }
 
 /// Use this macro just like [`serde_json::json!`]
-#[cfg(feature = "macros")]
 #[macro_export]
 macro_rules! object {
     ({$($tt:tt)*}) => {
@@ -172,12 +169,36 @@ impl ProtocolVersion {
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
-    pub const LATEST: Self = Self::V_2025_11_25;
+
+    /// The newest protocol version known to this SDK.
+    pub const LATEST: Self = Self::V_2026_07_28;
 
     /// First protocol version that requires SEP-2243 standard HTTP headers.
     pub const STANDARD_HEADERS: Self = Self::V_2026_07_28;
 
-    /// All protocol versions known to this SDK.
+    /// First protocol version that replaced the `initialize` handshake with
+    /// per-request `_meta` (SEP-2567).
+    pub const NO_INITIALIZE: Self = Self::V_2026_07_28;
+
+    /// The newest protocol version that still has an `initialize` handshake.
+    ///
+    /// From [`Self::NO_INITIALIZE`] onward the lifecycle moved into per-request
+    /// `_meta`, so there is no handshake left to answer. A server replying to
+    /// `initialize` can therefore never name [`Self::LATEST`] once `LATEST`
+    /// reaches that revision — it has to name this one instead.
+    ///
+    /// Use this, not `LATEST`, whenever the subject is the handshake itself:
+    /// the version a server can echo from `initialize`, or the version a test
+    /// needs in order to exercise session-based behavior.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::LATEST_WITH_INITIALIZE.has_initialize());
+    /// assert!(!ProtocolVersion::LATEST.has_initialize());
+    /// ```
+    pub const LATEST_WITH_INITIALIZE: Self = Self::V_2025_11_25;
+
+    /// All protocol versions known to this SDK, oldest first.
     pub const KNOWN_VERSIONS: &[Self] = &[
         Self::V_2024_11_05,
         Self::V_2025_03_26,
@@ -189,6 +210,60 @@ impl ProtocolVersion {
     /// Returns the string representation of this protocol version.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this revision negotiates its lifecycle over the `initialize`
+    /// handshake.
+    ///
+    /// `false` from [`Self::NO_INITIALIZE`] onward, where SEP-2567 moved the
+    /// lifecycle into per-request `_meta`. Unknown versions are compared
+    /// lexically, which orders correctly because every revision is dated
+    /// `YYYY-MM-DD`.
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert!(ProtocolVersion::V_2025_11_25.has_initialize());
+    /// assert!(!ProtocolVersion::V_2026_07_28.has_initialize());
+    /// ```
+    pub fn has_initialize(&self) -> bool {
+        self.as_str() < Self::NO_INITIALIZE.as_str()
+    }
+
+    /// The known versions up to and including `max`, oldest first.
+    ///
+    /// Servers that implement every revision up to some ceiling can return
+    /// this from `supported_protocol_versions` instead of filtering
+    /// [`Self::KNOWN_VERSIONS`] by hand. `max` itself need not be a known
+    /// version; the result is empty when it predates all of them.
+    ///
+    /// The result borrows from [`Self::KNOWN_VERSIONS`], so call it directly
+    /// in the method body — it needs no `static` and no `LazyLock`:
+    ///
+    /// ```rust,ignore
+    /// const MAX_SUPPORTED: ProtocolVersion = ProtocolVersion::V_2025_11_25;
+    ///
+    /// fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+    ///     Cow::Borrowed(ProtocolVersion::known_up_to(&MAX_SUPPORTED))
+    /// }
+    /// ```
+    ///
+    /// ```
+    /// # use rmcp::model::ProtocolVersion;
+    /// assert_eq!(
+    ///     ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_06_18),
+    ///     &[
+    ///         ProtocolVersion::V_2024_11_05,
+    ///         ProtocolVersion::V_2025_03_26,
+    ///         ProtocolVersion::V_2025_06_18,
+    ///     ],
+    /// );
+    /// ```
+    pub fn known_up_to(max: &Self) -> &'static [Self] {
+        let count = Self::KNOWN_VERSIONS
+            .iter()
+            .take_while(|version| version.as_str() <= max.as_str())
+            .count();
+        &Self::KNOWN_VERSIONS[..count]
     }
 }
 
@@ -241,6 +316,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn numeric_string_value(&self) -> Option<i64> {
         match self {
             Self::String(id) => id.parse().ok(),
@@ -248,6 +324,7 @@ impl NumberOrString {
         }
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn matches_response_id(&self, response_id: &Self) -> bool {
         self == response_id
             || matches!(
@@ -296,6 +373,9 @@ impl<'de> Deserialize<'de> for NumberOrString {
                     } else {
                         Err(serde::de::Error::custom("Number too large for i64"))
                     }
+                } else if let Some(i) = n.as_f64().and_then(integral_f64_to_i64) {
+                    // `1.0` and `1e2` are integers written in float form
+                    Ok(NumberOrString::Number(i))
                 } else {
                     Err(serde::de::Error::custom("Expected an integer"))
                 }
@@ -304,6 +384,14 @@ impl<'de> Deserialize<'de> for NumberOrString {
             _ => Err(serde::de::Error::custom("Expect number or string")),
         }
     }
+}
+
+/// The integer a JSON number in float form stands for, when it is one that an
+/// `f64` represents exactly. 2^53 itself is excluded: 2^53 + 1 parses to the
+/// same `f64`, so that value cannot say which integer was sent.
+fn integral_f64_to_i64(f: f64) -> Option<i64> {
+    const MAX_EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+    (f.fract() == 0.0 && f.abs() < MAX_EXACT).then_some(f as i64)
 }
 
 #[cfg(feature = "schemars")]
@@ -576,6 +664,7 @@ pub struct ErrorData {
 }
 
 impl ErrorData {
+    #[cfg(any(feature = "client", feature = "server"))]
     const TRANSPORT_CLOSED_MARKER: &str = "io.modelcontextprotocol/transportClosed";
 
     pub fn new(
@@ -637,7 +726,7 @@ impl ErrorData {
         Self::new(ErrorCode::INTERNAL_ERROR, message, data)
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     pub(crate) fn transport_closed(message: impl Into<Cow<'static, str>>) -> Self {
         let mut data = JsonObject::new();
         data.insert(
@@ -647,6 +736,7 @@ impl ErrorData {
         Self::internal_error(message, Some(Value::Object(data)))
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     pub(crate) fn is_transport_closed(&self) -> bool {
         self.data
             .as_ref()
@@ -655,7 +745,14 @@ impl ErrorData {
             == Some(Self::transport_closed_token())
     }
 
+    #[cfg(any(feature = "client", feature = "server"))]
     fn transport_closed_token() -> u64 {
+        use std::{
+            collections::hash_map::RandomState,
+            hash::{BuildHasher, Hasher},
+            sync::OnceLock,
+        };
+
         static TOKEN: OnceLock<u64> = OnceLock::new();
         *TOKEN.get_or_init(|| {
             let mut hasher = RandomState::new().build_hasher();
@@ -670,7 +767,7 @@ impl ErrorData {
 /// This enum covers all possible message types in the JSON-RPC protocol:
 /// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(untagged)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_enums, reason = "intentionally exhaustive")]
@@ -747,6 +844,149 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
             JsonRpcMessage::Error(e) => Some((Err(e.error), e.id)),
 
             _ => None,
+        }
+    }
+}
+
+enum JsonRpcMessageShape {
+    Request,
+    Response,
+    Notification,
+    Error,
+}
+
+const UNRECOGNIZED_MESSAGE: &str = "unrecognized JSON-RPC message";
+
+impl<'de> Deserialize<'de> for JsonRpcMessageShape {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ShapeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ShapeVisitor {
+            type Value = JsonRpcMessageShape;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a JSON-RPC 2.0 message")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let (mut method, mut id, mut result, mut error) = (false, false, false, false);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "method" => method = true,
+                        "id" => id = true,
+                        "result" => result = true,
+                        "error" => error = true,
+                        _ => {}
+                    }
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+                JsonRpcMessageShape::classify_object_keys(method, id, result, error)
+            }
+        }
+
+        deserializer.deserialize_map(ShapeVisitor)
+    }
+}
+
+impl JsonRpcMessageShape {
+    fn classify_object_keys<E: serde::de::Error>(
+        method: bool,
+        id: bool,
+        result: bool,
+        error: bool,
+    ) -> Result<Self, E> {
+        match (method, id, result, error) {
+            (true, true, false, false) => Ok(Self::Request),
+            (true, false, false, false) => Ok(Self::Notification),
+            (false, _, true, false) => Ok(Self::Response),
+            (false, _, false, true) => Ok(Self::Error),
+            _ => Err(E::custom(UNRECOGNIZED_MESSAGE)),
+        }
+    }
+}
+
+struct ExpectedMessageShape<const SHAPE: u8>;
+
+impl<'de, const SHAPE: u8> Deserialize<'de> for ExpectedMessageShape<SHAPE> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if JsonRpcMessageShape::deserialize(deserializer)? as u8 == SHAPE {
+            Ok(Self)
+        } else {
+            Err(serde::de::Error::custom(UNRECOGNIZED_MESSAGE))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ShapeCheckedMessage<T, const SHAPE: u8> {
+    // Check field presence without consuming the flattened payload. Serde's
+    // flatten buffer preserves borrows, including inside untagged wrappers.
+    #[serde(flatten)]
+    _shape: ExpectedMessageShape<SHAPE>,
+    #[serde(flatten)]
+    message: T,
+}
+
+impl<'de, Req, Resp, Noti> serde::Deserialize<'de> for JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    fn deserialize<__D>(deserializer: __D) -> Result<Self, __D::Error>
+    where
+        __D: serde::Deserializer<'de>,
+    {
+        // A derived untagged enum silently drops a stray `result`/`error`
+        // (#1283). Check field presence before dispatching to a variant.
+        // Serde's buffer preserves borrowed payloads, including through outer
+        // untagged wrappers, without relying on serde_json's private protocol.
+        Self::from_buffered_deserializer(deserializer)
+    }
+}
+
+impl<'de, Req, Resp, Noti> JsonRpcMessage<Req, Resp, Noti>
+where
+    Req: Deserialize<'de>,
+    Resp: Deserialize<'de>,
+    Noti: Deserialize<'de>,
+{
+    fn from_buffered_deserializer<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged, expecting = "unrecognized JSON-RPC message")]
+        enum Message<Req, Resp, Noti> {
+            Request(
+                ShapeCheckedMessage<JsonRpcRequest<Req>, { JsonRpcMessageShape::Request as u8 }>,
+            ),
+            Response(
+                ShapeCheckedMessage<JsonRpcResponse<Resp>, { JsonRpcMessageShape::Response as u8 }>,
+            ),
+            Notification(
+                ShapeCheckedMessage<
+                    JsonRpcNotification<Noti>,
+                    { JsonRpcMessageShape::Notification as u8 },
+                >,
+            ),
+            Error(ShapeCheckedMessage<JsonRpcError, { JsonRpcMessageShape::Error as u8 }>),
+        }
+
+        match Message::deserialize(deserializer)? {
+            Message::Request(checked) => Ok(Self::Request(checked.message)),
+            Message::Response(checked) => Ok(Self::Response(checked.message)),
+            Message::Notification(checked) => Ok(Self::Notification(checked.message)),
+            Message::Error(checked) => Ok(Self::Error(checked.message)),
         }
     }
 }
@@ -1082,7 +1322,58 @@ impl InitializeResult {
     }
 }
 
+/// A server's own configuration: the protocol version, capabilities,
+/// implementation identity, and instructions it advertises to clients.
+///
+/// This is what `ServerHandler::get_info` returns. It is an alias for
+/// [`InitializeResult`] because the same value is sent as the `initialize`
+/// response on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ServerCapabilities, ServerConfig};
+///
+/// let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+///     .with_instructions("Call `add` to sum two numbers.");
+/// assert!(config.capabilities.tools.is_some());
+/// ```
+pub type ServerConfig = InitializeResult;
+
+/// A client's own configuration: the protocol version, capabilities, and
+/// implementation identity it advertises to servers.
+///
+/// This is what `ClientHandler::get_info` returns. It is an alias for
+/// [`InitializeRequestParams`] because the same value is sent as the
+/// `initialize` request on the wire.
+///
+/// # Examples
+///
+/// ```
+/// use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
+///
+/// let config = ClientConfig::new(
+///     ClientCapabilities::builder().enable_elicitation().build(),
+///     Implementation::new("my-client", "1.0.0"),
+/// );
+/// assert!(config.capabilities.elicitation.is_some());
+/// ```
+pub type ClientConfig = InitializeRequestParams;
+
+/// Deprecated alias for [`ServerConfig`].
+///
+/// The name collides with the protocol's `serverInfo` field, which is only the
+/// [`Implementation`] identity, so `server_info.server_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ServerConfig` instead")]
 pub type ServerInfo = InitializeResult;
+
+/// Deprecated alias for [`ClientConfig`].
+///
+/// The name collides with the protocol's `clientInfo` field, which is only the
+/// [`Implementation`] identity, so `client_info.client_info` was easy to
+/// misread (#1082).
+#[deprecated(note = "use `ClientConfig` instead")]
 pub type ClientInfo = InitializeRequestParams;
 
 /// Information negotiated about a server peer.
@@ -1242,18 +1533,18 @@ impl DiscoverResult {
         self
     }
 
-    /// Create a discovery result from the server's initialization information.
+    /// Create a discovery result from the server's configuration.
     pub fn from_server_info(
         supported_versions: Vec<ProtocolVersion>,
-        server_info: ServerInfo,
+        server_config: ServerConfig,
     ) -> Self {
-        let ServerInfo {
+        let ServerConfig {
             capabilities,
             server_info,
             instructions,
             meta,
             ..
-        } = server_info;
+        } = server_config;
         let mut result = Self {
             result_type: ResultType::COMPLETE,
             supported_versions,
@@ -1295,9 +1586,9 @@ impl ServerPeerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ServerInfo {
+impl Default for InitializeResult {
     fn default() -> Self {
-        ServerInfo {
+        InitializeResult {
             protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::default(),
             server_info: Implementation::from_build_env(),
@@ -1308,9 +1599,9 @@ impl Default for ServerInfo {
 }
 
 #[allow(clippy::derivable_impls)]
-impl Default for ClientInfo {
+impl Default for InitializeRequestParams {
     fn default() -> Self {
-        ClientInfo {
+        InitializeRequestParams {
             meta: None,
             protocol_version: ProtocolVersion::default(),
             capabilities: ClientCapabilities::default(),
@@ -1504,9 +1795,14 @@ const_string!(ProgressNotificationMethod = "notifications/progress");
 pub struct ProgressNotificationParam {
     pub progress_token: ProgressToken,
     /// The progress thus far. This should increase every time progress is made, even if the total is unknown.
+    #[serde(deserialize_with = "serde_impl::json_float::f64")]
     pub progress: f64,
     /// Total number of items to process (or total progress required), if known
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total: Option<f64>,
     /// An optional message describing the current progress.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1572,6 +1868,27 @@ where
     Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
 }
 
+/// Normalize a `cacheScope` value during deserialization.
+///
+/// Per SEP-2549, `cacheScope` MUST be `"public"`, `"private"`, or absent; some
+/// servers instead send `""`. Because `ServerResult` is `#[serde(untagged)]`,
+/// letting that value hard-error here would silently fall through to
+/// `CustomResult` and drop the entire (otherwise valid) result. Treat an empty
+/// string the same as an absent field rather than erroring.
+fn deserialize_cache_scope<'de, D>(deserializer: D) -> Result<Option<CacheScope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(value) => CacheScope::deserialize(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 macro_rules! paginated_result {
     ($t:ident {
         $i_item: ident: $t_item: ty
@@ -1609,7 +1926,11 @@ macro_rules! paginated_result {
             /// Scope describing who may cache this result (SEP-2549).
             /// Required by spec version 2026-07-28, but optional here to maintain compatibility
             /// with older spec versions.
-            #[serde(default, skip_serializing_if = "Option::is_none")]
+            #[serde(
+                default,
+                deserialize_with = "deserialize_cache_scope",
+                skip_serializing_if = "Option::is_none"
+            )]
             pub cache_scope: Option<CacheScope>,
             pub $i_item: $t_item,
         }
@@ -1759,7 +2080,11 @@ pub struct ReadResourceResult {
     /// Scope describing who may cache this result (SEP-2549).
     /// Required by spec version 2026-07-28, but optional here to maintain compatibility
     /// with older spec versions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_cache_scope",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cache_scope: Option<CacheScope>,
     /// The actual content of the resource
     pub contents: Vec<ResourceContents>,
@@ -2878,7 +3203,11 @@ pub struct CreateMessageRequestParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_context: Option<ContextInclusion>,
     /// Temperature for controlling randomness (0.0 to 1.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub temperature: Option<f32>,
     /// Maximum number of tokens to generate
     pub max_tokens: u32,
@@ -3067,13 +3396,25 @@ pub struct ModelPreferences {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hints: Option<Vec<ModelHint>>,
     /// Priority for cost optimization (0.0 to 1.0, higher = prefer cheaper models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cost_priority: Option<f32>,
     /// Priority for speed/latency (0.0 to 1.0, higher = prefer faster models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub speed_priority: Option<f32>,
     /// Priority for intelligence/capability (0.0 to 1.0, higher = prefer more capable models)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "serde_impl::json_float::option_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub intelligence_priority: Option<f32>,
 }
 
@@ -3774,6 +4115,15 @@ pub type ElicitRequest = Request<ElicitationCreateRequestMethod, ElicitRequestPa
 // TOOL EXECUTION RESULTS
 // =============================================================================
 
+/// Deserialize a field that is present on the wire as `Some`, even when its
+/// value is `null`. Combined with `#[serde(default)]`, an absent field stays `None`.
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// The result of a tool call operation.
 ///
 /// Contains the content returned by the tool execution and an optional
@@ -3798,7 +4148,9 @@ pub struct CallToolResult {
     /// The content returned by the tool (text, images, etc.)
     #[serde(default)]
     pub content: Vec<ContentBlock>,
-    /// An optional JSON object that represents the structured result of the tool call
+    /// An optional JSON value that represents the structured result of the tool call.
+    /// It can be any JSON value, including `null`; an explicit `null` is kept
+    /// distinct from an absent field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<Value>,
     /// Whether this result represents an error condition
@@ -3811,11 +4163,12 @@ pub struct CallToolResult {
 
 // Custom Deserialize implementation that:
 // 1. Defaults `content` to `[]` when the field is missing (lenient per Postel's law)
-// 2. Requires at least one tool-specific field to be present, so protocol-generic
-//    fields such as `resultType` and `_meta` do not make `CallToolResult` greedily
-//    match custom-extension responses inside `#[serde(untagged)]` enums (e.g.
-//    `ServerResult`), which would shadow `CustomResult`.
+// 2. Requires a tool-specific field or a legacy `_meta`-only result. Unknown
+//    fields alongside `_meta` fall through to `CustomResult` when no tool-specific
+//    field identifies the response. Generic `resultType` does not identify a tool.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
+// 4. Keeps a present `"structuredContent": null` as `Some(Value::Null)`, distinct
+//    from an absent field, since structured content can be any JSON value.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -3827,10 +4180,13 @@ impl<'de> Deserialize<'de> for CallToolResult {
             #[serde(default)]
             result_type: Option<ResultType>,
             content: Option<Vec<ContentBlock>>,
+            #[serde(default, deserialize_with = "deserialize_present_value")]
             structured_content: Option<Value>,
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
             meta: Option<MetaObject>,
+            #[serde(flatten)]
+            extra: serde_json::Map<String, Value>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -3848,10 +4204,11 @@ impl<'de> Deserialize<'de> for CallToolResult {
         if helper.content.is_none()
             && helper.structured_content.is_none()
             && helper.is_error.is_none()
+            && (helper.meta.is_none() || !helper.extra.is_empty())
         {
             return Err(serde::de::Error::custom(
-                "expected at least one tool-specific CallToolResult field \
-                 (content, structuredContent, or isError)",
+                "expected a tool-specific CallToolResult field \
+                 (content, structuredContent, or isError), or _meta without unknown fields",
             ));
         }
 
@@ -4607,6 +4964,59 @@ impl ServerResult {
         };
         result_type.take_if(|result_type| result_type.is_complete());
     }
+
+    /// Fill in the SEP-2549 caching hints a cacheable result is missing.
+    ///
+    /// Protocol version `2026-07-28` requires `ttlMs` and `cacheScope` on every
+    /// complete `tools/list`, `prompts/list`, `resources/list`,
+    /// `resources/templates/list`, and `resources/read` result. The server
+    /// handler calls this before responding to a peer on that version, so a
+    /// handler that builds its result with `Default::default()` still sends a
+    /// conformant result.
+    ///
+    /// Missing hints get the most conservative values, `ttlMs: 0` (immediately
+    /// stale) and `cacheScope: "private"`, the same values
+    /// [`DiscoverResult::new`] uses. Hints the handler set are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CacheScope, ListResourcesResult, ServerResult};
+    ///
+    /// let mut result = ServerResult::ListResourcesResult(ListResourcesResult::default());
+    /// result.fill_missing_cache_hints();
+    ///
+    /// let ServerResult::ListResourcesResult(result) = result else {
+    ///     unreachable!()
+    /// };
+    /// assert_eq!(result.ttl_ms, Some(0));
+    /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
+    /// ```
+    pub fn fill_missing_cache_hints(&mut self) {
+        let (result_type, ttl_ms, cache_scope) = match self {
+            ServerResult::ListToolsResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListPromptsResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourcesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ListResourceTemplatesResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::ReadResourceResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            _ => return,
+        };
+        // Only complete results are cacheable; the spec treats an absent
+        // `resultType` as complete.
+        if result_type.as_ref().is_some_and(|t| !t.is_complete()) {
+            return;
+        }
+        ttl_ms.get_or_insert(0);
+        cache_scope.get_or_insert(CacheScope::Private);
+    }
 }
 
 pub type ServerJsonRpcMessage = JsonRpcMessage<ServerRequest, ServerResult, ServerNotification>;
@@ -4643,7 +5053,80 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "transport-streamable-http-client")]
+    #[test]
+    fn known_versions_are_ordered_oldest_first() {
+        // `known_up_to` walks the list as a sorted prefix.
+        assert!(
+            ProtocolVersion::KNOWN_VERSIONS
+                .windows(2)
+                .all(|pair| pair[0].as_str() < pair[1].as_str())
+        );
+    }
+
+    // Guards the pair of constants this SDK's negotiation rests on. `LATEST`
+    // and `LATEST_WITH_INITIALIZE` were the same value until `LATEST` reached
+    // `NO_INITIALIZE`; conflating them is what made bumping `LATEST` expensive.
+    #[test]
+    fn latest_with_initialize_is_the_newest_known_version_that_has_one() {
+        let derived = ProtocolVersion::KNOWN_VERSIONS
+            .iter()
+            .filter(|version| version.has_initialize())
+            .max_by(|left, right| left.as_str().cmp(right.as_str()))
+            .expect("some known version should have an initialize handshake");
+        assert_eq!(
+            derived,
+            &ProtocolVersion::LATEST_WITH_INITIALIZE,
+            "LATEST_WITH_INITIALIZE must track KNOWN_VERSIONS"
+        );
+    }
+
+    #[test]
+    fn has_initialize_splits_known_versions_at_no_initialize() {
+        for version in ProtocolVersion::KNOWN_VERSIONS {
+            assert_eq!(
+                version.has_initialize(),
+                version.as_str() < ProtocolVersion::NO_INITIALIZE.as_str(),
+                "{version} classified inconsistently"
+            );
+        }
+    }
+
+    #[test]
+    fn known_up_to_includes_the_ceiling_itself() {
+        assert_eq!(
+            ProtocolVersion::known_up_to(&ProtocolVersion::V_2024_11_05),
+            &[ProtocolVersion::V_2024_11_05]
+        );
+    }
+
+    #[test]
+    fn known_up_to_the_newest_version_yields_every_known_version() {
+        assert_eq!(
+            ProtocolVersion::known_up_to(&ProtocolVersion::V_2026_07_28),
+            ProtocolVersion::KNOWN_VERSIONS
+        );
+    }
+
+    #[test]
+    fn known_up_to_an_unknown_ceiling_stops_at_the_versions_below_it() {
+        let unknown = ProtocolVersion(Cow::Borrowed("2025-07-01"));
+        assert_eq!(
+            ProtocolVersion::known_up_to(&unknown),
+            &[
+                ProtocolVersion::V_2024_11_05,
+                ProtocolVersion::V_2025_03_26,
+                ProtocolVersion::V_2025_06_18,
+            ]
+        );
+    }
+
+    #[test]
+    fn known_up_to_a_ceiling_below_every_known_version_is_empty() {
+        let ancient = ProtocolVersion(Cow::Borrowed("1999-01-01"));
+        assert!(ProtocolVersion::known_up_to(&ancient).is_empty());
+    }
+
+    #[cfg(all(feature = "transport-streamable-http-client", feature = "client"))]
     #[test]
     fn transport_closed_marker_accepts_only_the_process_local_token() {
         let local = ErrorData::transport_closed("closed");
@@ -4752,6 +5235,386 @@ mod tests {
 
         let json = serde_json::to_value(message).expect("valid json");
         assert_eq!(json, raw);
+    }
+
+    #[test]
+    fn test_response_with_result_and_error_is_rejected() {
+        // https://github.com/modelcontextprotocol/rust-sdk/issues/1283
+        let raw = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": { "content": [] },
+            "error": { "code": -32603, "message": "injected error" },
+        });
+
+        let result: Result<JsonRpcMessage, _> = serde_json::from_value(raw);
+        assert!(
+            result.is_err(),
+            "a response carrying both `result` and `error` must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_request_with_stray_result_or_error_is_rejected() {
+        let with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 2,
+            "method": "ping",
+            "result": { "injected": true },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_result).is_err(),
+            "a request carrying `result` must be rejected"
+        );
+
+        let with_error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 3,
+            "method": "ping",
+            "error": { "code": -32603, "message": "injected error" },
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(with_error).is_err(),
+            "a request carrying `error` must be rejected"
+        );
+
+        let notification_with_result = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "result": {},
+        });
+        assert!(
+            serde_json::from_value::<JsonRpcMessage>(notification_with_result).is_err(),
+            "a notification carrying `result` must be rejected"
+        );
+    }
+
+    #[test]
+    fn generic_borrowed_request_deserializes_from_str() {
+        // Regression: field-presence dispatch must not force owned Value so hard
+        // that generic payload types containing `&str` lose input borrows.
+        #[derive(Debug, Deserialize)]
+        struct BorrowedRequest<'a> {
+            method: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<BorrowedRequest<'_>, Value, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed request strings");
+        match parsed {
+            JsonRpcMessage::Request(request) => {
+                assert_eq!(request.request.method, "ping");
+                let start = input.as_ptr() as usize;
+                let borrowed = request.request.method.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "method must borrow from the original input"
+                );
+            }
+            other => panic!("expected Request, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_borrowed_response_deserializes_from_str() {
+        #[derive(Debug, Deserialize)]
+        struct BorrowedResponse<'a> {
+            status: &'a str,
+        }
+
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#;
+        let parsed =
+            serde_json::from_str::<JsonRpcMessage<Value, BorrowedResponse<'_>, Value>>(input)
+                .expect("generic Deserialize API accepts borrowed response strings");
+        match parsed {
+            JsonRpcMessage::Response(response) => {
+                assert_eq!(response.result.status, "ok");
+                let start = input.as_ptr() as usize;
+                let borrowed = response.result.status.as_ptr() as usize;
+                assert!(
+                    borrowed >= start && borrowed < start + input.len(),
+                    "status must borrow from the original input"
+                );
+            }
+            other => panic!("expected Response, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_deserializes_inside_untagged_wrappers() {
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(JsonRpcMessage),
+            Many(Vec<JsonRpcMessage>),
+        }
+
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"boom"}}"#,
+        ] {
+            let expected: JsonRpcMessage =
+                serde_json::from_str(input).unwrap_or_else(|error| panic!("{input}: {error}"));
+            for parsed in [
+                serde_json::from_str::<Wrapper>(input).unwrap(),
+                serde_json::from_slice::<Wrapper>(input.as_bytes()).unwrap(),
+                serde_json::from_value::<Wrapper>(serde_json::from_str(input).unwrap()).unwrap(),
+            ] {
+                let Wrapper::One(message) = parsed else {
+                    panic!("expected one message")
+                };
+                assert_eq!(
+                    serde_json::to_value(message).unwrap(),
+                    serde_json::to_value(&expected).unwrap()
+                );
+            }
+            let batch = format!("[{input}]");
+            let Wrapper::Many(messages) = serde_json::from_str(&batch).unwrap() else {
+                panic!("expected multiple messages")
+            };
+            assert_eq!(
+                serde_json::to_value(messages).unwrap(),
+                serde_json::json!([expected])
+            );
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_borrows_directly_and_inside_untagged_wrappers() {
+        #[derive(Debug, Deserialize)]
+        struct BorrowedRequest<'a> {
+            method: &'a str,
+        }
+        #[derive(Debug, Deserialize)]
+        struct BorrowedResponse<'a> {
+            status: &'a str,
+        }
+        type BorrowedMessage<'a> =
+            JsonRpcMessage<BorrowedRequest<'a>, BorrowedResponse<'a>, BorrowedRequest<'a>>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper<'a> {
+            One(#[serde(borrow)] BorrowedMessage<'a>),
+            Many(#[serde(borrow)] Vec<BorrowedMessage<'a>>),
+        }
+        fn assert_borrowed(input: &str, message: BorrowedMessage<'_>) {
+            let borrowed = match message {
+                JsonRpcMessage::Request(request) => request.request.method,
+                JsonRpcMessage::Response(response) => response.result.status,
+                JsonRpcMessage::Notification(notification) => notification.notification.method,
+                JsonRpcMessage::Error(_) => panic!("expected borrowed payload"),
+            };
+            let start = input.as_ptr() as usize;
+            assert!((start..start + input.len()).contains(&(borrowed.as_ptr() as usize)));
+            assert!(matches!(borrowed, "ping" | "ok"));
+        }
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#,
+            r#"{"jsonrpc":"2.0","method":"ping"}"#,
+        ] {
+            assert_borrowed(input, serde_json::from_str(input).unwrap());
+            assert_borrowed(input, serde_json::from_slice(input.as_bytes()).unwrap());
+            for parsed in [
+                serde_json::from_str::<Wrapper<'_>>(input).unwrap(),
+                serde_json::from_slice::<Wrapper<'_>>(input.as_bytes()).unwrap(),
+            ] {
+                let Wrapper::One(message) = parsed else {
+                    panic!("expected one message")
+                };
+                assert_borrowed(input, message);
+            }
+            let batch = format!("[{input}]");
+            for parsed in [
+                serde_json::from_str::<Wrapper<'_>>(&batch).unwrap(),
+                serde_json::from_slice::<Wrapper<'_>>(batch.as_bytes()).unwrap(),
+            ] {
+                let Wrapper::Many(messages) = parsed else {
+                    panic!("expected multiple messages")
+                };
+                assert_eq!(messages.len(), 1);
+                for message in messages {
+                    assert_borrowed(&batch, message);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_classifies_permissive_generic_payloads() {
+        for (input, expected) in [
+            (
+                json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+                "request",
+            ),
+            (
+                json!({"jsonrpc": "2.0", "id": 1, "result": null}),
+                "response",
+            ),
+            (json!({"jsonrpc": "2.0", "method": "ping"}), "notification"),
+            (
+                json!({"jsonrpc": "2.0", "error": {"code": -32603, "message": "boom"}}),
+                "error",
+            ),
+        ] {
+            let parsed: JsonRpcMessage<Value, Value, Value> =
+                serde_json::from_value(input).unwrap();
+            let actual = match parsed {
+                JsonRpcMessage::Request(_) => "request",
+                JsonRpcMessage::Response(_) => "response",
+                JsonRpcMessage::Notification(_) => "notification",
+                JsonRpcMessage::Error(_) => "error",
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_preserves_null_results() {
+        type Message = JsonRpcMessage<Request, Value, Notification>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(Message),
+            Many(Vec<Message>),
+        }
+
+        // A null result is still a present result for generic JSON-RPC payloads.
+        let input = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let assert_null = |message: Message| {
+            let JsonRpcMessage::Response(response) = message else {
+                panic!("expected response");
+            };
+            assert!(response.result.is_null());
+        };
+        for parsed in [
+            serde_json::from_str::<Message>(input).unwrap(),
+            serde_json::from_slice(input.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(input).unwrap()).unwrap(),
+        ] {
+            assert_null(parsed);
+        }
+        for parsed in [
+            serde_json::from_str::<Wrapper>(input).unwrap(),
+            serde_json::from_slice(input.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(input).unwrap()).unwrap(),
+        ] {
+            let Wrapper::One(message) = parsed else {
+                panic!("expected one message");
+            };
+            assert_null(message);
+        }
+        let batch = format!("[{input}]");
+        for parsed in [
+            serde_json::from_str::<Wrapper>(&batch).unwrap(),
+            serde_json::from_slice(batch.as_bytes()).unwrap(),
+            serde_json::from_value(serde_json::from_str::<Value>(&batch).unwrap()).unwrap(),
+        ] {
+            let Wrapper::Many(messages) = parsed else {
+                panic!("expected multiple messages");
+            };
+            assert_eq!(messages.len(), 1);
+            for message in messages {
+                assert_null(message);
+            }
+        }
+    }
+
+    #[test]
+    fn json_rpc_message_rejects_conflicting_fields_inside_untagged_wrappers() {
+        type Message = JsonRpcMessage<Request, Value, Notification>;
+        #[derive(Debug, Deserialize)]
+        #[serde(untagged)]
+        enum Wrapper {
+            One(Message),
+            Many(Vec<Message>),
+        }
+        for input in [
+            r#"{"jsonrpc":"2.0","id":1,"result":{},"error":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32603,"message":"boom"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null,"error":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","result":null}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","error":null}"#,
+        ] {
+            assert!(serde_json::from_str::<Message>(input).is_err());
+            for result in [
+                serde_json::from_str::<Wrapper>(input),
+                serde_json::from_slice::<Wrapper>(input.as_bytes()),
+                serde_json::from_value::<Wrapper>(serde_json::from_str(input).unwrap()),
+                serde_json::from_str::<Wrapper>(&format!("[{input}]")),
+            ] {
+                match result {
+                    Err(_) => {}
+                    Ok(Wrapper::One(message)) => panic!("unexpected valid message: {message:?}"),
+                    Ok(Wrapper::Many(messages)) => {
+                        panic!("unexpected valid messages: {messages:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_clean_shapes_and_extension_fields_still_deserialize() {
+        // The four clean shapes keep working.
+        let request = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "method": "ping",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(request).expect("request"),
+            JsonRpcMessage::Request(_)
+        ));
+
+        let response = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(response).expect("response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        let notification = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "method": "notifications/initialized",
+            "params": {},
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(notification).expect("notification"),
+            JsonRpcMessage::Notification(_)
+        ));
+
+        let error = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "error": { "code": -32603, "message": "boom" },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(error).expect("error"),
+            JsonRpcMessage::Error(_)
+        ));
+
+        // Extension fields stay accepted (no deny_unknown_fields semantics).
+        let extended = json!( {
+            "jsonrpc": JsonRpcVersion2_0,
+            "id": 1,
+            "result": {},
+            "x-vendor-extension": { "any": true },
+        });
+        assert!(matches!(
+            serde_json::from_value::<JsonRpcMessage>(extended).expect("extended response"),
+            JsonRpcMessage::Response(_)
+        ));
+
+        // Unrecognized shapes still fail.
+        assert!(serde_json::from_value::<JsonRpcMessage>(json!({ "id": 1 })).is_err());
     }
 
     #[test]

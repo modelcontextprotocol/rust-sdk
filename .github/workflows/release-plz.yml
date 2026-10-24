@@ -1,8 +1,6 @@
 name: Release-plz
 
-permissions:
-  pull-requests: write
-  contents: write
+permissions: {}
 
 on:
   push:
@@ -18,19 +16,20 @@ jobs:
     if: ${{ github.repository_owner == 'modelcontextprotocol' }}
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: "1.92"
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
-        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --rev c2ea743bacf9bbd56e344df68219e60b0ad35d04 release-plz
       - name: Run release-plz release
         run: release-plz release
         env:
@@ -51,17 +50,17 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: "1.92"
       # Using fork until semver_check_features support is released upstream.
       # See: https://github.com/release-plz/release-plz/pull/2757
       - name: Install release-plz from fork
-        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --branch feat/semver-check-features release-plz
+        run: cargo install --locked --git https://github.com/DaleSeo/release-plz --rev c2ea743bacf9bbd56e344df68219e60b0ad35d04 release-plz
       - name: Run release-plz release-pr
         run: release-plz release-pr
         env:

@@ -206,8 +206,8 @@ impl Counter {
 #[tool_handler(meta = MetaObject(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
 #[prompt_handler(meta = MetaObject(rmcp::object!({"router_meta_key": "router_meta_value"})))]
 impl ServerHandler for Counter {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_resources()
@@ -270,7 +270,7 @@ impl ServerHandler for Counter {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParams,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         if let Some(http_request_part) = context.extensions.get::<axum::http::request::Parts>() {
@@ -278,7 +278,8 @@ impl ServerHandler for Counter {
             let initialize_uri = &http_request_part.uri;
             tracing::info!(?initialize_headers, %initialize_uri, "initialize from http server");
         }
-        Ok(self.get_info())
+        context.peer.set_peer_info(request.clone());
+        self.negotiate_initialize(&request)
     }
 }
 

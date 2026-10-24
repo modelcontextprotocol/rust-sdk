@@ -1,10 +1,13 @@
 #![cfg(not(feature = "local"))]
 //! SEP-2243 server-side validation of `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` headers.
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use rmcp::{
     ServerHandler,
-    model::{ServerCapabilities, ServerInfo, Tool},
+    model::{ServerCapabilities, ServerConfig, Tool},
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -18,8 +21,8 @@ const SEP_VERSION: &str = "2026-07-28";
 struct HeaderValidationServer;
 
 impl ServerHandler for HeaderValidationServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -36,14 +39,23 @@ impl ServerHandler for HeaderValidationServer {
 }
 
 async fn spawn_server() -> (reqwest::Client, String, CancellationToken) {
+    spawn_server_with(|| Ok(HeaderValidationServer)).await
+}
+
+async fn spawn_server_with<S>(
+    service_factory: impl Fn() -> Result<S, std::io::Error> + Send + Sync + 'static,
+) -> (reqwest::Client, String, CancellationToken)
+where
+    S: ServerHandler + Send + 'static,
+{
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_sse_keep_alive(None)
         .with_cancellation_token(CancellationToken::new());
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<HeaderValidationServer, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(HeaderValidationServer), Default::default(), config);
+    let service: StreamableHttpService<S, LocalSessionManager> =
+        StreamableHttpService::new(service_factory, Default::default(), config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -309,6 +321,176 @@ async fn rejects_missing_param_header_with_32020() -> anyhow::Result<()> {
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+/// Server whose `deploy` tool gains or loses the `x-mcp-header` annotation at runtime.
+#[derive(Clone, Default)]
+struct ChangingToolServer {
+    annotated: Arc<AtomicBool>,
+}
+
+async fn spawn_changing_tool_server(
+    server: &ChangingToolServer,
+) -> (reqwest::Client, String, CancellationToken) {
+    let server = server.clone();
+    spawn_server_with(move || Ok(server.clone())).await
+}
+
+/// POSTs a `deploy` call whose `Mcp-Param-Region` header contradicts the body.
+async fn post_mismatched_region(client: &reqwest::Client, url: &str) -> reqwest::Response {
+    post_tool_call(
+        client,
+        url,
+        SEP_VERSION,
+        "deploy",
+        serde_json::json!({ "region": "us-west1" }),
+        Some("tools/call"),
+        Some("deploy"),
+        Some("eu-central1"),
+    )
+    .await
+}
+
+impl ServerHandler for ChangingToolServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        if !self.annotated.load(Ordering::SeqCst) {
+            return None;
+        }
+        HeaderValidationServer.get_tool(name)
+    }
+}
+
+#[tokio::test]
+async fn validates_param_header_once_tool_gains_annotation() -> anyhow::Result<()> {
+    let server = ChangingToolServer::default();
+    let (client, url, ct) = spawn_changing_tool_server(&server).await;
+
+    // Header validation passes, so the request fails later on its missing `_meta`.
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32602);
+
+    server.annotated.store(true, Ordering::SeqCst);
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn skips_param_header_validation_once_tool_loses_annotation() -> anyhow::Result<()> {
+    let server = ChangingToolServer {
+        annotated: Arc::new(AtomicBool::new(true)),
+    };
+    let (client, url, ct) = spawn_changing_tool_server(&server).await;
+
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32020);
+
+    server.annotated.store(false, Ordering::SeqCst);
+    let response = post_mismatched_region(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32602);
+
+    ct.cancel();
+    Ok(())
+}
+
+/// Spawns the server in legacy session mode: the initialize handshake creates
+/// a real session, exercising the path where the validator used to be bypassed.
+async fn spawn_legacy_server() -> (reqwest::Client, String, CancellationToken) {
+    let config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(true)
+        .with_json_response(true)
+        .with_sse_keep_alive(None)
+        .with_cancellation_token(CancellationToken::new());
+    let ct = config.cancellation_token.clone();
+    let service: StreamableHttpService<HeaderValidationServer, LocalSessionManager> =
+        StreamableHttpService::new(|| Ok(HeaderValidationServer), Default::default(), config);
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = tcp_listener.local_addr().unwrap();
+    tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+    (reqwest::Client::new(), format!("http://{addr}/mcp"), ct)
+}
+
+/// POSTs an `initialize` request with the given protocol version and optional
+/// `Mcp-Method` header.
+async fn post_initialize(
+    client: &reqwest::Client,
+    url: &str,
+    version: &str,
+    mcp_method: Option<&str>,
+) -> reqwest::Response {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": version,
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "1.0" },
+        }
+    });
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", version)
+        .body(body.to_string());
+    if let Some(method) = mcp_method {
+        req = req.header("Mcp-Method", method);
+    }
+    req.send().await.expect("send initialize request")
+}
+
+#[tokio::test]
+async fn rejects_initialize_with_contradicting_mcp_method_before_session_creation()
+-> anyhow::Result<()> {
+    let (client, url, ct) = spawn_legacy_server().await;
+
+    // Regression test: in legacy session mode with no session id, an
+    // `initialize` body carrying a contradictory `Mcp-Method` header used to
+    // bypass the validator, returning HTTP 200 and creating a session.
+    let response = post_initialize(&client, &url, SEP_VERSION, Some("tools/list")).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(body["error"]["code"], -32020);
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
+async fn accepts_initialize_with_matching_mcp_method() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_legacy_server().await;
+
+    // A matching Mcp-Method header on initialize passes validation and the
+    // handshake completes (HTTP 200, session created).
+    let response = post_initialize(&client, &url, SEP_VERSION, Some("initialize")).await;
+    assert_eq!(response.status(), 200);
 
     ct.cancel();
     Ok(())

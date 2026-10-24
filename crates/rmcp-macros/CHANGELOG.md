@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.5.1...rmcp-macros-v3.6.0) - 2026-10-19
+
+### Fixed
+
+- *(transport)* accept nested x-mcp-header annotations ([#1359](https://github.com/modelcontextprotocol/rust-sdk/pull/1359))
+- ship LICENSE in rmcp and rmcp-macros crates ([#1342](https://github.com/modelcontextprotocol/rust-sdk/pull/1342))
+
+### Other
+
+- combine AI issue triage with a maintainer rotation as the responsible reviewer ([#1260](https://github.com/modelcontextprotocol/rust-sdk/pull/1260))
+
+## [3.4.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.4.0...rmcp-macros-v3.4.1) - 2026-09-23
+
+### Fixed
+
+- *(macros)* accept const paths and concat! in tool/prompt descriptions ([#1243](https://github.com/modelcontextprotocol/rust-sdk/pull/1243))
+
+## [3.4.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.3.0...rmcp-macros-v3.4.0) - 2026-09-15
+
+### Added
+
+- *(model)* add ServerConfig and ClientConfig ([#1266](https://github.com/modelcontextprotocol/rust-sdk/pull/1266))
+
+### Fixed
+
+- *(model)* deprecate ServerInfo and ClientInfo aliases ([#1156](https://github.com/modelcontextprotocol/rust-sdk/pull/1156))
+
+## [3.3.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.2.0...rmcp-macros-v3.3.0) - 2026-09-10
+
+### Added
+
+- *(macros)* reject empty tool_router ([#1233](https://github.com/modelcontextprotocol/rust-sdk/pull/1233))
+
+## [3.2.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.4...rmcp-macros-v3.2.0) - 2026-08-31
+
+### Added
+
+- add request-state key rotation ([#1128](https://github.com/modelcontextprotocol/rust-sdk/pull/1128))
+
+### Fixed
+
+- allow concurrent streamable http requests ([#1186](https://github.com/modelcontextprotocol/rust-sdk/pull/1186))
+
 ## [3.1.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.1.2...rmcp-macros-v3.1.3) - 2026-08-17
 
 ### Fixed

@@ -1,3 +1,8 @@
+#![expect(
+    deprecated,
+    reason = "This example demonstrates the deprecated MCP sampling API"
+)]
+
 use anyhow::Result;
 use rmcp::{
     ClientHandler, ServiceExt,

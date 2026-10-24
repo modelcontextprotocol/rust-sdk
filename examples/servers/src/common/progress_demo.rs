@@ -75,13 +75,13 @@ impl ProgressDemo {
             ctx.meta.get_key_value("progressToken")
         );
         let Some((_, progress_token)) = ctx.meta.get_key_value("progressToken") else {
-            return Err(McpError::internal_error(format!("No progress token"), None));
+            return Err(McpError::internal_error("No progress token", None));
         };
 
         let Ok(progress_token) = serde_json::from_value::<NumberOrString>(progress_token.clone())
         else {
             return Err(McpError::internal_error(
-                format!("Invalid format of the progress token"),
+                "Invalid format of the progress token",
                 None,
             ));
         };
@@ -131,8 +131,8 @@ impl ProgressDemo {
 
 #[tool_handler]
 impl ServerHandler for ProgressDemo {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::from_build_env())
             .with_instructions(

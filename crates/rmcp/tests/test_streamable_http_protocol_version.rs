@@ -33,9 +33,17 @@ async fn spawn_server_with_manager(
     config: StreamableHttpServerConfig,
     session_manager: Arc<LocalSessionManager>,
 ) -> (reqwest::Client, String, CancellationToken) {
+    spawn_handler(Calculator::new(), config, session_manager).await
+}
+
+async fn spawn_handler<S: ServerHandler + Clone>(
+    handler: S,
+    config: StreamableHttpServerConfig,
+    session_manager: Arc<LocalSessionManager>,
+) -> (reqwest::Client, String, CancellationToken) {
     let ct = config.cancellation_token.clone();
-    let service: StreamableHttpService<Calculator, LocalSessionManager> =
-        StreamableHttpService::new(|| Ok(Calculator::new()), session_manager, config);
+    let service: StreamableHttpService<S, LocalSessionManager> =
+        StreamableHttpService::new(move || Ok(handler.clone()), session_manager, config);
 
     let router = axum::Router::new().nest_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -85,6 +93,17 @@ async fn post_init(
         req = req.header("MCP-Protocol-Version", h);
     }
     req.send().await.expect("send initialize request")
+}
+
+/// First JSON-RPC message of an SSE response, skipping the empty priming event.
+async fn sse_payload(response: reqwest::Response) -> anyhow::Result<Value> {
+    let body = response.text().await?;
+    let data = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .find(|data| !data.is_empty())
+        .expect("response must carry a JSON-RPC payload");
+    Ok(serde_json::from_str(data)?)
 }
 
 async fn post_non_initialize(client: &reqwest::Client, url: &str) -> reqwest::Response {
@@ -187,6 +206,27 @@ async fn stateless_init_accepts_when_header_absent() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn stateless_init_naming_a_post_handshake_version_negotiates_down() -> anyhow::Result<()> {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+
+    let response = post_init(&client, &url, None, "2026-07-28").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "initialize selects legacy semantics whatever version it names"
+    );
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body["result"]["protocolVersion"], "2025-11-25",
+        "initialize must settle on a version that still has the handshake"
+    );
+
+    ct.cancel();
+    Ok(())
+}
+
+#[tokio::test]
 async fn stateful_init_rejects_when_header_mismatches_body() -> anyhow::Result<()> {
     let (client, url, ct) = spawn_server(stateful_config()).await;
 
@@ -200,6 +240,41 @@ async fn stateful_init_rejects_when_header_mismatches_body() -> anyhow::Result<(
     Ok(())
 }
 
+/// MCP spec (Streamable HTTP, Session Management): servers that require a
+/// session ID SHOULD respond to requests without an `Mcp-Session-Id` header
+/// (other than initialization) with HTTP 400 Bad Request.
+#[tokio::test]
+async fn stateful_post_without_session_id_is_bad_request() -> anyhow::Result<()> {
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let (client, url, ct) =
+        spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
+
+    let response = post_non_initialize(&client, &url).await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.text().await?,
+        "Bad Request: Session ID is required"
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.text().await?,
+        "Bad Request: Session ID is required"
+    );
+
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    ct.cancel();
+    Ok(())
+}
+
 #[tokio::test]
 async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Result<()> {
     let session_manager = Arc::new(LocalSessionManager::default());
@@ -207,12 +282,43 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
         spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
 
     let response = post_non_initialize(&client, &url).await;
-    assert_eq!(response.status(), 422);
+    assert_eq!(response.status(), 400);
     assert_eq!(session_manager.sessions.read().await.len(), 0);
 
     let response = post_init(&client, &url, Some("2024-11-05"), "2025-11-25").await;
     assert_eq!(response.status(), 400);
     assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    ct.cancel();
+    Ok(())
+}
+
+/// The `initialize` handshake exists only in the revisions before `2026-07-28`,
+/// so naming a later version in it does not make the request a modern one: the
+/// server keeps legacy semantics, opens a session, and answers with a version it
+/// can actually serve over the handshake.
+#[tokio::test]
+async fn stateful_init_naming_a_post_handshake_version_opens_a_legacy_session() -> anyhow::Result<()>
+{
+    let (client, url, ct) = spawn_server(stateful_config()).await;
+
+    let response = post_init(&client, &url, None, "2026-07-28").await;
+    assert_eq!(
+        response.status(),
+        200,
+        "initialize selects legacy semantics whatever version it names"
+    );
+    assert!(
+        response.headers().contains_key("Mcp-Session-Id"),
+        "the handshake must open a session, got headers: {:?}",
+        response.headers()
+    );
+
+    let payload = sse_payload(response).await?;
+    assert_eq!(
+        payload["result"]["protocolVersion"], "2025-11-25",
+        "initialize must settle on a version that still has the handshake"
+    );
 
     ct.cancel();
     Ok(())
@@ -387,6 +493,49 @@ async fn stateless_request_accepts_missing_optional_meta_client_info() {
     ct.cancel();
 }
 
+#[derive(Clone)]
+struct MissingResourceServer;
+
+impl ServerHandler for MissingResourceServer {
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        Err(rmcp::ErrorData::resource_not_found(request.uri, None))
+    }
+}
+
+#[tokio::test]
+async fn stateless_handler_invalid_params_stays_in_band() {
+    let (client, url, ct) = spawn_handler(
+        MissingResourceServer,
+        stateless_json_config(),
+        Arc::new(LocalSessionManager::default()),
+    )
+    .await;
+
+    let response = post_modern_request(
+        &client,
+        &url,
+        "resources/read",
+        Some("ui://widget/nope"),
+        json!({
+            "uri": "ui://widget/nope",
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["error"]["code"], -32602);
+    ct.cancel();
+}
+
 // ---------------------------------------------------------------------------
 // Opt-in seam: `with_stateless_protocol_metadata_required(true)`
 // ---------------------------------------------------------------------------
@@ -418,8 +567,8 @@ impl CountingServer {
 }
 
 impl ServerHandler for CountingServer {
-    fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo::new(
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
             rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
                 .build(),

@@ -1,3 +1,10 @@
+#![expect(
+    deprecated,
+    reason = "The conformance suite still exercises deprecated sampling scenarios"
+)]
+
+use anyhow::Context;
+use oauth2::{ClientSecret, RefreshToken};
 use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServiceExt,
     model::*,
@@ -6,7 +13,8 @@ use rmcp::{
         AuthClient, AuthorizationManager, StreamableHttpClientTransport,
         auth::{
             AuthorizationCallback, AuthorizationRequest, ClientCredentialsConfig,
-            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState,
+            InMemoryCredentialStore, JwtSigningAlgorithm, OAuthState, default_oauth_http_client,
+            enterprise::{EmaAuthorizationServer, EmaClientAuthentication, EmaExchangeRequest},
         },
         streamable_http_client::StreamableHttpClientTransportConfig,
     },
@@ -36,6 +44,17 @@ struct ConformanceContext {
     private_key_pem: Option<String>,
     #[serde(default)]
     signing_algorithm: Option<String>,
+    // enterprise-managed-authorization-refresh-token
+    #[serde(default)]
+    idp_client_id: Option<String>,
+    #[serde(default)]
+    idp_client_secret: Option<String>,
+    #[serde(default)]
+    idp_refresh_token: Option<String>,
+    #[serde(default)]
+    idp_issuer: Option<String>,
+    #[serde(default)]
+    idp_token_endpoint: Option<String>,
 }
 
 fn load_context() -> ConformanceContext {
@@ -55,8 +74,8 @@ impl ClientHandler for BasicClientHandler {}
 struct ElicitationDefaultsClientHandler;
 
 impl ClientHandler for ElicitationDefaultsClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),
@@ -144,8 +163,8 @@ impl ClientHandler for ElicitationDefaultsClientHandler {
 struct FullClientHandler;
 
 impl ClientHandler for FullClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = ClientConfig::default();
         info.capabilities.elicitation = Some(
             ElicitationCapability::new()
                 .with_form(FormElicitationCapability::new().with_schema_validation(true)),
@@ -760,6 +779,66 @@ async fn run_client_credentials_jwt(
     Ok(())
 }
 
+/// Exchange the fixture's IdP refresh token, then exercise authenticated MCP access.
+async fn run_ema_refresh_token_client(
+    server_url: &str,
+    ctx: &ConformanceContext,
+) -> anyhow::Result<()> {
+    let manager = AuthorizationManager::new(server_url).await?;
+    let metadata = manager.resolve_metadata().await?.metadata;
+    let idp = EmaAuthorizationServer::new(
+        ctx.idp_issuer.as_deref().context("Missing idp_issuer")?,
+        ctx.idp_token_endpoint
+            .as_deref()
+            .context("Missing idp_token_endpoint")?,
+        ctx.idp_client_id
+            .as_deref()
+            .context("Missing idp_client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(
+            ctx.idp_client_secret
+                .clone()
+                .context("Missing idp_client_secret")?,
+        ),
+    ));
+    let resource_as = EmaAuthorizationServer::new(
+        metadata
+            .issuer
+            .context("Missing authorization server issuer")?,
+        metadata.token_endpoint,
+        ctx.client_id.as_deref().context("Missing client_id")?,
+    )
+    .with_client_authentication(EmaClientAuthentication::ClientSecretBasic(
+        ClientSecret::new(ctx.client_secret.clone().context("Missing client_secret")?),
+    ));
+    let refresh_token = RefreshToken::new(
+        ctx.idp_refresh_token
+            .clone()
+            .context("Missing idp_refresh_token")?,
+    );
+    let http = default_oauth_http_client()?;
+    let token = EmaExchangeRequest::new(idp, resource_as, server_url, &refresh_token)
+        .with_scopes(manager.select_scopes(None, &[]))
+        .exchange(&http, &http)
+        .await?;
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server_url)
+            .auth_header(token.access_token.secret()),
+    );
+    let client = BasicClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
+    let tools = client.list_tools(Default::default()).await?;
+    for tool in tools.tools {
+        let args = build_tool_arguments(&tool);
+        client.call_tool(call_tool_params(tool.name, args)).await?;
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 /// Cross-app access flow (SEP-1046 extension).
 async fn run_cross_app_access_client(
     server_url: &str,
@@ -914,6 +993,37 @@ async fn run_elicitation_defaults_client(server_url: &str) -> anyhow::Result<()>
     Ok(())
 }
 
+/// SEP-1613/SEP-2106: send the focal tool's `inputSchema` back through the
+/// echo tool, so the scenario can diff it against what the server listed.
+async fn run_json_schema_preservation_client(server_url: &str) -> anyhow::Result<()> {
+    let transport = StreamableHttpClientTransport::from_uri(server_url);
+    let client = FullClientHandler
+        .serve_with_lifecycle(transport, conformance_lifecycle())
+        .await?;
+    let tools = client.list_tools(Default::default()).await?;
+    let tool = tools
+        .tools
+        .iter()
+        .find(|t| t.name.as_ref() == "json_schema_2020_12_tool")
+        .ok_or_else(|| anyhow::anyhow!("json_schema_2020_12_tool was not listed"))?;
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "schema".to_string(),
+        Value::Object(tool.input_schema.as_ref().clone()),
+    );
+    let result = client
+        .call_tool(call_tool_params("json_schema_echo".into(), Some(args)))
+        .await?;
+    if result.is_error == Some(true) {
+        anyhow::bail!(
+            "json_schema_echo returned a tool error: {:?}",
+            result.content
+        );
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 fn conformance_protocol_version() -> ProtocolVersion {
     std::env::var("MCP_CONFORMANCE_PROTOCOL_VERSION")
         .ok()
@@ -1036,6 +1146,9 @@ async fn run_scenario(
         // close is sufficient; the scenario's mock server does not implement
         // the discover lifecycle, so `run_discover_client` hangs against it.
         "json-schema-ref-no-deref" => run_basic_client(server_url).await?,
+        "json-schema-2020-12-preservation" => {
+            run_json_schema_preservation_client(server_url).await?
+        }
         "tools_call" => run_tools_call_client(server_url, ctx).await?,
         "elicitation-sep1034-client-defaults" => {
             run_elicitation_defaults_client(server_url).await?
@@ -1109,6 +1222,11 @@ async fn run_scenario(
         // Auth - client credentials
         "auth/client-credentials-basic" => run_client_credentials_basic(server_url, ctx).await?,
         "auth/client-credentials-jwt" => run_client_credentials_jwt(server_url, ctx).await?,
+
+        // Auth - enterprise-managed authorization with a refresh-token subject
+        "auth/enterprise-managed-authorization-refresh-token" => {
+            run_ema_refresh_token_client(server_url, ctx).await?
+        }
 
         // Auth - cross-app access
         "auth/cross-app-access-complete-flow" => {

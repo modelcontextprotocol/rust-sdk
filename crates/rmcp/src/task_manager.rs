@@ -933,10 +933,7 @@ mod tests {
 
     #[tokio::test]
     async fn task_operation_reestablishes_request_association_scope() {
-        use crate::{
-            model::RequestId,
-            service::{ORIGINATING_REQUEST, in_request_handler_scope},
-        };
+        use crate::{model::RequestId, service::ORIGINATING_REQUEST};
 
         let manager = TaskManager::new();
         let observed = Arc::new(Mutex::new(None::<bool>));
@@ -947,7 +944,8 @@ mod tests {
                 manager.spawn(TaskOptions::default(), move |_ctx| {
                     let observed_in_task = observed_in_task.clone();
                     Box::pin(async move {
-                        *observed_in_task.lock().unwrap() = Some(in_request_handler_scope());
+                        *observed_in_task.lock().unwrap() =
+                            Some(ORIGINATING_REQUEST.try_with(|_| ()).is_ok());
                         Ok(ok_result("done"))
                     })
                 })
@@ -969,7 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn task_operation_without_originating_request_is_unscoped() {
-        use crate::service::in_request_handler_scope;
+        use crate::service::ORIGINATING_REQUEST;
 
         let manager = TaskManager::new();
         let observed = Arc::new(Mutex::new(None::<bool>));
@@ -978,7 +976,8 @@ mod tests {
         manager.spawn(TaskOptions::default(), move |_ctx| {
             let observed_in_task = observed_in_task.clone();
             Box::pin(async move {
-                *observed_in_task.lock().unwrap() = Some(in_request_handler_scope());
+                *observed_in_task.lock().unwrap() =
+                    Some(ORIGINATING_REQUEST.try_with(|_| ()).is_ok());
                 Ok(ok_result("done"))
             })
         });

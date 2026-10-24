@@ -195,10 +195,12 @@ pub(crate) const fn internal_error_response<E: Display>(
     }
 }
 
-pub(crate) fn unexpected_message_response(expect: &str) -> Response<BoxBody<Bytes, Infallible>> {
+/// MCP spec: servers that require a session ID SHOULD respond to requests
+/// without one (other than initialization) with 400 Bad Request.
+pub(crate) fn session_id_required_response() -> Response<BoxBody<Bytes, Infallible>> {
     Response::builder()
-        .status(http::StatusCode::UNPROCESSABLE_ENTITY)
-        .body(Full::new(Bytes::from(format!("Unexpected message, expect {expect}"))).boxed())
+        .status(http::StatusCode::BAD_REQUEST)
+        .body(Full::new(Bytes::from("Bad Request: Session ID is required")).boxed())
         .expect("valid response")
 }
 

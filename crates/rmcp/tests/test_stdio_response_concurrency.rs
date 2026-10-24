@@ -6,7 +6,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerInfo,
+        ServerConfig,
     },
 };
 use serde_json::{Value, json};
@@ -82,8 +82,8 @@ struct LargeResponseServer;
 
 impl ServerHandler for LargeResponseServer {
     #[allow(deprecated)]
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn call_tool(

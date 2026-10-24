@@ -15,7 +15,7 @@ use http::{HeaderName, HeaderValue};
 use rmcp::{
     ServiceError, ServiceExt,
     model::{
-        CallToolRequestParams, ClientInfo, ClientJsonRpcMessage, ClientRequest, ErrorCode,
+        CallToolRequestParams, ClientConfig, ClientJsonRpcMessage, ClientRequest, ErrorCode,
         ErrorData, InitializeResult, PingRequest, ProtocolVersion, RequestId, ServerCapabilities,
         ServerJsonRpcMessage, ServerResult,
     },
@@ -205,7 +205,7 @@ async fn test_reinitialization_completes_accepted_sse_request_instead_of_hanging
         mock_client,
         StreamableHttpClientTransportConfig::with_uri("mock://mcp"),
     );
-    let mut client = ClientInfo::default().serve(transport).await?;
+    let mut client = ClientConfig::default().serve(transport).await?;
 
     let peer = client.peer().clone();
     let pending_call = tokio::spawn(async move {
@@ -356,7 +356,10 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
             .reinit_on_expired_session(true),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+        .serve(transport)
+        .await?;
 
     // Verify the session is established: list_all_resources() succeeds
     let _resources = client.list_all_resources().await?;
@@ -432,7 +435,10 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
         StreamableHttpClientTransportConfig::with_uri(format!("http://{addr}/mcp"))
             .reinit_on_expired_session(false),
     );
-    let client = ().serve(transport).await?;
+    let client = ClientConfig::default()
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+        .serve(transport)
+        .await?;
 
     // Verify the session is established
     let _resources = client.list_all_resources().await?;

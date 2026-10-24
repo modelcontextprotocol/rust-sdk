@@ -10,7 +10,7 @@ use std::sync::Arc;
 use rmcp::{
     ClientHandler, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolRequestParams, ClientInfo, ServerCapabilities, ServerInfo},
+    model::{CallToolRequestParams, ClientConfig, ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -61,6 +61,23 @@ impl Server {
 
     #[tool]
     async fn empty_param(&self) {}
+
+    #[tool(description = CONST_TOOL_DESCRIPTION)]
+    async fn const_description_tool(&self) {}
+
+    #[tool(description = concat!("part-a-", "part-b"))]
+    async fn concat_description_tool(&self) {}
+}
+
+const CONST_TOOL_DESCRIPTION: &str = "Description from a const";
+
+#[test]
+fn test_description_accepts_const_and_concat_exprs() {
+    let tool = Server::const_description_tool_tool_attr();
+    assert_eq!(tool.description.as_deref(), Some(CONST_TOOL_DESCRIPTION));
+
+    let tool = Server::concat_description_tool_tool_attr();
+    assert_eq!(tool.description.as_deref(), Some("part-a-part-b"));
 }
 
 /// Generic service trait.
@@ -287,8 +304,8 @@ fn test_optional_field_schema_generation_via_macro() {
 struct DummyClientHandler {}
 
 impl ClientHandler for DummyClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::default()
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::default()
     }
 }
 
@@ -549,8 +566,8 @@ impl ManualInfoServer {
 
 #[tool_handler]
 impl ServerHandler for ManualInfoServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -572,4 +589,48 @@ fn test_manual_get_info_not_overridden() {
         info.capabilities.resources.is_some(),
         "manual resources should be preserved"
     );
+}
+
+/// Server whose tools come from a `macro_rules!` helper wrapping the whole annotated impl.
+#[derive(Debug, Clone)]
+struct MacroGeneratedServer;
+
+macro_rules! define_tools {
+    ($($name:ident => $description:literal),* $(,)?) => {
+        #[tool_router]
+        impl MacroGeneratedServer {
+            $(
+                #[tool(description = $description)]
+                async fn $name(&self) -> String {
+                    stringify!($name).to_owned()
+                }
+            )*
+        }
+    };
+}
+
+define_tools!(probe => "what a capability would own");
+
+#[test]
+fn test_macro_rules_around_the_impl_registers_tools() {
+    let tools = MacroGeneratedServer::tool_router().list_all();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "probe");
+    assert_eq!(
+        tools[0].description.as_deref(),
+        Some("what a capability would own")
+    );
+}
+
+/// Server that opts in to a router with no tools.
+#[derive(Debug, Clone)]
+struct EmptyRouterServer;
+
+#[tool_router(allow_empty)]
+impl EmptyRouterServer {}
+
+#[test]
+fn test_allow_empty_builds_a_router_without_tools() {
+    assert!(EmptyRouterServer::tool_router().list_all().is_empty());
 }

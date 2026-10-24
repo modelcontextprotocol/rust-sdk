@@ -55,8 +55,8 @@ impl<H: ServerHandler> Service<RoleServer> for H {
     ) -> Result<<RoleServer as ServiceRole>::Resp, McpError> {
         // `context` is moved into the dispatch below, so read the negotiated version first.
         let protocol_version = context.protocol_version();
-        // SEP-2322 (`resultType` discriminator, MRTR) exists from 2026-07-28.
-        let sep_2322_supported = protocol_version
+        // ISO `YYYY-MM-DD` versions compare lexically the same as chronologically.
+        let is_2026_07_28_or_later = protocol_version
             .as_ref()
             .is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
         let requested_version = context.meta.protocol_version();
@@ -244,28 +244,27 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             }
         };
         let result = result.and_then(|mut result| {
-            if matches!(result, ServerResult::InputRequiredResult(_)) && !sep_2322_supported {
+            if matches!(result, ServerResult::InputRequiredResult(_)) && !is_2026_07_28_or_later {
                 Err(McpError::invalid_request(
                     "InputRequiredResult requires negotiated protocol version 2026-07-28 or newer",
                     None,
                 ))
             } else {
-                // Peers on protocol versions older than 2026-07-28 keep the
-                // legacy wire shape without `resultType: "complete"`.
-                if !sep_2322_supported {
+                // 2026-07-28 requires caching hints on cacheable results; older
+                // peers keep the legacy shape without `resultType: "complete"`.
+                if is_2026_07_28_or_later {
+                    result.fill_missing_cache_hints();
+                } else {
                     result.strip_result_type_for_legacy_peer();
                 }
                 Ok(result)
             }
         });
 
-        // SEP-2164: peers negotiating 2026-07-28+ get the standard INVALID_PARAMS code for
-        // resource-not-found; older peers keep RESOURCE_NOT_FOUND. ISO `YYYY-MM-DD` versions
-        // compare lexically the same as chronologically.
-        let use_invalid_params =
-            protocol_version.is_some_and(|v| v.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        // Peers on 2026-07-28+ get the standard INVALID_PARAMS code for
+        // resource-not-found; older peers keep RESOURCE_NOT_FOUND.
         result.map_err(|mut error| {
-            if use_invalid_params && error.code == ErrorCode::RESOURCE_NOT_FOUND {
+            if is_2026_07_28_or_later && error.code == ErrorCode::RESOURCE_NOT_FOUND {
                 error.code = ErrorCode::INVALID_PARAMS;
             }
             error
@@ -321,13 +320,59 @@ macro_rules! server_handler_methods {
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
             context.peer.set_peer_info(request.clone());
+            std::future::ready(self.negotiate_initialize(&request))
+        }
+        /// Build the `initialize` response for `request`, negotiating the
+        /// protocol version against [`Self::supported_protocol_versions`].
+        ///
+        /// This is the whole body of the default [`Self::initialize`] minus its
+        /// `set_peer_info` side effect, so a server that overrides `initialize`
+        /// to add its own can call this instead of restating the negotiation
+        /// rule:
+        ///
+        /// ```
+        /// use rmcp::{
+        ///     ErrorData as McpError, RoleServer, ServerHandler,
+        ///     model::{InitializeRequestParams, InitializeResult, ServerConfig},
+        ///     service::RequestContext,
+        /// };
+        ///
+        /// struct MyServer;
+        ///
+        /// impl ServerHandler for MyServer {
+        ///     fn get_info(&self) -> ServerConfig {
+        ///         ServerConfig::default()
+        ///     }
+        ///
+        ///     async fn initialize(
+        ///         &self,
+        ///         request: InitializeRequestParams,
+        ///         context: RequestContext<RoleServer>,
+        ///     ) -> Result<InitializeResult, McpError> {
+        ///         // ... record telemetry, register the peer, etc.
+        ///         context.peer.set_peer_info(request.clone());
+        ///         self.negotiate_initialize(&request)
+        ///     }
+        /// }
+        /// ```
+        ///
+        /// # Errors
+        ///
+        /// Returns [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`] when this server
+        /// supports no version that still has an `initialize` handshake.
+        ///
+        /// [`ErrorCode::UNSUPPORTED_PROTOCOL_VERSION`]: crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+        fn negotiate_initialize(
+            &self,
+            request: &InitializeRequestParams,
+        ) -> Result<InitializeResult, McpError> {
             let mut info = self.get_info();
             info.protocol_version = negotiate_protocol_version(
                 &request.protocol_version,
-                info.protocol_version,
+                std::mem::take(&mut info.protocol_version),
                 &self.supported_protocol_versions(),
-            );
-            std::future::ready(Ok(info))
+            )?;
+            Ok(info)
         }
         /// Return the protocol versions supported by this server.
         ///
@@ -336,6 +381,10 @@ macro_rules! server_handler_methods {
         /// list is advertised by [`Self::discover`], bounds what `initialize`
         /// negotiation may agree to, and is what per-request versions are
         /// validated against.
+        ///
+        /// To support everything up to some ceiling, use
+        /// [`ProtocolVersion::known_up_to`] rather than filtering
+        /// [`ProtocolVersion::KNOWN_VERSIONS`] by hand.
         fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
             Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
         }
@@ -550,8 +599,8 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
-        fn get_info(&self) -> ServerInfo {
-            ServerInfo::default()
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::default()
         }
 
         /// SEP-2663 `tasks/get`: return the current [`DetailedTask`] state.
@@ -616,6 +665,13 @@ macro_rules! impl_server_handler_for_wrapper {
                 context: RequestContext<RoleServer>,
             ) -> impl Future<Output = Result<InitializeResult, McpError>> + MaybeSendFuture + '_ {
                 (**self).initialize(request, context)
+            }
+
+            fn negotiate_initialize(
+                &self,
+                request: &InitializeRequestParams,
+            ) -> Result<InitializeResult, McpError> {
+                (**self).negotiate_initialize(request)
             }
 
             fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -782,7 +838,7 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).on_custom_notification(notification, context)
             }
 
-            fn get_info(&self) -> ServerInfo {
+            fn get_info(&self) -> ServerConfig {
                 (**self).get_info()
             }
 
