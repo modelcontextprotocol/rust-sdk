@@ -1305,7 +1305,7 @@ where
 /// Without the `local` feature this is `tokio::spawn` (requires `Future: Send + 'static`).
 /// With `local` it uses `tokio::task::spawn_local` (requires only `Future: 'static`).
 #[cfg(not(feature = "local"))]
-fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+pub(crate) fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -1314,7 +1314,7 @@ where
 }
 
 #[cfg(feature = "local")]
-fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+pub(crate) fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + 'static,
     F::Output: 'static,

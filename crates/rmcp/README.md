@@ -26,6 +26,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `auth` | OAuth 2.0 authentication support | |
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
+| `local` | Allow handler futures without `Send`; run services on a Tokio `LocalSet` | |
 
 ### Transport features
 
@@ -37,6 +38,12 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `transport-streamable-http-client` | Streamable HTTP client (transport-agnostic) |
 | `transport-streamable-http-client-reqwest` | Streamable HTTP client with default `reqwest` backend |
 | `transport-streamable-http-server` | Streamable HTTP server transport |
+
+With `local`, the Streamable HTTP server accepts handler futures that hold
+`!Send` values across an await. Drive `StreamableHttpService::handle` or its
+Tower service inside a `tokio::task::LocalSet`. The handler and service factory
+retain their existing thread-safety bounds. The returned Tower future is local
+and cannot be mounted directly on routers that require `Send` futures.
 
 ### TLS backend options (for HTTP transports)
 
