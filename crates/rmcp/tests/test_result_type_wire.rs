@@ -186,3 +186,64 @@ fn strip_preserves_custom_result_type() {
     let value = serde_json::to_value(result).expect("serialize ServerResult");
     assert_eq!(value["resultType"], "streaming");
 }
+
+#[test]
+fn meta_only_tool_results_preserve_legacy_and_complete_wire_forms() {
+    for result_type in [None, Some("complete")] {
+        let mut raw = json!({"_meta": {"trace": "present"}});
+        if let Some(result_type) = result_type {
+            raw["resultType"] = json!(result_type);
+        }
+        let tool: CallToolResult =
+            serde_json::from_value(raw.clone()).expect("meta-only tool result");
+        assert!(tool.content.is_empty());
+        assert_eq!(tool.meta, serde_json::from_value(raw["_meta"].clone()).ok());
+        assert!(matches!(
+            serde_json::from_value::<ServerResult>(raw).unwrap(),
+            ServerResult::CallToolResult(_)
+        ));
+    }
+}
+
+#[test]
+fn custom_fields_with_meta_preserve_the_complete_extension_response() {
+    for result_type in [None, Some("complete")] {
+        for extension in [
+            json!({"skills": []}),
+            json!({"extension": null}),
+            json!({"extension": false}),
+        ] {
+            let mut raw = json!({"_meta": {"trace": "present"}});
+            raw.as_object_mut()
+                .unwrap()
+                .extend(extension.as_object().unwrap().clone());
+            if let Some(result_type) = result_type {
+                raw["resultType"] = json!(result_type);
+            }
+            let result: ServerResult =
+                serde_json::from_value(raw.clone()).expect("extension result");
+            match result {
+                ServerResult::CustomResult(result) => assert_eq!(result.0, raw),
+                other => panic!("expected lossless custom result, got {other:?}"),
+            }
+            assert!(serde_json::from_value::<CallToolResult>(raw).is_err());
+        }
+    }
+}
+
+#[test]
+fn tool_specific_fields_keep_tool_results_with_unknown_extensions() {
+    for tool_field in [
+        json!({"content": []}),
+        json!({"structuredContent": null}),
+        json!({"isError": false}),
+    ] {
+        let mut raw =
+            json!({"resultType": "complete", "_meta": {"trace": "present"}, "extension": null});
+        raw.as_object_mut()
+            .unwrap()
+            .extend(tool_field.as_object().unwrap().clone());
+        let result: ServerResult = serde_json::from_value(raw).expect("tool result");
+        assert!(matches!(result, ServerResult::CallToolResult(_)));
+    }
+}
