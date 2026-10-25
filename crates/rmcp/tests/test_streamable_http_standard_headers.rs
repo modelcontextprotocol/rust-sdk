@@ -595,6 +595,85 @@ async fn media_type_headers_follow_http_semantics() {
             406,
         ),
         ("wildcard alone", &["*/*"], "application/json", 406),
+        // Invalid weights follow this implementation's admission policy.
+        (
+            "one",
+            &["application/json;q=1, text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "one decimal",
+            &["application/json;q=1., text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "one three digits",
+            &["application/json;q=1.000, text/event-stream"],
+            "application/json",
+            202,
+        ),
+        (
+            "over precision",
+            &["application/json;q=0.0001, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "above one",
+            &["application/json;q=1.001, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "missing leading zero",
+            &["application/json;q=.5, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "negative quality",
+            &["application/json;q=-0.1, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "non digit quality",
+            &["application/json;q=abc, text/event-stream"],
+            "application/json",
+            406,
+        ),
+        (
+            "zero SSE",
+            &["application/json, text/event-stream;q=0"],
+            "application/json",
+            406,
+        ),
+        (
+            "positive SSE",
+            &["application/json, text/event-stream;q=0.01"],
+            "application/json",
+            202,
+        ),
+        (
+            "weighted split reversed",
+            &["text/event-stream;q=0.5", "application/json;q=0.5"],
+            "application/json",
+            202,
+        ),
+        (
+            "same field reversed",
+            &["text/event-stream, application/json"],
+            "application/json",
+            202,
+        ),
+        (
+            "SSE near match",
+            &["application/json, text/event-streaming"],
+            "application/json",
+            406,
+        ),
     ];
     let mut failures = Vec::new();
     for (name, accept, content_type, expected) in cases {
@@ -606,7 +685,6 @@ async fn media_type_headers_follow_http_semantics() {
             request = request.header("Accept", *value);
         }
         let actual = request.send().await.unwrap().status().as_u16();
-        eprintln!("POST {name}: expected {expected}, got {actual}");
         if actual != *expected {
             failures.push(format!("{name}: expected {expected}, got {actual}"));
         }
@@ -619,6 +697,14 @@ async fn media_type_headers_follow_http_semantics() {
         ("TEXT/EVENT-STREAM", 400),
         ("text/event-streamx", 406),
         ("text/event-stream;q=0.0", 406),
+        ("text/event-stream;q=1", 400),
+        ("text/event-stream;q=1.", 400),
+        ("text/event-stream;q=1.000", 400),
+        ("text/event-stream;q=1.001", 406),
+        ("text/event-stream;q=0.0001", 406),
+        ("text/event-stream;q=.5", 406),
+        ("text/event-stream;q=-0.1", 406),
+        ("text/event-stream;q=abc", 406),
     ] {
         let actual = client
             .get(&url)
@@ -628,7 +714,6 @@ async fn media_type_headers_follow_http_semantics() {
             .unwrap()
             .status()
             .as_u16();
-        eprintln!("GET {accept}: expected {expected}, got {actual}");
         if actual != expected {
             failures.push(format!("GET {accept}: expected {expected}, got {actual}"));
         }

@@ -74,25 +74,25 @@ fn split_unquoted(value: &str, delimiter: char) -> impl Iterator<Item = &str> {
     })
 }
 
-// MCP requires explicit media types, rather than general wildcard negotiation.
-fn accepts_media_type(headers: &HeaderMap, expected: &str) -> bool {
-    headers.get_all(http::header::ACCEPT).iter().any(|value| {
-        let Ok(value) = value.to_str() else {
-            return false;
-        };
-        split_unquoted(value, ',').any(|entry| {
+// Yield quality-filtered essences; callers apply MCP's explicit media-type policy.
+fn accepted_media_types(headers: &HeaderMap) -> impl Iterator<Item = &str> {
+    headers
+        .get_all(http::header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| split_unquoted(value, ','))
+        .filter_map(|entry| {
             let mut parts = split_unquoted(entry, ';');
+            let essence = parts.next()?.trim();
             parts
-                .next()
-                .is_some_and(|essence| essence.trim().eq_ignore_ascii_case(expected))
-                && parts.all(|parameter| {
+                .all(|parameter| {
                     let Some((name, value)) = parameter.split_once('=') else {
                         return true;
                     };
                     !name.trim().eq_ignore_ascii_case("q") || quality_is_acceptable(value.trim())
                 })
+                .then_some(essence)
         })
-    })
 }
 
 // RFC 9110 section 12.4.2 permits up to three fractional digits.
@@ -1900,7 +1900,9 @@ where
         B::Error: Display,
     {
         // check accept header
-        if !accepts_media_type(request.headers(), EVENT_STREAM_MIME_TYPE) {
+        if !accepted_media_types(request.headers())
+            .any(|essence| essence.eq_ignore_ascii_case(EVENT_STREAM_MIME_TYPE))
+        {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
                 .body(
@@ -2034,9 +2036,13 @@ where
         B::Error: Display,
     {
         // check accept header
-        if !accepts_media_type(request.headers(), JSON_MIME_TYPE)
-            || !accepts_media_type(request.headers(), EVENT_STREAM_MIME_TYPE)
-        {
+        let mut accepts_json = false;
+        let mut accepts_sse = false;
+        for essence in accepted_media_types(request.headers()) {
+            accepts_json |= essence.eq_ignore_ascii_case(JSON_MIME_TYPE);
+            accepts_sse |= essence.eq_ignore_ascii_case(EVENT_STREAM_MIME_TYPE);
+        }
+        if !accepts_json || !accepts_sse {
             return Ok(Response::builder()
                 .status(http::StatusCode::NOT_ACCEPTABLE)
                 .body(Full::new(Bytes::from("Not Acceptable: Client must accept both application/json and text/event-stream")).boxed())
