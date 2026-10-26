@@ -56,6 +56,7 @@ fn dynamic_skill() -> Skill {
 struct SkillServer {
     declare_skills: bool,
     declare_directory_read: bool,
+    omit_resources: bool,
     answer_get_with_other_uri: bool,
     directory_calls: Arc<AtomicUsize>,
 }
@@ -80,11 +81,14 @@ impl SkillServer {
 impl ServerHandler for SkillServer {
     fn get_info(&self) -> ServerConfig {
         let builder = ServerCapabilities::builder().enable_resources();
-        let capabilities = match (self.declare_skills, self.declare_directory_read) {
+        let mut capabilities = match (self.declare_skills, self.declare_directory_read) {
             (true, true) => builder.enable_skills_with_directory_read().build(),
             (true, false) => builder.enable_skills().build(),
             (false, _) => builder.build(),
         };
+        if self.omit_resources {
+            capabilities.resources = None;
+        }
         ServerConfig::new(capabilities)
     }
 
@@ -339,6 +343,20 @@ async fn skills_methods_should_be_method_not_found_when_the_extension_is_undecla
     disconnect(client, server_task).await;
 
     assert_eq!(error_code(error), ErrorCode::METHOD_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn skills_methods_should_fail_with_internal_error_without_the_resources_capability() {
+    let server = SkillServer {
+        omit_resources: true,
+        ..SkillServer::with_directory_read()
+    };
+    let (client, server_task) = connect(server, ProtocolVersion::V_2026_07_28);
+
+    let error = client.list_skills(None).await.expect_err("no resources");
+    disconnect(client, server_task).await;
+
+    assert_eq!(error_code(error), ErrorCode::INTERNAL_ERROR);
 }
 
 #[tokio::test]

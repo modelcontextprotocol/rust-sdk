@@ -60,11 +60,16 @@ fn validate_skills_capability<M: ConstString, H: ServerHandler>(
     } else {
         capabilities.supports_skills()
     };
-    if declared {
-        Ok(())
-    } else {
-        Err(McpError::method_not_found::<M>())
+    if !declared {
+        return Err(McpError::method_not_found::<M>());
     }
+    if capabilities.resources.is_none() {
+        return Err(McpError::internal_error(
+            "the skills extension requires the resources capability",
+            None,
+        ));
+    }
+    Ok(())
 }
 
 fn invalid_handler_result(error: impl std::fmt::Display) -> McpError {
