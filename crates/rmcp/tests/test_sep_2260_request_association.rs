@@ -48,6 +48,20 @@ impl ServerHandler for SamplingServer {
                 .send_request(ServerRequest::PingRequest(PingRequest::default()))
                 .await
                 .map(|_| ()),
+            #[cfg(feature = "elicitation")]
+            "elicit_url" => match context
+                .peer
+                .elicit_url(
+                    "visit",
+                    url::Url::parse("https://example.com/").unwrap(),
+                    "elicitation-1",
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(rmcp::service::ElicitationError::Service(e)) => Err(e),
+                Err(e) => return Err(rmcp::ErrorData::internal_error(e.to_string(), None)),
+            },
             other => panic!("unexpected tool {other}"),
         };
         let text = match outcome {
@@ -229,6 +243,19 @@ async fn server_requests_allowed_on_older_discover_session() -> anyhow::Result<(
             "sent"
         );
     }
+    Ok(())
+}
+
+/// The client declares no elicitation modes, so this also pins that the
+/// protocol check runs before the capability check.
+#[cfg(feature = "elicitation")]
+#[tokio::test]
+async fn elicit_url_rejected_on_modern_protocol() -> anyhow::Result<()> {
+    assert_eq!(call_tool_on_modern_pair("elicit_url").await?, "rejected");
+    assert_eq!(
+        call_tool_on_discover_pair("elicit_url", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
     Ok(())
 }
 

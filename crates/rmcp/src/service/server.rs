@@ -1244,6 +1244,10 @@ impl Peer<RoleServer> {
     where
         T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
     {
+        // Reject on 2026-07-28 before the capability check, which would
+        // otherwise answer `CapabilityNotSupported` first.
+        RoleServer::enforce_outbound_request(self)?;
+
         // Check if client supports form elicitation capability
         if !self
             .supported_elicitation_modes()
@@ -1395,6 +1399,10 @@ impl Peer<RoleServer> {
         elicitation_id: impl Into<String>,
         timeout: Option<std::time::Duration>,
     ) -> Result<ElicitationAction, ElicitationError> {
+        // Reject on 2026-07-28 before the capability check, which would
+        // otherwise answer `CapabilityNotSupported` first.
+        RoleServer::enforce_outbound_request(self)?;
+
         // Check if client supports url elicitation
         if !self
             .supported_elicitation_modes()
