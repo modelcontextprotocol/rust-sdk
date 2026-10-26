@@ -52,14 +52,14 @@ impl ServiceRole for RoleServer {
     }
 
     fn enforce_outbound_request(peer: &Peer<Self>) -> Result<(), ServiceError> {
-        // An inline lifecycle session (e.g. discover on stdio) never stores
-        // peer info, so check the version it opened on as well.
-        let modern = |version: &ProtocolVersion| *version >= ProtocolVersion::V_2026_07_28;
-        if peer.inline_protocol_version().is_some_and(modern)
-            || peer
-                .peer_info()
-                .is_some_and(|info| modern(&info.protocol_version))
-        {
+        // Same order as `RequestContext::protocol_version`: the version the
+        // current request names wins. Outside a handler, fall back to the version
+        // an inline session (e.g. discover on stdio) opened on, since it never
+        // stores peer info, then to peer info.
+        let version = originating_protocol_version()
+            .or_else(|| peer.inline_protocol_version().cloned())
+            .or_else(|| peer.peer_info().map(|info| info.protocol_version.clone()));
+        if version.is_some_and(|version| version >= ProtocolVersion::V_2026_07_28) {
             return Err(ServiceError::McpError(ErrorData::invalid_request(
                 "server-to-client requests are not allowed on protocol 2026-07-28 or later; return InputRequiredResult instead",
                 None,

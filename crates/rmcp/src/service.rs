@@ -226,6 +226,18 @@ pub(crate) fn peer_request_association<Req: crate::model::GetExtensions, V>(
 
 tokio::task_local! {
     pub(crate) static ORIGINATING_REQUEST: RequestId;
+    /// The protocol version the originating request names in its `_meta`.
+    pub(crate) static ORIGINATING_PROTOCOL_VERSION: Option<ProtocolVersion>;
+}
+
+/// The protocol version named by the request the current handler is serving,
+/// if any. Like [`ORIGINATING_REQUEST`], it does not cross `tokio::spawn`.
+#[cfg(feature = "server")]
+pub(crate) fn originating_protocol_version() -> Option<ProtocolVersion> {
+    ORIGINATING_PROTOCOL_VERSION
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
 }
 
 /// Marker in an outbound request's non-serialized [`Extensions`] identifying
@@ -717,7 +729,6 @@ pub struct Peer<R: ServiceRole> {
     progress_timeout_watchers: ProgressTimeoutWatchers,
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
-    request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
     inline_protocol_version: Arc<OnceLock<ProtocolVersion>>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
     #[cfg(feature = "client")]
@@ -736,7 +747,6 @@ where
             progress_timeout_watchers: self.progress_timeout_watchers.clone(),
             info: self.info.clone(),
             client_request_metadata: self.client_request_metadata.clone(),
-            request_metadata_required: self.request_metadata_required.clone(),
             inline_protocol_version: self.inline_protocol_version.clone(),
             subscription_channels: self.subscription_channels.clone(),
             #[cfg(feature = "client")]
@@ -813,7 +823,6 @@ impl<R: ServiceRole> Peer<R> {
                 progress_timeout_watchers: Default::default(),
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
                 client_request_metadata: Default::default(),
-                request_metadata_required: Default::default(),
                 inline_protocol_version: Default::default(),
                 subscription_channels: Default::default(),
                 #[cfg(feature = "client")]
@@ -1031,8 +1040,6 @@ impl<R: ServiceRole> Peer<R> {
     #[cfg(feature = "server")]
     pub(crate) fn require_request_metadata(&self, protocol_version: ProtocolVersion) {
         let _ = self.inline_protocol_version.set(protocol_version);
-        self.request_metadata_required
-            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// The version an inline lifecycle session opened on. Such a session never
@@ -1044,8 +1051,7 @@ impl<R: ServiceRole> Peer<R> {
 
     #[cfg(feature = "server")]
     pub(crate) fn request_metadata_required(&self) -> bool {
-        self.request_metadata_required
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.inline_protocol_version.get().is_some()
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -1598,9 +1604,16 @@ where
                         };
                         let current_span = tracing::Span::current();
                         let handler_id = id.clone();
+                        let handler_version = context.meta.protocol_version();
                         spawn_service_task(async move {
                             let result = ORIGINATING_REQUEST
-                                .scope(handler_id, service.handle_request(request, context))
+                                .scope(
+                                    handler_id,
+                                    ORIGINATING_PROTOCOL_VERSION.scope(
+                                        handler_version,
+                                        service.handle_request(request, context),
+                                    ),
+                                )
                                 .await;
                             let response = match result {
                                 Ok(result) => {
