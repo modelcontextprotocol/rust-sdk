@@ -2,7 +2,8 @@
 #![expect(deprecated, reason = "This test exercises the deprecated sampling API")]
 
 use rmcp::{
-    ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError, ServiceExt,
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, RoleServer, ServerHandler,
+    ServiceError, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
         CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ErrorCode,
@@ -130,6 +131,46 @@ async fn call_tool_on_modern_pair(tool: &'static str) -> anyhow::Result<String> 
     Ok(text)
 }
 
+/// Starts the pair the way stdio does: the server through plain `serve()`, the
+/// client through the discover lifecycle on `version`. Unlike `serve_directly`,
+/// this leaves the server's `peer_info` empty.
+async fn call_tool_on_discover_pair(
+    tool: &'static str,
+    version: ProtocolVersion,
+) -> anyhow::Result<String> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle = tokio::spawn(async move {
+        let server = SamplingServer.serve(server_transport).await?;
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = SamplingClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![version],
+            },
+        )
+        .await?;
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new(tool))
+        .await?;
+    let text = result
+        .content
+        .first()
+        .unwrap()
+        .as_text()
+        .unwrap()
+        .text
+        .clone();
+
+    client.cancel().await?;
+    let _ = server_handle.await?;
+    Ok(text)
+}
+
 #[tokio::test]
 async fn sampling_from_handler_rejected_on_modern_protocol() -> anyhow::Result<()> {
     assert_eq!(call_tool_on_modern_pair("sample").await?, "rejected");
@@ -148,6 +189,46 @@ async fn generic_send_request_rejected_on_modern_protocol() -> anyhow::Result<()
 #[tokio::test]
 async fn ping_rejected_on_modern_protocol() -> anyhow::Result<()> {
     assert_eq!(call_tool_on_modern_pair("ping").await?, "rejected");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sampling_from_handler_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("sample", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn generic_send_request_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("sample_generic", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ping_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("ping", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+/// A discover session can still pick an older version, where these requests
+/// are allowed.
+#[tokio::test]
+async fn server_requests_allowed_on_older_discover_session() -> anyhow::Result<()> {
+    for tool in ["sample", "ping"] {
+        assert_eq!(
+            call_tool_on_discover_pair(tool, ProtocolVersion::V_2025_11_25).await?,
+            "sent"
+        );
+    }
     Ok(())
 }
 

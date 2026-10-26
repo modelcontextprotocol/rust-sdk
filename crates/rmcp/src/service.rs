@@ -161,7 +161,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     /// Rejects outbound requests when the negotiated protocol forbids this role
     /// from sending any.
     #[doc(hidden)]
-    fn enforce_outbound_request(_peer_info: Option<&Self::PeerInfo>) -> Result<(), ServiceError> {
+    fn enforce_outbound_request(_peer: &Peer<Self>) -> Result<(), ServiceError> {
         Ok(())
     }
 
@@ -718,6 +718,7 @@ pub struct Peer<R: ServiceRole> {
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
+    inline_protocol_version: Arc<OnceLock<ProtocolVersion>>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
     #[cfg(feature = "client")]
     response_cache: client::cache::PeerResponseCache<R>,
@@ -736,6 +737,7 @@ where
             info: self.info.clone(),
             client_request_metadata: self.client_request_metadata.clone(),
             request_metadata_required: self.request_metadata_required.clone(),
+            inline_protocol_version: self.inline_protocol_version.clone(),
             subscription_channels: self.subscription_channels.clone(),
             #[cfg(feature = "client")]
             response_cache: self.response_cache.clone(),
@@ -812,6 +814,7 @@ impl<R: ServiceRole> Peer<R> {
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
                 client_request_metadata: Default::default(),
                 request_metadata_required: Default::default(),
+                inline_protocol_version: Default::default(),
                 subscription_channels: Default::default(),
                 #[cfg(feature = "client")]
                 response_cache: Default::default(),
@@ -860,7 +863,7 @@ impl<R: ServiceRole> Peer<R> {
         options: PeerRequestOptions,
         subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
-        R::enforce_outbound_request(self.peer_info().as_deref())?;
+        R::enforce_outbound_request(self)?;
         if let Ok(originating) = ORIGINATING_REQUEST.try_with(|id| id.clone()) {
             request
                 .extensions_mut()
@@ -1024,10 +1027,19 @@ impl<R: ServiceRole> Peer<R> {
         debug_assert!(result.is_ok(), "client request metadata set more than once");
     }
 
+    /// Marks an inline lifecycle session that opened on `protocol_version`.
     #[cfg(feature = "server")]
-    pub(crate) fn require_request_metadata(&self) {
+    pub(crate) fn require_request_metadata(&self, protocol_version: ProtocolVersion) {
+        let _ = self.inline_protocol_version.set(protocol_version);
         self.request_metadata_required
             .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The version an inline lifecycle session opened on. Such a session never
+    /// stores peer info.
+    #[cfg(feature = "server")]
+    pub(crate) fn inline_protocol_version(&self) -> Option<&ProtocolVersion> {
+        self.inline_protocol_version.get()
     }
 
     #[cfg(feature = "server")]
