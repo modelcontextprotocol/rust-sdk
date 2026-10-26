@@ -67,7 +67,8 @@ mod tool_router;
 ///
 /// - add `.boxed()` before `.buffer_unordered(..)` or `.buffered(..)`;
 /// - own the items instead of borrowing them (`items.into_iter()`);
-/// - move the closure body into an `async fn` helper and use `.then(..)`;
+/// - if the futures do not need to run at the same time, use `.then(..)` instead, which
+///   runs them one at a time;
 /// - if the server does not have to be `Send`, the `local` crate feature drops the
 ///   `+ Send` bound from the generated signature.
 ///
