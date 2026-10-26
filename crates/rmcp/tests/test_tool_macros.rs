@@ -634,3 +634,73 @@ impl EmptyRouterServer {}
 fn test_allow_empty_builds_a_router_without_tools() {
     assert!(EmptyRouterServer::tool_router().list_all().is_empty());
 }
+
+/// Regression cover for <https://github.com/modelcontextprotocol/rust-sdk/issues/1092>.
+///
+/// An `async fn` tool is rewritten into `-> Pin<Box<dyn Future<Output = T> + Send + '_>>`,
+/// so the whole call tree has to pass the `Send` check. A closure taking a reference and
+/// returning an `async move` block, buffered by a `futures` combinator, fails that check
+/// on current rustc (rust-lang/rust#104382). Both shapes below are the documented ways
+/// round it; this test exists so they keep compiling.
+#[derive(Debug, Clone)]
+struct BufferedStreamServer;
+
+impl BufferedStreamServer {
+    /// Fan out over borrowed items, boxing the stream so the closure drops out of the
+    /// `Send` computation.
+    async fn fan_out_borrowed(&self, items: &[String]) -> Vec<String> {
+        use futures::stream::{self, StreamExt};
+        stream::iter(items.iter())
+            .map(|item| async move { item.to_uppercase() })
+            .boxed()
+            .buffer_unordered(4)
+            .collect()
+            .await
+    }
+
+    /// Fan out over owned items, so the closure argument is not a reference at all.
+    async fn fan_out_owned(&self, items: Vec<String>) -> Vec<String> {
+        use futures::stream::{self, StreamExt};
+        stream::iter(items)
+            .map(|item| async move { item.to_uppercase() })
+            .buffer_unordered(4)
+            .collect()
+            .await
+    }
+}
+
+#[tool_router]
+impl BufferedStreamServer {
+    /// Uppercase a fixed list through a boxed, buffered stream over borrowed items.
+    #[tool(description = "Fan out over borrowed items")]
+    async fn borrowed(&self) -> String {
+        let items = vec!["a".to_string(), "b".to_string()];
+        let mut out = self.fan_out_borrowed(&items).await;
+        out.sort();
+        out.join(",")
+    }
+
+    /// Uppercase a fixed list through a buffered stream over owned items.
+    #[tool(description = "Fan out over owned items")]
+    async fn owned(&self) -> String {
+        let mut out = self
+            .fan_out_owned(vec!["c".to_string(), "d".to_string()])
+            .await;
+        out.sort();
+        out.join(",")
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for BufferedStreamServer {}
+
+#[tokio::test]
+async fn test_async_tool_with_buffered_stream() {
+    let server = BufferedStreamServer;
+    assert_eq!(server.borrowed().await, "A,B");
+    assert_eq!(server.owned().await, "C,D");
+
+    let router = BufferedStreamServer::tool_router();
+    assert!(router.has_route("borrowed"));
+    assert!(router.has_route("owned"));
+}

@@ -33,6 +33,46 @@ mod tool_router;
 ///     // handling tool request
 /// }
 /// ```
+///
+/// ## Async tool bodies must be `Send`
+///
+/// An `async fn` is rewritten into
+/// `fn(..) -> Pin<Box<dyn Future<Output = T> + Send + '_>>`, because the router keeps
+/// every handler as a `Send` boxed future. Everything the tool awaits therefore has to
+/// be `Send`.
+///
+/// One shape fails that check even though the code is sound. A closure that takes a
+/// reference and returns an `async move` block, fed into a `futures` combinator that
+/// buffers the futures, does not compile:
+///
+/// ```rust,ignore
+/// stream::iter(items.iter())
+///     .map(|item| async move { work(item).await })
+///     .buffer_unordered(4)
+/// ```
+///
+/// ```text
+/// error: implementation of `FnOnce` is not general enough
+///    = note: closure with signature `fn(&'0 String) -> {async block}`
+///            must implement `FnOnce<(&'1 String,)>`, for any two lifetimes `'0` and `'1`...
+///    = note: ...but it actually implements `FnOnce<(&String,)>`
+/// ```
+///
+/// The span points at `#[tool]`, which is misleading. This is a rustc limitation around
+/// `Send` checking of async blocks, not something the macro introduces: the same code
+/// fails under `tokio::spawn`, under `-> impl Send`, or under any `Send`-bounded generic,
+/// with no macro involved. See [rust-lang/rust#104382] and [rust-lang/rust#126551].
+///
+/// Ways round it, least disruptive first:
+///
+/// - add `.boxed()` before `.buffer_unordered(..)` or `.buffered(..)`;
+/// - own the items instead of borrowing them (`items.into_iter()`);
+/// - move the closure body into an `async fn` helper and use `.then(..)`;
+/// - if the server does not have to be `Send`, the `local` crate feature drops the
+///   `+ Send` bound from the generated signature.
+///
+/// [rust-lang/rust#104382]: https://github.com/rust-lang/rust/issues/104382
+/// [rust-lang/rust#126551]: https://github.com/rust-lang/rust/issues/126551
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, input: TokenStream) -> TokenStream {
     tool::tool(attr.into(), input.into())
@@ -251,6 +291,16 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     // Generate prompt messages based on arguments
 /// }
 /// ```
+///
+/// ## Async prompt bodies must be `Send`
+///
+/// An `async fn` is rewritten into
+/// `fn(..) -> Pin<Box<dyn Future<Output = T> + Send + '_>>`, the same as [`macro@tool`],
+/// so the same `Send` limitation applies: a closure taking a reference and returning an
+/// `async move` block, fed into `.buffer_unordered(..)` or `.buffered(..)`, fails to
+/// compile with "implementation of `FnOnce` is not general enough" even though the code
+/// is sound. See the matching section on [`macro@tool`] for the error text and the ways
+/// round it.
 #[proc_macro_attribute]
 pub fn prompt(attr: TokenStream, input: TokenStream) -> TokenStream {
     prompt::prompt(attr.into(), input.into())
