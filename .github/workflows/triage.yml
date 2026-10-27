@@ -280,7 +280,12 @@ jobs:
             --json \
             - < triage-prompt.md > codex-events.jsonl 2>&1 || {
               echo "::error::Codex exited non-zero. Last events:"
-              tail -5 codex-events.jsonl >&2
+              # Run logs are public and command output can echo ~/.codex/auth.json, so
+              # print only event types and Codex's own error messages.
+              jq -Rr 'fromjson? | select(type == "object")
+                      | [.type, .item.type, .error.message // .message]
+                      | map(select(. != null)) | join(" ")' \
+                codex-events.jsonl | tail -5 >&2
               exit 1
             }
 

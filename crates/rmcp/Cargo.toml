@@ -385,6 +385,11 @@ required-features = ["server", "client"]
 path = "tests/test_trace_context.rs"
 
 [[test]]
+name = "test_abandoned_request_cancel"
+required-features = ["server", "client"]
+path = "tests/test_abandoned_request_cancel.rs"
+
+[[test]]
 name = "test_mrtr_behavior"
 required-features = ["server", "client"]
 path = "tests/test_mrtr_behavior.rs"
@@ -496,3 +501,8 @@ path = "tests/test_streamable_http_disconnect_cancel.rs"
 name = "test_sep_2260_stream_routing"
 required-features = ["server", "elicitation", "transport-streamable-http-server", "reqwest"]
 path = "tests/test_sep_2260_stream_routing.rs"
+
+[[test]]
+name = "test_streamable_http_status_metadata"
+path = "tests/test_streamable_http_status_metadata.rs"
+required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]

@@ -26,11 +26,6 @@ T-CI:
   - changed-files:
     - any-glob-to-any-file: ['.github/**/*', '**/*.yml', '**/*.yaml', '**/Dockerfile*']
 
-# Dependencies
-T-dependencies:
-  - changed-files:
-    - any-glob-to-any-file: ['**/Cargo.toml', '**/Cargo.lock', '**/package.json', '**/package-lock.json', '**/requirements.txt', '**/pyproject.toml']
-
 # Tests
 T-test:
   - changed-files:
