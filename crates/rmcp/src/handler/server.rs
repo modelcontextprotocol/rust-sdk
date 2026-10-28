@@ -28,12 +28,17 @@ pub mod wrapper;
 ///   the request's `_meta` per-request capabilities or, for session-mode
 ///   peers, at `initialize` time), the spec requires `-32021` Missing
 ///   Required Client Capability with the required capability in `data`.
-fn validate_tasks_capability<M: ConstString, H: ServerHandler>(
+fn validate_tasks_capability<H: ServerHandler>(
     handler: &H,
+    method: &str,
     context: &RequestContext<RoleServer>,
 ) -> Result<(), McpError> {
     if !handler.get_info().capabilities.supports_tasks() {
-        return Err(McpError::method_not_found::<M>());
+        return Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            method.to_owned(),
+            None,
+        ));
     }
     let client_declared = context
         .client_capabilities()
@@ -45,6 +50,56 @@ fn validate_tasks_capability<M: ConstString, H: ServerHandler>(
             ClientCapabilities::builder().enable_tasks().build(),
         ))
     }
+}
+
+/// Decides, in one place and before dispatch, whether `method` is served on
+/// this lifecycle (SEP-2575) and, for the task methods, whether both sides
+/// declared the tasks capability.
+///
+/// The 2026-07-28 lifecycle has no handshake, so `initialize`, `ping`,
+/// `logging/setLevel`, `resources/subscribe` and `resources/unsubscribe` are
+/// not found there; the legacy lifecycle has no `subscriptions/listen`. These
+/// answer `-32601` whatever the params carried, so a removed method with
+/// malformed params is still "not found" rather than "invalid params".
+///
+/// `initialize` is judged by `inline_session` rather than `legacy_request`:
+/// its own params supply the fallback protocol version while the handshake
+/// is still open, so only a session already on the inline lifecycle, or a
+/// request that declares 2026-07-28 in its `_meta`, has no `initialize`.
+fn validate_method_served<H: ServerHandler>(
+    handler: &H,
+    method: &str,
+    legacy_request: bool,
+    inline_session: bool,
+    context: &RequestContext<RoleServer>,
+) -> Result<(), McpError> {
+    let not_served: &[&str] = if legacy_request {
+        &[SubscriptionsListenRequestMethod::VALUE]
+    } else {
+        &[
+            PingRequestMethod::VALUE,
+            SetLevelRequestMethod::VALUE,
+            SubscribeRequestMethod::VALUE,
+            UnsubscribeRequestMethod::VALUE,
+        ]
+    };
+    if not_served.contains(&method) || (inline_session && method == InitializeResultMethod::VALUE) {
+        return Err(McpError::new(
+            ErrorCode::METHOD_NOT_FOUND,
+            method.to_owned(),
+            None,
+        ));
+    }
+    if [
+        GetTaskMethod::VALUE,
+        UpdateTaskMethod::VALUE,
+        CancelTaskMethod::VALUE,
+    ]
+    .contains(&method)
+    {
+        validate_tasks_capability(handler, method, context)?;
+    }
+    Ok(())
 }
 
 impl<H: ServerHandler> Service<RoleServer> for H {
@@ -100,6 +155,17 @@ impl<H: ServerHandler> Service<RoleServer> for H {
         }
         let legacy_request =
             uses_legacy_lifecycle(protocol_version.as_ref(), requires_request_metadata);
+        let inline_session = context.peer.request_metadata_required()
+            || requested_version
+                .as_ref()
+                .is_some_and(|version| version.as_str() >= ProtocolVersion::V_2026_07_28.as_str());
+        validate_method_served(
+            self,
+            request.method(),
+            legacy_request,
+            inline_session,
+            &context,
+        )?;
         let result = match request {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
@@ -110,11 +176,7 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::DiscoverResult),
             ClientRequest::PingRequest(_request) => {
-                if !legacy_request {
-                    Err(McpError::method_not_found::<PingRequestMethod>())
-                } else {
-                    self.ping(context).await.map(ServerResult::empty)
-                }
+                self.ping(context).await.map(ServerResult::empty)
             }
             ClientRequest::CompleteRequest(request) => self
                 .complete(request.params, context)
@@ -145,61 +207,45 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .await
                 .map(ServerResult::from),
             ClientRequest::SubscriptionsListenRequest(request) => {
-                if legacy_request {
-                    Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
-                } else {
-                    let requested = request.params.notifications;
-                    let Some(candidate) = self.accepted_subscription_filter(&requested) else {
-                        return Err(
-                            McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
-                        );
-                    };
-                    let server_info = self.get_info();
-                    let advertised = requested.supported_by(&server_info.capabilities);
-                    let handler_accepted = requested.intersection(&candidate);
-                    let accepted = handler_accepted.intersection(&advertised);
-                    if accepted != handler_accepted {
-                        tracing::debug!(
-                            requested_resource_count = requested
-                                .resource_subscriptions
-                                .as_ref()
-                                .map_or(0, Vec::len),
-                            accepted_resource_count =
-                                accepted.resource_subscriptions.as_ref().map_or(0, Vec::len),
-                            "subscription filter reduced to advertised server capabilities"
-                        );
-                    }
-                    let server_implementation = server_info.server_info;
-                    let subscription_id = context.id.clone();
-                    let subscription =
-                        SubscriptionContext::establish(context, requested, accepted).await?;
-                    // The 2026-07-28 schema defines a final result for graceful
-                    // server teardown; explicit stdio cancellation remains a notification.
-                    self.listen(subscription).await.map(|()| {
-                        let mut result = SubscriptionsListenResult::complete(subscription_id);
-                        result.meta.set_server_info(server_implementation);
-                        ServerResult::SubscriptionsListenResult(result)
-                    })
+                let requested = request.params.notifications;
+                let Some(candidate) = self.accepted_subscription_filter(&requested) else {
+                    return Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>());
+                };
+                let server_info = self.get_info();
+                let advertised = requested.supported_by(&server_info.capabilities);
+                let handler_accepted = requested.intersection(&candidate);
+                let accepted = handler_accepted.intersection(&advertised);
+                if accepted != handler_accepted {
+                    tracing::debug!(
+                        requested_resource_count = requested
+                            .resource_subscriptions
+                            .as_ref()
+                            .map_or(0, Vec::len),
+                        accepted_resource_count =
+                            accepted.resource_subscriptions.as_ref().map_or(0, Vec::len),
+                        "subscription filter reduced to advertised server capabilities"
+                    );
                 }
+                let server_implementation = server_info.server_info;
+                let subscription_id = context.id.clone();
+                let subscription =
+                    SubscriptionContext::establish(context, requested, accepted).await?;
+                // The 2026-07-28 schema defines a final result for graceful
+                // server teardown; explicit stdio cancellation remains a notification.
+                self.listen(subscription).await.map(|()| {
+                    let mut result = SubscriptionsListenResult::complete(subscription_id);
+                    result.meta.set_server_info(server_implementation);
+                    ServerResult::SubscriptionsListenResult(result)
+                })
             }
-            ClientRequest::SubscribeRequest(request) => {
-                if !legacy_request {
-                    Err(McpError::method_not_found::<SubscribeRequestMethod>())
-                } else {
-                    self.subscribe(request.params, context)
-                        .await
-                        .map(ServerResult::empty)
-                }
-            }
-            ClientRequest::UnsubscribeRequest(request) => {
-                if !legacy_request {
-                    Err(McpError::method_not_found::<UnsubscribeRequestMethod>())
-                } else {
-                    self.unsubscribe(request.params, context)
-                        .await
-                        .map(ServerResult::empty)
-                }
-            }
+            ClientRequest::SubscribeRequest(request) => self
+                .subscribe(request.params, context)
+                .await
+                .map(ServerResult::empty),
+            ClientRequest::UnsubscribeRequest(request) => self
+                .unsubscribe(request.params, context)
+                .await
+                .map(ServerResult::empty),
             ClientRequest::CallToolRequest(request) => {
                 let client_declared_tasks = context
                     .client_capabilities()
@@ -224,24 +270,21 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .on_custom_request(request, context)
                 .await
                 .map(ServerResult::CustomResult),
-            ClientRequest::GetTaskRequest(request) => {
-                validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
-                self.get_task(request.params, context)
-                    .await
-                    .map(ServerResult::GetTaskResult)
+            ClientRequest::InvalidParams(request) => {
+                Err(McpError::invalid_params(request.to_string(), None))
             }
-            ClientRequest::UpdateTaskRequest(request) => {
-                validate_tasks_capability::<UpdateTaskMethod, _>(self, &context)?;
-                self.update_task(request.params, context)
-                    .await
-                    .map(ServerResult::task_ack)
-            }
-            ClientRequest::CancelTaskRequest(request) => {
-                validate_tasks_capability::<CancelTaskMethod, _>(self, &context)?;
-                self.cancel_task(request.params, context)
-                    .await
-                    .map(ServerResult::task_ack)
-            }
+            ClientRequest::GetTaskRequest(request) => self
+                .get_task(request.params, context)
+                .await
+                .map(ServerResult::GetTaskResult),
+            ClientRequest::UpdateTaskRequest(request) => self
+                .update_task(request.params, context)
+                .await
+                .map(ServerResult::task_ack),
+            ClientRequest::CancelTaskRequest(request) => self
+                .cancel_task(request.params, context)
+                .await
+                .map(ServerResult::task_ack),
         };
         let result = result.and_then(|mut result| {
             if matches!(result, ServerResult::InputRequiredResult(_)) && !is_2026_07_28_or_later {

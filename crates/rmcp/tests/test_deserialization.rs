@@ -456,3 +456,83 @@ mod request_id {
         assert!(matches!(message, JsonRpcMessage::Notification(_)));
     }
 }
+
+/// `ClientRequest` is read by `method`: the variant whose method matches is the
+/// one deserialized, a known method whose params do not fit becomes a request
+/// the server answers with Invalid params, and only an unknown method is a
+/// custom request (#1347).
+mod client_request_by_method {
+    use rmcp::model::{
+        ClientJsonRpcMessage, ClientRequest, GetMeta, JsonRpcMessage, ProtocolVersion,
+    };
+    use serde_json::json;
+
+    fn parse(mut message: serde_json::Value) -> ClientRequest {
+        message["jsonrpc"] = json!("2.0");
+        message["id"] = json!(1);
+        match serde_json::from_value::<ClientJsonRpcMessage>(message).expect("a client message") {
+            JsonRpcMessage::Request(request) => request.request,
+            other => panic!("expected a request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fitting_params_give_the_typed_variant() {
+        let request =
+            parse(json!({"method": "tools/call", "params": {"name": "echo", "arguments": {}}}));
+        assert!(
+            matches!(request, ClientRequest::CallToolRequest(_)),
+            "{request:?}"
+        );
+        let request = parse(json!({"method": "tools/list"}));
+        assert!(
+            matches!(request, ClientRequest::ListToolsRequest(_)),
+            "{request:?}"
+        );
+        let request = parse(json!({"method": "ping"}));
+        assert!(
+            matches!(request, ClientRequest::PingRequest(_)),
+            "{request:?}"
+        );
+    }
+
+    #[test]
+    fn unfitting_params_are_not_a_custom_request_and_keep_meta() {
+        let request = parse(json!({
+            "method": "tools/call",
+            "params": {
+                "name": 7,
+                "arguments": {},
+                "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
+            }
+        }));
+        assert!(
+            matches!(request, ClientRequest::InvalidParams(_)),
+            "{request:?}"
+        );
+        assert_eq!(request.method(), "tools/call");
+        assert_eq!(
+            request.get_meta().protocol_version(),
+            Some(ProtocolVersion::V_2026_07_28)
+        );
+    }
+
+    #[test]
+    fn missing_params_on_a_method_that_needs_them_is_invalid_params() {
+        let request = parse(json!({"method": "prompts/get"}));
+        assert!(
+            matches!(request, ClientRequest::InvalidParams(_)),
+            "{request:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_method_is_a_custom_request_with_its_params() {
+        let request = parse(json!({"method": "fixture/unknown", "params": {"name": 7}}));
+        let ClientRequest::CustomRequest(custom) = request else {
+            panic!("expected a custom request, got {request:?}");
+        };
+        assert_eq!(custom.method, "fixture/unknown");
+        assert_eq!(custom.params, Some(json!({"name": 7})));
+    }
+}
