@@ -123,28 +123,21 @@ fn server_result_should_preserve_input_required_result_when_meta_present() {
 }
 
 #[test]
-fn server_result_should_accept_legacy_call_tool_result_when_only_meta_present() {
-    let legacy = json!({
+fn server_result_should_not_treat_meta_only_result_as_call_tool_result() {
+    // `_meta` may appear on any result, so on its own it says nothing about the
+    // result being a tool call.
+    let payload = json!({
         "_meta": {
             "example.com/replica": "r1",
         },
     });
 
     let result =
-        serde_json::from_value::<ServerResult>(legacy).expect("deserialize legacy CallToolResult");
+        serde_json::from_value::<ServerResult>(payload.clone()).expect("deserialize ServerResult");
 
     match result {
-        ServerResult::CallToolResult(result) => {
-            assert_eq!(
-                (
-                    result.result_type,
-                    result.content.is_empty(),
-                    result.meta.is_some()
-                ),
-                (None, true, true)
-            );
-        }
-        _ => panic!("expected CallToolResult"),
+        ServerResult::CustomResult(result) => assert_eq!(result.0, payload),
+        other => panic!("expected CustomResult, got {other:?}"),
     }
 }
 
