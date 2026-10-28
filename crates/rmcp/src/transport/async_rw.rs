@@ -66,7 +66,13 @@ pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     /// `receive` is polled inside a `select!` and can be cancelled mid-discard.
     discarding: bool,
     write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
+    pending_error_response: Option<PendingErrorResponse>,
     _role: PhantomData<fn() -> Role>,
+}
+
+enum PendingErrorResponse {
+    Queue,
+    Flush,
 }
 
 /// Outcome of a single bounded line read.
@@ -97,6 +103,7 @@ where
             max_line_length: DEFAULT_MAX_LINE_LENGTH,
             discarding: false,
             write,
+            pending_error_response: None,
             _role: PhantomData,
         }
     }
@@ -244,6 +251,24 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<Role>> {
         loop {
+            if let Some(state) = self.pending_error_response.as_mut() {
+                let mut write = self.write.lock().await;
+                let framed = write.as_mut()?;
+                if matches!(state, PendingErrorResponse::Queue) {
+                    let response = TxJsonRpcMessage::<Role>::error(
+                        ErrorData::invalid_request("Invalid request", None),
+                        None,
+                    );
+                    if framed.feed(response).await.is_err() {
+                        return None;
+                    }
+                    *state = PendingErrorResponse::Flush;
+                }
+                if framed.flush().await.is_err() {
+                    return None;
+                }
+                self.pending_error_response = None;
+            }
             // `receive` is polled inside a `select!` in the service loop, so an
             // in-progress line read is dropped whenever another branch (e.g. an
             // outgoing response) becomes ready. `read_line` appends into
@@ -302,15 +327,7 @@ where
                             // real protocol error rather than unparsable input, so surface it with
                             // an Invalid Request response instead of silently dropping it.
                             tracing::debug!("Protocol error on incoming message: {e}");
-                            let mut write = self.write.lock().await;
-                            let framed = write.as_mut()?;
-                            let response = TxJsonRpcMessage::<Role>::error(
-                                ErrorData::invalid_request("Invalid request", None),
-                                None,
-                            );
-                            if framed.send(response).await.is_err() {
-                                return None;
-                            }
+                            self.pending_error_response = Some(PendingErrorResponse::Queue);
                         }
                     }
                 }
@@ -903,6 +920,83 @@ mod test {
         );
     }
 
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn protocol_error_reply_survives_cancellation_waiting_for_writer() {
+        use tokio::io::AsyncReadExt;
+
+        use crate::RoleServer;
+
+        let input = b"{\"foo\":\"bar\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
+        let (writer, mut peer) = tokio::io::duplex(4096);
+        let mut transport = AsyncRwTransport::<RoleServer, _, _>::new(&input[..], writer);
+        let write = transport.write.clone();
+        let guard = write.lock().await;
+        {
+            let mut receive = Box::pin(transport.receive());
+            assert!(futures::poll!(&mut receive).is_pending());
+        }
+        drop(guard);
+
+        let next = transport
+            .receive()
+            .await
+            .expect("the next request survives");
+        assert_eq!(serde_json::to_value(next).unwrap()["id"], 1);
+        transport.close().await.unwrap();
+
+        let mut bytes = Vec::new();
+        peer.read_to_end(&mut bytes).await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes)
+            .expect("cancelling a writer-lock wait must not lose the protocol error reply");
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn protocol_error_reply_survives_cancellation_during_flush() {
+        use tokio::io::AsyncReadExt;
+
+        use crate::RoleServer;
+
+        let input = b"{\"foo\":\"bar\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
+        // A single byte of capacity suspends flushing after only part of the reply.
+        let (writer, mut peer) = tokio::io::duplex(1);
+        let mut transport = AsyncRwTransport::<RoleServer, _, _>::new(&input[..], writer);
+        {
+            let mut receive = Box::pin(transport.receive());
+            assert!(futures::poll!(&mut receive).is_pending());
+        }
+
+        let output = tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            peer.read_to_end(&mut bytes).await.unwrap();
+            bytes
+        });
+        let next = transport
+            .receive()
+            .await
+            .expect("the next request survives");
+        assert_eq!(serde_json::to_value(next).unwrap()["id"], 1);
+        transport.close().await.unwrap();
+
+        let bytes = output.await.unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&bytes)
+            .expect("cancelling a partial flush must preserve one complete protocol error reply");
+        assert_eq!(
+            reply,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32600, "message": "Invalid request"},
+            }),
+        );
+    }
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn receive_rejects_request_with_unusable_id() {
