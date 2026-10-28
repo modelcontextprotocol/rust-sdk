@@ -1870,6 +1870,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [McpMux](https://github.com/mcpmux/mcp-mux) - Desktop app to configure MCP servers once at McpMux, connect every AI client (Cursor, Claude Desktop, VS Code, Windsurf) through a single encrypted local gateway with Spaces for project organization, FeatureSets to switch toolsets per client, and a built-in server registry
 - [systemprompt-template](https://github.com/systempromptio/systemprompt-template) - Single-binary Rust runtime providing MCP governance — authentication, authorisation, rate-limiting, audit trails, and cost tracking for AI agents. Self-hosted, air-gap capable, 3,300+ req/s with sub-5ms governance overhead
 - [jilebi-mcp](https://github.com/datron/jilebi) - an extensible MCP server through plugins in Javascript with a secure permissions model
+- [Voltip](https://github.com/sunerpy/voltip) - Push-to-talk dictation app whose local MCP server (Streamable HTTP, token-protected) lets coding agents read its dictionary, rules and correction history, and add dictionary entries the user approves
 
 ## Development
 
