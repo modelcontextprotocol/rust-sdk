@@ -278,9 +278,12 @@ mod tests {
         sometimes: Option<i32>,
     }
 
-    #[derive(serde::Deserialize, JsonSchema)]
-    struct InputWithOption {
+    #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
+    struct BothWays {
+        value: i32,
         maybe: Option<i32>,
+        #[serde(default)]
+        tags: Vec<String>,
     }
 
     /// An output schema describes what the type serialises: an `Option` field serde always
@@ -289,19 +292,65 @@ mod tests {
     fn schema_for_output_describes_the_serialized_form() {
         let schema = schema_for_output::<OutputWithOption>();
         assert_eq!(
-            schema.get("required"),
-            Some(&serde_json::json!(["always"])),
+            serde_json::json!({
+                "properties": schema.get("properties"),
+                "required": schema.get("required"),
+            }),
+            serde_json::json!({
+                "properties": {
+                    "always": { "type": ["integer", "null"], "format": "int32" },
+                    "sometimes": { "type": ["integer", "null"], "format": "int32" },
+                },
+                "required": ["always"],
+            }),
             "{schema:?}"
         );
     }
 
-    /// An input schema keeps describing what the type accepts: an `Option` field may be absent.
+    /// An input schema keeps describing what the type accepts: an `Option` field and a
+    /// `#[serde(default)]` field may be absent.
     #[test]
     fn schema_for_input_keeps_the_deserialize_form() {
-        let schema = schema_for_type::<InputWithOption>();
-        assert_eq!(schema.get("required"), None, "{schema:?}");
-        let parsed: InputWithOption = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(parsed.maybe, None);
+        let schema = schema_for_input::<BothWays>().unwrap();
+        assert_eq!(
+            schema.get("required"),
+            Some(&serde_json::json!(["value"])),
+            "{schema:?}"
+        );
+    }
+
+    /// One type used both ways gets a schema per contract. The two are cached separately, so
+    /// asking for the input form first must not hand back that form for the output.
+    #[test]
+    fn schema_for_type_and_output_of_one_type_differ() {
+        let input = schema_for_type::<BothWays>();
+        let output = schema_for_output::<BothWays>();
+        assert_eq!(
+            input.get("required"),
+            Some(&serde_json::json!(["value"])),
+            "{input:?}"
+        );
+        assert_eq!(
+            output.get("required"),
+            Some(&serde_json::json!(["value", "maybe", "tags"])),
+            "{output:?}"
+        );
+    }
+
+    /// A `#[serde(default)]` field may be absent from an input, but serde always writes it, so
+    /// the output schema requires it.
+    #[test]
+    fn schema_for_output_requires_a_serde_default_field() {
+        let required = |schema: &JsonObject| {
+            schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .is_some_and(|r| r.contains(&serde_json::json!("tags")))
+        };
+        let output = schema_for_output::<BothWays>();
+        assert!(required(&output), "{output:?}");
+        let input = schema_for_input::<BothWays>().unwrap();
+        assert!(!required(&input), "{input:?}");
     }
 
     #[derive(serde::Serialize, serde::Deserialize, JsonSchema)]
