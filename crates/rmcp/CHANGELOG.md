@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `json_response` now also applies to session mode: a request-wise stream whose
+  first message is the terminal response is answered as `application/json`, while
+  any intermediate message keeps the stream alive and falls back to SSE.
+
 ## [3.8.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.7.0...rmcp-v3.8.0) - 2026-10-23
 
 ### Added

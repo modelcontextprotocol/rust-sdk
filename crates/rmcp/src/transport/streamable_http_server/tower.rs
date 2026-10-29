@@ -88,8 +88,8 @@ pub struct StreamableHttpServerConfig {
     /// negotiating that version are always served statelessly regardless of
     /// this setting.
     pub legacy_session_mode: bool,
-    /// When true and `legacy_session_mode` is false, the server prefers
-    /// `Content-Type: application/json` for simple request-response tools.
+    /// When true, the server prefers `Content-Type: application/json` for simple
+    /// request-response tools, in session mode and in stateless mode alike.
     /// If the handler emits a notification or request before the final response,
     /// the server falls back to `text/event-stream` so no message is lost.
     pub json_response: bool,
@@ -2081,11 +2081,45 @@ where
                         // Priming for request-wise streams is handled by the
                         // session layer (SessionManager::create_stream) which
                         // has access to the http_request_id for correct event IDs.
-                        let stream = self
-                            .session_manager
-                            .create_stream(&session_id, message)
-                            .await
-                            .map_err(internal_error_response("get session"))?;
+                        let mut stream = Box::pin(
+                            self.session_manager
+                                .create_stream(&session_id, message)
+                                .await
+                                .map_err(internal_error_response("get session"))?,
+                        );
+                        // `json_response` asks for JSON bodies, and a client holding a
+                        // session can need them just as much as a stateless one: it
+                        // cannot read an event stream at all. Peek the first message of
+                        // the request-wise stream and answer it as JSON when it
+                        // terminates the request. Anything else — a priming event, a
+                        // notification, a server request — keeps the stream alive and is
+                        // replayed in front of the rest, so no message is lost.
+                        if self.config.json_response {
+                            if let Some(first) = stream.next().await {
+                                match first.message.as_deref() {
+                                    Some(
+                                        ServerJsonRpcMessage::Response(_)
+                                        | ServerJsonRpcMessage::Error(_),
+                                    ) => {
+                                        return jsonrpc_message_response(
+                                            first
+                                                .message
+                                                .clone()
+                                                .expect("a terminal message is present"),
+                                            http::StatusCode::OK,
+                                        );
+                                    }
+                                    _ => {
+                                        let rest = futures::stream::iter(vec![first]).chain(stream);
+                                        return Ok(sse_stream_response(
+                                            rest,
+                                            self.config.sse_keep_alive,
+                                            self.config.cancellation_token.child_token(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         Ok(sse_stream_response(
                             stream,
                             self.config.sse_keep_alive,
