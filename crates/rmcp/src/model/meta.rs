@@ -191,6 +191,9 @@ variant_extension! {
         GetTaskRequest
         UpdateTaskRequest
         CancelTaskRequest
+        ListSkillsRequest
+        GetSkillRequest
+        ReadResourceDirectoryRequest
     }
 }
 

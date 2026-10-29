@@ -79,6 +79,9 @@ jobs:
             tasks-status-notifications
             tasks-required-task-error
             tasks-mrtr-composition
+            sep-2640-skills-enumeration
+            sep-2640-skills-manifest
+            sep-2640-skills-directory
           )
           for scenario in "${scenarios[@]}"; do
             npx -y "@modelcontextprotocol/conformance@${CONFORMANCE_VERSION}" server \

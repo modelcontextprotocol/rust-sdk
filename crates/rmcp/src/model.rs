@@ -18,6 +18,7 @@ mod prompt;
 mod request_state;
 mod resource;
 mod serde_impl;
+mod skill;
 mod task;
 mod tool;
 pub use annotated::*;
@@ -33,6 +34,7 @@ pub use request_state::*;
 pub use resource::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+pub use skill::*;
 pub use task::*;
 pub use tool::*;
 
@@ -4741,6 +4743,111 @@ pub type TaskStatusNotification =
     Notification<TaskStatusNotificationMethod, TaskStatusNotificationParams>;
 
 // =============================================================================
+// SKILLS (SEP-2640 Skills extension: `io.modelcontextprotocol/skills`)
+// =============================================================================
+
+const_string!(ListSkillsRequestMethod = "skills/list");
+/// Request to list the skills a server serves.
+pub type ListSkillsRequest = RequestOptionalParam<ListSkillsRequestMethod, PaginatedRequestParams>;
+
+paginated_result!(ListSkillsResult {
+    skills: Vec<Skill>
+});
+
+const_string!(GetSkillRequestMethod = "skills/get");
+/// Parameters for fetching one skill by the URI of its `SKILL.md`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct GetSkillRequestParams {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<RequestMetaObject>,
+    /// URI of the skill's `SKILL.md`.
+    pub uri: String,
+}
+
+impl GetSkillRequestParams {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            uri: uri.into(),
+        }
+    }
+
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl RequestParamsMeta for GetSkillRequestParams {
+    fn meta(&self) -> Option<&RequestMetaObject> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
+        &mut self.meta
+    }
+}
+
+/// Request to fetch one skill.
+pub type GetSkillRequest = Request<GetSkillRequestMethod, GetSkillRequestParams>;
+
+const_string!(ReadResourceDirectoryRequestMethod = "resources/directory/read");
+/// Parameters for listing the direct children of a directory resource.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ReadResourceDirectoryRequestParams {
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<RequestMetaObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Cursor>,
+    /// URI of the directory resource.
+    pub uri: String,
+}
+
+impl ReadResourceDirectoryRequestParams {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            meta: None,
+            cursor: None,
+            uri: uri.into(),
+        }
+    }
+
+    pub fn with_cursor(mut self, cursor: impl Into<Cursor>) -> Self {
+        self.cursor = Some(cursor.into());
+        self
+    }
+
+    pub fn with_meta(mut self, meta: RequestMetaObject) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
+impl RequestParamsMeta for ReadResourceDirectoryRequestParams {
+    fn meta(&self) -> Option<&RequestMetaObject> {
+        self.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> &mut Option<RequestMetaObject> {
+        &mut self.meta
+    }
+}
+
+/// Request to list the direct children of a directory resource.
+pub type ReadResourceDirectoryRequest =
+    Request<ReadResourceDirectoryRequestMethod, ReadResourceDirectoryRequestParams>;
+
+/// Result of `resources/directory/read`.
+///
+/// Same shape as `resources/list`, so the untagged [`ServerResult`] carries
+/// it as [`ServerResult::ListResourcesResult`].
+pub type ReadResourceDirectoryResult = ListResourcesResult;
+
+// =============================================================================
 // MESSAGE TYPE UNIONS
 // =============================================================================
 
@@ -4814,6 +4921,9 @@ ts_union!(
     | GetTaskRequest
     | UpdateTaskRequest
     | CancelTaskRequest
+    | ListSkillsRequest
+    | GetSkillRequest
+    | ReadResourceDirectoryRequest
     | CustomRequest;
 );
 
@@ -4838,6 +4948,9 @@ impl ClientRequest {
             ClientRequest::GetTaskRequest(r) => r.method.as_str(),
             ClientRequest::UpdateTaskRequest(r) => r.method.as_str(),
             ClientRequest::CancelTaskRequest(r) => r.method.as_str(),
+            ClientRequest::ListSkillsRequest(r) => r.method.as_str(),
+            ClientRequest::GetSkillRequest(r) => r.method.as_str(),
+            ClientRequest::ReadResourceDirectoryRequest(r) => r.method.as_str(),
             ClientRequest::CustomRequest(r) => r.method.as_str(),
         }
     }
@@ -4904,6 +5017,8 @@ ts_union!(
     | ReadResourceResult
     | SubscriptionsListenResult
     | ListToolsResult
+    | ListSkillsResult
+    | GetSkillResult
     | ElicitResult
     | CreateTaskResult
     | GetTaskResult
@@ -4960,6 +5075,8 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => &mut r.result_type,
             ServerResult::ListToolsResult(r) => &mut r.result_type,
             ServerResult::CallToolResult(r) => &mut r.result_type,
+            ServerResult::ListSkillsResult(r) => &mut r.result_type,
+            ServerResult::GetSkillResult(r) => &mut r.result_type,
             _ => return,
         };
         result_type.take_if(|result_type| result_type.is_complete());
@@ -5007,6 +5124,10 @@ impl ServerResult {
             ServerResult::ReadResourceResult(r) => {
                 (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
             }
+            ServerResult::ListSkillsResult(r) => {
+                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
+            }
+            ServerResult::GetSkillResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
             _ => return,
         };
         // Only complete results are cacheable; the spec treats an absent
