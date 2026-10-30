@@ -391,11 +391,12 @@ pub(crate) fn validate_request_headers(
     Ok(())
 }
 
-/// The sole value for `name` as `&str`, if present and valid UTF-8.
+/// The sole value for `name` as `&str`, if present.
 ///
 /// Errors when `name` appears more than once: these headers are singletons, and
 /// letting one through would let an intermediary that resolves duplicates
-/// differently route on a value this request never dispatches.
+/// differently route on a value this request never dispatches. Also errors when
+/// the value contains characters not allowed by the Value Encoding rules.
 #[cfg(feature = "server-side-http")]
 fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Result<Option<&'a str>, String> {
     let mut values = headers.get_all(name).iter();
@@ -405,7 +406,10 @@ fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Result<Option<&'a
     if values.next().is_some() {
         return Err(format!("duplicate {name} header"));
     }
-    Ok(value.to_str().ok())
+    value
+        .to_str()
+        .map(Some)
+        .map_err(|_| format!("{name} header contains invalid characters"))
 }
 
 #[cfg(all(test, feature = "client-side-sse", feature = "server-side-http"))]
@@ -434,6 +438,22 @@ mod tests {
             );
         }
         map
+    }
+
+    #[test]
+    fn rejects_param_header_with_invalid_characters() {
+        let schema =
+            schema_with(json!({ "region": { "type": "string", "x-mcp-header": "Region" } }));
+        let mut headers = header_map(&[("Mcp-Method", "tools/call"), ("Mcp-Name", "t")]);
+        headers.append(
+            HeaderName::from_bytes(b"Mcp-Param-Region").unwrap(),
+            HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        let request = json!({
+            "method": "tools/call",
+            "params": { "name": "t", "arguments": {} }
+        });
+        assert!(validate_request_headers(&headers, &request, Some(&schema)).is_err());
     }
 
     fn assert_wrapped(value: &str) {
