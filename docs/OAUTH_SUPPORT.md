@@ -272,8 +272,9 @@ let client = match client_service.serve(transport).await {
 ```
 
 The predicate covers both missing or expired local OAuth authorization and an
-HTTP 401 challenge from the MCP server. Other failures, including transient
-token-refresh errors and insufficient scope, return `false`. The original error
+HTTP 401 from the MCP server, with or without a `WWW-Authenticate` challenge.
+Other failures, including transient token-refresh errors and insufficient
+scope, return `false`. The original error
 is preserved for logging or more detailed handling; the SDK does not start an
 authorization flow automatically.
 

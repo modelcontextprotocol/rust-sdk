@@ -78,18 +78,24 @@ async fn get_stream_maps_403_challenge_to_insufficient_scope() {
     }
 }
 
-/// Without a `WWW-Authenticate` header there is no challenge to act on, so a 401
-/// must keep falling through to the ordinary error path rather than being
-/// reported as an auth challenge the caller can retry.
+/// Without a `WWW-Authenticate` header there is no challenge to act on, so a
+/// 401 or 403 must not be reported as an auth challenge the caller can retry.
+/// It keeps its status as typed, body-free metadata instead of a backend
+/// error, the same shape POST returns.
+#[rstest::rstest]
+#[case(401)]
+#[case(403)]
 #[tokio::test]
-async fn get_stream_401_without_challenge_is_not_auth_required() {
-    let result = get_stream_against(401, None).await;
+async fn get_stream_auth_failure_without_challenge_keeps_status(#[case] status: u16) {
+    let result = get_stream_against(status, None).await;
 
-    assert!(
-        !matches!(result, Err(StreamableHttpError::AuthRequired(_))),
-        "401 with no challenge header must not be classified as AuthRequired"
-    );
-    assert!(result.is_err(), "401 must still be an error");
+    match result {
+        Err(StreamableHttpError::HttpStatus(error)) => {
+            assert_eq!(error.status, status);
+            assert_eq!(error.retry_after, None);
+        }
+        other => panic!("expected HttpStatus, got: {other:?}"),
+    }
 }
 
 /// 405 keeps its dedicated meaning — the server does not support SSE on GET —

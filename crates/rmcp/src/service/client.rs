@@ -65,6 +65,7 @@ pub enum ClientInitializeError {
 
     #[error("Send message error {error}, when {context}")]
     TransportError {
+        #[source]
         error: DynamicTransportError,
         context: Cow<'static, str>,
     },
@@ -136,8 +137,10 @@ impl ClientInitializeError {
 
     /// Returns whether client initialization failed because authorization is required.
     ///
-    /// This covers both missing or expired local OAuth authorization and an HTTP
-    /// authorization challenge from the MCP server.
+    /// This covers missing or expired local OAuth authorization and an HTTP 401
+    /// from the MCP server, with or without a `WWW-Authenticate` challenge.
+    /// Without one, [`auth_challenge`](Self::auth_challenge) is `None` and
+    /// authorization server discovery falls back to the well-known URIs.
     pub fn is_authorization_required(&self) -> bool {
         match self {
             Self::TransportError { error, .. } => error.is_authorization_required(),
