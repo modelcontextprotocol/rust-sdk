@@ -7,7 +7,7 @@ use std::{fs, path::Path, sync::Arc};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use rmcp::{
     ClientHandler, ErrorData, RoleClient, RoleServer, ServerHandler,
-    handler::server::skill_catalog::{SKILL_FILE_LIMIT, SkillCatalog},
+    handler::server::skill_catalog::{SKILL_BYTE_LIMIT, SKILL_FILE_LIMIT, SkillCatalog},
     model::{
         ClientConfig, DIRECTORY_MIME_TYPE, ErrorCode, GetSkillRequestParams, GetSkillResult,
         InitializeResult, ListResourcesResult, ListSkillsResult, PaginatedRequestParams,
@@ -176,6 +176,18 @@ mod loading {
                 "page\n",
             );
         }
+
+        let skills = load(&dir).skills();
+
+        assert!(!uris(&skills).contains(&PDF_SKILL_URI));
+    }
+
+    #[test]
+    fn should_skip_a_skill_over_the_byte_limit() {
+        let dir = skills_tree();
+        fs::File::create(dir.path().join("pdf-processing/large.bin"))
+            .and_then(|file| file.set_len(SKILL_BYTE_LIMIT + 1))
+            .expect("sparse file");
 
         let skills = load(&dir).skills();
 
