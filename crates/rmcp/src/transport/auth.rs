@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 use url::Host;
 
-use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
+use crate::transport::common::http_header::{HEADER_MCP_PROTOCOL_VERSION, bearer_challenges};
 
 #[cfg(feature = "auth-enterprise-managed")]
 pub mod enterprise;
@@ -3259,102 +3259,37 @@ impl AuthorizationManager {
         )))
     }
 
-    /// extract parameters from WWW-Authenticate header (resource_metadata and scope)
+    /// Parse the `Bearer` challenge parameters of a `WWW-Authenticate` value.
+    ///
+    /// The value may hold several challenges (RFC 9110 §11.6.1), including
+    /// repeated header fields joined with `", "`. Parameters are read from
+    /// `Bearer` challenges only, never from another scheme's challenge or from
+    /// text inside a quoted value. Each parameter takes its first occurrence
+    /// across the `Bearer` challenges, in field order, which is also what the
+    /// TypeScript and Python SDKs do; `resource_metadata` takes the first URL
+    /// the metadata host policy accepts.
     fn extract_www_authenticate_params(
         header: &str,
         base_url: &Url,
         allow_private: bool,
     ) -> WWWAuthenticateParams {
-        let mut params = WWWAuthenticateParams::default();
-        let header_lowercase = header.to_ascii_lowercase();
-
-        // extract resource_metadata
-        let mut search_offset = 0;
-        let resource_key = "resource_metadata=";
-        while let Some(pos) = header_lowercase[search_offset..].find(resource_key) {
-            let global_pos = search_offset + pos + resource_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, consumed)) = Self::parse_next_header_value(value_slice) {
-                if let Some(url) =
-                    Self::resolve_resource_metadata_url(&value, base_url, allow_private)
-                {
-                    params.resource_metadata_url = Some(url);
-                    break;
-                }
-                search_offset = global_pos + consumed;
-                continue;
-            } else {
-                break;
-            }
-        }
-
-        // extract scope
-        let scope_key = "scope=";
-        if let Some(pos) = header_lowercase.find(scope_key) {
-            let global_pos = pos + scope_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.scope = Some(value);
-            }
-        }
-
-        // extract error
-        let error_key = "error=";
-        if let Some(pos) = header_lowercase.find(error_key) {
-            let global_pos = pos + error_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.error = Some(value);
-            }
-        }
-
-        // extract error_description
-        let desc_key = "error_description=";
-        if let Some(pos) = header_lowercase.find(desc_key) {
-            let global_pos = pos + desc_key.len();
-            let value_slice = &header[global_pos..];
-            if let Some((value, _consumed)) = Self::parse_next_header_value(value_slice) {
-                params.error_description = Some(value);
-            }
-        }
-
-        params
-    }
-
-    /// Parses an authentication parameter value from a `WWW-Authenticate` header fragment.
-    /// The header fragment should start with the header value after the `=` character and then
-    /// reads until the value ends.
-    ///
-    /// Returns the extracted value together with the number of bytes consumed from the provided
-    /// fragment. Quoted values support escaped characters (e.g. `\"`). The parser skips leading
-    /// whitespace before reading either a quoted or token value. If no well-formed value is found,
-    /// `None` is returned.
-    fn parse_next_header_value(header_fragment: &str) -> Option<(String, usize)> {
-        let trimmed = header_fragment.trim_start();
-        let leading_ws = header_fragment.len() - trimmed.len();
-
-        if let Some(stripped) = trimmed.strip_prefix('"') {
-            let mut escaped = false;
-            let mut result = String::new();
-            #[allow(clippy::manual_strip)]
-            for (idx, ch) in stripped.char_indices() {
-                if escaped {
-                    result.push(ch);
-                    escaped = false;
-                    continue;
-                }
-                match ch {
-                    '\\' => escaped = true,
-                    '"' => return Some((result, leading_ws + idx + 2)),
-                    _ => result.push(ch),
-                }
-            }
-            None
-        } else {
-            let end = trimmed
-                .find(|c: char| c == ',' || c == ';' || c.is_whitespace())
-                .unwrap_or(trimmed.len());
-            Some((trimmed[..end].to_string(), leading_ws + end))
+        let challenges = bearer_challenges(header);
+        let first = |name: &str| {
+            challenges
+                .iter()
+                .find_map(|challenge| challenge.param(name))
+                .map(str::to_owned)
+        };
+        WWWAuthenticateParams {
+            resource_metadata_url: challenges
+                .iter()
+                .filter_map(|challenge| challenge.param("resource_metadata"))
+                .find_map(|value| {
+                    Self::resolve_resource_metadata_url(value, base_url, allow_private)
+                }),
+            scope: first("scope"),
+            error: first("error"),
+            error_description: first("error_description"),
         }
     }
 
@@ -7238,46 +7173,106 @@ mod tests {
         );
     }
 
-    // -- header value parsing --
+    // -- www-authenticate param extraction --
 
     #[rstest]
-    #[case::quoted_string(r#""example", realm="foo""#, "example", r#""example""#)]
-    #[case::escaped_quotes_and_whitespace(
-        r#"   "a\"b\\c" ,next=value"#,
-        r#"a"b\c"#,
-        r#"   "a\"b\\c""#
+    #[case::other_scheme_first(
+        r#"Basic realm="proxy", scope="basic", Bearer resource_metadata="/prm", scope="read""#,
+        Some("read"),
+        None
     )]
-    #[case::token_values("  token,next", "token", "  token")]
-    #[case::semicolon_separated_tokens(
-        r#"  https://example.com/meta; error="invalid_token""#,
-        "https://example.com/meta",
-        "  https://example.com/meta"
+    #[case::repeated_fields_joined(
+        r#"Basic realm="proxy", Bearer error="invalid_token", resource_metadata="/prm""#,
+        None,
+        Some("invalid_token")
     )]
-    #[case::semicolon_after_quoted_value(
-        r#"  "https://example.com/meta"; error="invalid_token""#,
-        "https://example.com/meta",
-        r#"  "https://example.com/meta""#
+    #[case::quoted_text_is_not_a_parameter(
+        r#"Basic realm="scope=wrong, resource_metadata=/wrong", Bearer resource_metadata="/prm", error_description="scope=wrong, error=wrong", scope="read""#,
+        Some("read"),
+        None
     )]
-    fn parse_auth_param_value_handles_supported_values(
-        #[case] fragment: &str,
-        #[case] expected_value: &str,
-        #[case] expected_consumed_prefix: &str,
+    #[case::parameters_merge_across_bearer_challenges(
+        r#"Bearer scope="other", Bearer resource_metadata="/prm""#,
+        Some("other"),
+        None
+    )]
+    #[case::case_insensitive_names(
+        r#"BEARER Resource_Metadata="/prm", SCOPE="read""#,
+        Some("read"),
+        None
+    )]
+    #[case::semicolon_separator_and_missing_comma(
+        r#"Bearer resource_metadata="/prm"; error="invalid_token" scope="read""#,
+        Some("read"),
+        Some("invalid_token")
+    )]
+    fn extract_www_authenticate_params_reads_bearer_challenges(
+        #[case] header: &str,
+        #[case] scope: Option<&str>,
+        #[case] error: Option<&str>,
     ) {
-        let (value, consumed) = AuthorizationManager::parse_next_header_value(fragment).unwrap();
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
 
         assert_eq!(
-            (value.as_str(), &fragment[..consumed]),
-            (expected_value, expected_consumed_prefix)
+            params.resource_metadata_url.as_ref().map(Url::as_str),
+            Some("https://example.com/prm")
         );
+        assert_eq!(params.scope.as_deref(), scope);
+        assert_eq!(params.error.as_deref(), error);
+    }
+
+    #[rstest]
+    #[case::error_after_bare_realm(r#"Bearer realm="other", Bearer error="insufficient_scope""#)]
+    #[case::error_before_bare_realm(r#"Bearer error="insufficient_scope", Bearer realm="other""#)]
+    #[case::error_after_other_scheme(r#"Basic realm="other", Bearer error="insufficient_scope""#)]
+    fn extract_www_authenticate_params_finds_error_in_any_bearer_challenge(#[case] header: &str) {
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
+
+        assert!(params.is_insufficient_scope());
+        assert!(params.scope.is_none());
+        assert!(params.resource_metadata_url.is_none());
     }
 
     #[test]
-    fn parse_auth_param_value_returns_none_for_unterminated_quotes() {
-        let fragment = r#""unterminated,value"#;
-        assert!(AuthorizationManager::parse_next_header_value(fragment).is_none());
+    fn extract_www_authenticate_params_ignores_other_schemes() {
+        let header = r#"Basic realm="proxy", error="insufficient_scope", scope="basic", resource_metadata="/prm""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
+
+        assert!(params.resource_metadata_url.is_none());
+        assert!(params.scope.is_none());
+        assert!(params.error.is_none());
     }
 
-    // -- www-authenticate param extraction --
+    #[test]
+    fn extract_www_authenticate_params_unescapes_quoted_values() {
+        let header = r#"Bearer error_description="needs \"files:write\"", scope="a\\b""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
+
+        assert_eq!(
+            params.error_description.as_deref(),
+            Some(r#"needs "files:write""#)
+        );
+        assert_eq!(params.scope.as_deref(), Some(r"a\b"));
+    }
+
+    #[test]
+    fn extract_www_authenticate_params_skips_rejected_metadata_url_and_tries_the_next() {
+        // The first URL fails the metadata host policy, so the next Bearer
+        // challenge's URL is used; every other parameter keeps its first value.
+        let header = r#"Bearer resource_metadata="https://10.0.0.1/prm", scope="first", Bearer resource_metadata="/prm", scope="second""#;
+        let base = Url::parse("https://example.com/api").unwrap();
+        let params = AuthorizationManager::extract_www_authenticate_params(header, &base, false);
+
+        assert_eq!(
+            params.resource_metadata_url.as_ref().map(Url::as_str),
+            Some("https://example.com/prm")
+        );
+        assert_eq!(params.scope.as_deref(), Some("first"));
+    }
 
     #[test]
     fn parses_resource_metadata_parameter() {
