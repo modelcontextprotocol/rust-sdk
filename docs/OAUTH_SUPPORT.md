@@ -308,8 +308,10 @@ The exchange profile has these requirements and limits:
   `JwtAssertion`. The SDK does not select methods from metadata or fall back to a
   different method after a failure.
 - Input is an enterprise IdP refresh token. The ID-JAG's `resource` claim is
-  optional; when present, it must be exactly the requested MCP resource. Scope may
-  be omitted or narrowed.
+  optional; when present, it must be exactly the requested MCP resource. Without
+  it, the resource authorization server picks the access token's audience, and the
+  SDK only rejects a mismatched `resource` echoed in the exchange response. Scope
+  may be omitted or narrowed.
 - RAR (`authorization_details`) and DPoP are not supported. Nonempty authorization
   details are rejected at both exchange stages.
 - Redemption consumes the SDK's ID-JAG handle and does not retry automatically.

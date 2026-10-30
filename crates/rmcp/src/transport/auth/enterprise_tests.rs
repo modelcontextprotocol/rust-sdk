@@ -379,7 +379,8 @@ async fn resource_claim_may_be_omitted_but_must_match_when_present() {
 async fn an_assertion_without_a_resource_claim_is_redeemed_for_the_requested_resource() {
     let mut claims = claims();
     claims.as_object_mut().unwrap().remove("resource");
-    let response = jag(&claims);
+    let mut response = jag(&claims);
+    response.as_object_mut().unwrap().remove("resource");
     let idp = MockHttp::new(200, response.clone());
     let resource_as = MockHttp::new(200, bearer());
     let refresh = RefreshToken::new("refresh-token".into());
