@@ -30,7 +30,11 @@ use crate::{
     },
     service::InboundStreamOrigin,
     transport::{
-        common::{client_side_sse::SseAutoReconnectStream, mcp_headers},
+        common::{
+            client_side_sse::SseAutoReconnectStream,
+            http_header::{extract_scope_from_header, www_authenticate_header},
+            mcp_headers,
+        },
         worker::{
             RequestCancellationRegistration, Worker, WorkerQuitReason, WorkerSendRequest,
             WorkerTransport,
@@ -404,6 +408,37 @@ impl StreamableHttpPostResponse {
             )),
         }
     }
+}
+
+/// Map a 401 or 403 that carries `WWW-Authenticate` challenges to the error
+/// the auth layer reacts to, or `Ok(None)` when there is no challenge.
+///
+/// Every challenge field is kept, in order, as one comma-separated list, which
+/// RFC 9110 §5.3 defines as equivalent to the separate fields, so a `Bearer`
+/// challenge is not lost behind another scheme's field. A field value outside
+/// visible ASCII cannot be carried in the string-based challenge API and is
+/// reported as an unexpected response, as it always has been.
+pub(super) fn auth_challenge_error<E: std::error::Error + Send + Sync + 'static>(
+    status: StatusCode,
+    headers: &http::HeaderMap,
+) -> Result<Option<StreamableHttpError<E>>, StreamableHttpError<E>> {
+    if !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return Ok(None);
+    }
+    let Some(header) = www_authenticate_header(headers).map_err(|_| {
+        StreamableHttpError::UnexpectedServerResponse(Cow::from(
+            "invalid www-authenticate header value",
+        ))
+    })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(if status == StatusCode::UNAUTHORIZED {
+        StreamableHttpError::AuthRequired(AuthRequiredError::new(header))
+    } else {
+        let required_scope = extract_scope_from_header(&header);
+        StreamableHttpError::InsufficientScope(InsufficientScopeError::new(header, required_scope))
+    }))
 }
 
 /// Convert a sessionless discovery rejection into a response the lifecycle
