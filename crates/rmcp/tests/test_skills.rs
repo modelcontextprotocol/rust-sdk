@@ -57,6 +57,7 @@ struct SkillServer {
     declare_skills: bool,
     declare_directory_read: bool,
     omit_resources: bool,
+    include_outside_resource: bool,
     answer_get_with_other_uri: bool,
     directory_calls: Arc<AtomicUsize>,
 }
@@ -75,6 +76,20 @@ impl SkillServer {
             declare_skills: true,
             ..Default::default()
         }
+    }
+
+    fn pdf_skill(&self) -> Skill {
+        let mut skill = pdf_skill();
+        if self.include_outside_resource {
+            let SkillResources::Files(files) = &mut skill.resources else {
+                unreachable!()
+            };
+            files.push(SkillResource::from_bytes(
+                "skill://other-skill/private.md",
+                b"outside the skill directory",
+            ));
+        }
+        skill
     }
 }
 
@@ -99,7 +114,7 @@ impl ServerHandler for SkillServer {
     ) -> Result<ListSkillsResult, ErrorData> {
         let cursor = request.and_then(|params| params.cursor);
         let mut result = match cursor.as_deref() {
-            None => ListSkillsResult::with_all_items(vec![pdf_skill()]),
+            None => ListSkillsResult::with_all_items(vec![self.pdf_skill()]),
             Some("page-2") => ListSkillsResult::with_all_items(vec![dynamic_skill()]),
             Some(other) => {
                 return Err(ErrorData::invalid_params(
@@ -123,7 +138,7 @@ impl ServerHandler for SkillServer {
             return Ok(GetSkillResult::new(dynamic_skill()));
         }
         match request.uri.as_str() {
-            PDF_SKILL_URI => Ok(GetSkillResult::new(pdf_skill())),
+            PDF_SKILL_URI => Ok(GetSkillResult::new(self.pdf_skill())),
             DYNAMIC_SKILL_URI => Ok(GetSkillResult::new(dynamic_skill())),
             uri => Err(ErrorData::invalid_params(
                 format!("no skill at {uri}"),
@@ -343,6 +358,28 @@ async fn skills_methods_should_be_method_not_found_when_the_extension_is_undecla
     disconnect(client, server_task).await;
 
     assert_eq!(error_code(error), ErrorCode::METHOD_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn skills_methods_should_reject_handler_manifests_with_outside_resources() {
+    let server = SkillServer {
+        include_outside_resource: true,
+        ..SkillServer::with_directory_read()
+    };
+    let (client, server_task) = connect(server, ProtocolVersion::V_2026_07_28);
+
+    let list_error = client
+        .list_skills(None)
+        .await
+        .expect_err("invalid manifest");
+    let get_error = client
+        .get_skill(GetSkillRequestParams::new(PDF_SKILL_URI))
+        .await
+        .expect_err("invalid manifest");
+    disconnect(client, server_task).await;
+
+    assert_eq!(error_code(list_error), ErrorCode::INTERNAL_ERROR);
+    assert_eq!(error_code(get_error), ErrorCode::INTERNAL_ERROR);
 }
 
 #[tokio::test]
