@@ -2,7 +2,8 @@
 #![expect(deprecated, reason = "This test exercises the deprecated sampling API")]
 
 use rmcp::{
-    ClientHandler, RoleClient, RoleServer, ServerHandler, ServiceError, ServiceExt,
+    ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient, RoleServer, ServerHandler,
+    ServiceError, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
         CreateMessageRequest, CreateMessageRequestParams, CreateMessageResult, ErrorCode,
@@ -35,6 +36,14 @@ impl ServerHandler for SamplingServer {
             CreateMessageRequestParams::new(vec![SamplingMessage::user_text("nested")], 16);
         let outcome = match request.name.as_ref() {
             "sample" => context.peer.create_message(params).await.map(|_| ()),
+            // A spawned task loses the originating request, so the guard falls
+            // back to the session's version.
+            "sample_spawned" => {
+                let peer = context.peer.clone();
+                tokio::spawn(async move { peer.create_message(params).await.map(|_| ()) })
+                    .await
+                    .unwrap()
+            }
             "sample_generic" => context
                 .peer
                 .send_request(ServerRequest::CreateMessageRequest(
@@ -47,6 +56,20 @@ impl ServerHandler for SamplingServer {
                 .send_request(ServerRequest::PingRequest(PingRequest::default()))
                 .await
                 .map(|_| ()),
+            #[cfg(feature = "elicitation")]
+            "elicit_url" => match context
+                .peer
+                .elicit_url(
+                    "visit",
+                    url::Url::parse("https://example.com/").unwrap(),
+                    "elicitation-1",
+                )
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(rmcp::service::ElicitationError::Service(e)) => Err(e),
+                Err(e) => return Err(rmcp::ErrorData::internal_error(e.to_string(), None)),
+            },
             other => panic!("unexpected tool {other}"),
         };
         let text = match outcome {
@@ -130,6 +153,46 @@ async fn call_tool_on_modern_pair(tool: &'static str) -> anyhow::Result<String> 
     Ok(text)
 }
 
+/// Starts the pair the way stdio does: the server through plain `serve()`, the
+/// client through the discover lifecycle on `version`. Unlike `serve_directly`,
+/// this leaves the server's `peer_info` empty.
+async fn call_tool_on_discover_pair(
+    tool: &'static str,
+    version: ProtocolVersion,
+) -> anyhow::Result<String> {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_handle = tokio::spawn(async move {
+        let server = SamplingServer.serve(server_transport).await?;
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+    let client = SamplingClient
+        .serve_with_lifecycle(
+            client_transport,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![version],
+            },
+        )
+        .await?;
+
+    let result = client
+        .peer()
+        .call_tool(CallToolRequestParams::new(tool))
+        .await?;
+    let text = result
+        .content
+        .first()
+        .unwrap()
+        .as_text()
+        .unwrap()
+        .text
+        .clone();
+
+    client.cancel().await?;
+    let _ = server_handle.await?;
+    Ok(text)
+}
+
 #[tokio::test]
 async fn sampling_from_handler_rejected_on_modern_protocol() -> anyhow::Result<()> {
     assert_eq!(call_tool_on_modern_pair("sample").await?, "rejected");
@@ -148,6 +211,139 @@ async fn generic_send_request_rejected_on_modern_protocol() -> anyhow::Result<()
 #[tokio::test]
 async fn ping_rejected_on_modern_protocol() -> anyhow::Result<()> {
     assert_eq!(call_tool_on_modern_pair("ping").await?, "rejected");
+    Ok(())
+}
+
+#[tokio::test]
+async fn sampling_from_handler_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("sample", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn generic_send_request_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("sample_generic", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ping_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("ping", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spawned_sampling_rejected_on_discover_lifecycle() -> anyhow::Result<()> {
+    assert_eq!(
+        call_tool_on_discover_pair("sample_spawned", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
+    Ok(())
+}
+
+/// Plays a raw client that skips discover and names a version in each request's
+/// `_meta`, then calls the `sample` tool once per entry in `versions` on one
+/// connection. Answers any `sampling/createMessage` the server sends.
+async fn raw_inline_sample_calls(versions: &[&str]) -> anyhow::Result<Vec<String>> {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    tokio::spawn(async move {
+        let server = SamplingServer.serve(server_io).await?;
+        server.waiting().await?;
+        anyhow::Ok(())
+    });
+    let (read, mut write) = tokio::io::split(client_io);
+    let mut lines = BufReader::new(read).lines();
+    let mut texts = Vec::new();
+    for (id, version) in versions.iter().enumerate() {
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "sample",
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": version,
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        });
+        write.write_all(format!("{call}\n").as_bytes()).await?;
+        loop {
+            let line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+                .await??
+                .expect("server message");
+            let message: Value = serde_json::from_str(&line)?;
+            if message["method"] == "sampling/createMessage" {
+                let reply = json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "result": {
+                        "role": "assistant",
+                        "content": { "type": "text", "text": "pong" },
+                        "model": "test-model"
+                    }
+                });
+                write.write_all(format!("{reply}\n").as_bytes()).await?;
+                continue;
+            }
+            assert_eq!(message["id"], id, "unexpected message {message}");
+            let text = message["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("tool result expected, got {message}"));
+            texts.push(text.to_owned());
+            break;
+        }
+    }
+    Ok(texts)
+}
+
+/// Each inline request names its own version, so the guard follows the request
+/// a handler is serving, not the one that opened the session.
+#[tokio::test]
+async fn guard_follows_each_request_version_on_inline_session() -> anyhow::Result<()> {
+    assert_eq!(
+        raw_inline_sample_calls(&["2026-07-28", "2025-11-25"]).await?,
+        ["rejected", "sent"]
+    );
+    assert_eq!(
+        raw_inline_sample_calls(&["2025-11-25", "2026-07-28"]).await?,
+        ["sent", "rejected"]
+    );
+    Ok(())
+}
+
+/// A discover session can still pick an older version, where these requests
+/// are allowed.
+#[tokio::test]
+async fn server_requests_allowed_on_older_discover_session() -> anyhow::Result<()> {
+    for tool in ["sample", "ping"] {
+        assert_eq!(
+            call_tool_on_discover_pair(tool, ProtocolVersion::V_2025_11_25).await?,
+            "sent"
+        );
+    }
+    Ok(())
+}
+
+/// The client declares no elicitation modes, so this also pins that the
+/// protocol check runs before the capability check.
+#[cfg(feature = "elicitation")]
+#[tokio::test]
+async fn elicit_url_rejected_on_modern_protocol() -> anyhow::Result<()> {
+    assert_eq!(call_tool_on_modern_pair("elicit_url").await?, "rejected");
+    assert_eq!(
+        call_tool_on_discover_pair("elicit_url", ProtocolVersion::V_2026_07_28).await?,
+        "rejected"
+    );
     Ok(())
 }
 

@@ -161,7 +161,7 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     /// Rejects outbound requests when the negotiated protocol forbids this role
     /// from sending any.
     #[doc(hidden)]
-    fn enforce_outbound_request(_peer_info: Option<&Self::PeerInfo>) -> Result<(), ServiceError> {
+    fn enforce_outbound_request(_peer: &Peer<Self>) -> Result<(), ServiceError> {
         Ok(())
     }
 
@@ -226,6 +226,18 @@ pub(crate) fn peer_request_association<Req: crate::model::GetExtensions, V>(
 
 tokio::task_local! {
     pub(crate) static ORIGINATING_REQUEST: RequestId;
+    /// The protocol version the originating request names in its `_meta`.
+    pub(crate) static ORIGINATING_PROTOCOL_VERSION: Option<ProtocolVersion>;
+}
+
+/// The protocol version named by the request the current handler is serving,
+/// if any. Like [`ORIGINATING_REQUEST`], it does not cross `tokio::spawn`.
+#[cfg(feature = "server")]
+pub(crate) fn originating_protocol_version() -> Option<ProtocolVersion> {
+    ORIGINATING_PROTOCOL_VERSION
+        .try_with(Clone::clone)
+        .ok()
+        .flatten()
 }
 
 /// Marker in an outbound request's non-serialized [`Extensions`] identifying
@@ -717,7 +729,7 @@ pub struct Peer<R: ServiceRole> {
     progress_timeout_watchers: ProgressTimeoutWatchers,
     info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
-    request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
+    inline_protocol_version: Arc<OnceLock<ProtocolVersion>>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
     #[cfg(feature = "client")]
     response_cache: client::cache::PeerResponseCache<R>,
@@ -735,7 +747,7 @@ where
             progress_timeout_watchers: self.progress_timeout_watchers.clone(),
             info: self.info.clone(),
             client_request_metadata: self.client_request_metadata.clone(),
-            request_metadata_required: self.request_metadata_required.clone(),
+            inline_protocol_version: self.inline_protocol_version.clone(),
             subscription_channels: self.subscription_channels.clone(),
             #[cfg(feature = "client")]
             response_cache: self.response_cache.clone(),
@@ -811,7 +823,7 @@ impl<R: ServiceRole> Peer<R> {
                 progress_timeout_watchers: Default::default(),
                 info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
                 client_request_metadata: Default::default(),
-                request_metadata_required: Default::default(),
+                inline_protocol_version: Default::default(),
                 subscription_channels: Default::default(),
                 #[cfg(feature = "client")]
                 response_cache: Default::default(),
@@ -860,7 +872,7 @@ impl<R: ServiceRole> Peer<R> {
         options: PeerRequestOptions,
         subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
-        R::enforce_outbound_request(self.peer_info().as_deref())?;
+        R::enforce_outbound_request(self)?;
         if let Ok(originating) = ORIGINATING_REQUEST.try_with(|id| id.clone()) {
             request
                 .extensions_mut()
@@ -1024,16 +1036,23 @@ impl<R: ServiceRole> Peer<R> {
         debug_assert!(result.is_ok(), "client request metadata set more than once");
     }
 
+    /// Marks an inline lifecycle session that opened on `protocol_version`.
     #[cfg(feature = "server")]
-    pub(crate) fn require_request_metadata(&self) {
-        self.request_metadata_required
-            .store(true, std::sync::atomic::Ordering::Release);
+    pub(crate) fn set_inline_protocol_version(&self, protocol_version: ProtocolVersion) {
+        let result = self.inline_protocol_version.set(protocol_version);
+        debug_assert!(result.is_ok(), "inline protocol version set more than once");
+    }
+
+    /// The version an inline lifecycle session opened on. Such a session never
+    /// stores peer info.
+    #[cfg(feature = "server")]
+    pub(crate) fn inline_protocol_version(&self) -> Option<&ProtocolVersion> {
+        self.inline_protocol_version.get()
     }
 
     #[cfg(feature = "server")]
     pub(crate) fn request_metadata_required(&self) -> bool {
-        self.request_metadata_required
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.inline_protocol_version.get().is_some()
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -1586,9 +1605,16 @@ where
                         };
                         let current_span = tracing::Span::current();
                         let handler_id = id.clone();
+                        let handler_version = context.meta.protocol_version();
                         spawn_service_task(async move {
                             let result = ORIGINATING_REQUEST
-                                .scope(handler_id, service.handle_request(request, context))
+                                .scope(
+                                    handler_id,
+                                    ORIGINATING_PROTOCOL_VERSION.scope(
+                                        handler_version,
+                                        service.handle_request(request, context),
+                                    ),
+                                )
                                 .await;
                             let response = match result {
                                 Ok(result) => {
