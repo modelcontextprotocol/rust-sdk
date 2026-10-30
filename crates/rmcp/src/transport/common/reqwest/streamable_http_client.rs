@@ -413,7 +413,8 @@ impl StreamableHttpClientTransport<reqwest::Client> {
     ///
     /// The default client follows same-origin 307 and 308 redirects, up to 10
     /// hops. A 301, 302 or 303, or a redirect to another origin, returns an
-    /// error. A 308 does not change the stored URI. To use another redirect
+    /// error. A 308 does not change the stored URI; each followed redirect is
+    /// logged at `debug` level with its old and new path. To use another redirect
     /// policy, pass your own `reqwest::Client` to [`with_client`](Self::with_client).
     ///
     /// # Feature requirement
@@ -470,7 +471,8 @@ const MAX_REDIRECTS: usize = 10;
 /// would replay the session id and caller-supplied custom headers to another
 /// host, so both are returned to the caller as the redirect response instead.
 /// A followed 308 does not update the stored URI, so each request still
-/// starts at the configured one.
+/// starts at the configured one. Each followed hop is logged at `debug` level
+/// so a caller can find the URI to configure instead.
 fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         let preserves_body = matches!(
@@ -486,6 +488,14 @@ fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
         } else if attempt.previous().len() > MAX_REDIRECTS {
             attempt.error(format!("exceeded {MAX_REDIRECTS} redirects"))
         } else {
+            // Only paths are logged: the origin is unchanged, and a query
+            // string may carry credentials.
+            tracing::debug!(
+                status = %attempt.status(),
+                from = attempt.previous().last().map(|url| url.path()).unwrap_or_default(),
+                to = attempt.url().path(),
+                "following same-origin redirect"
+            );
             attempt.follow()
         }
     })
