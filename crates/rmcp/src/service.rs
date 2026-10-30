@@ -80,7 +80,7 @@ pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
     #[error("Transport send error: {0}")]
-    TransportSend(DynamicTransportError),
+    TransportSend(#[source] DynamicTransportError),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Unexpected response type")]

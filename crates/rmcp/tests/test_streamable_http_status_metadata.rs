@@ -57,6 +57,16 @@ async fn mock_response(
     text: &'static str,
     content_type: &'static str,
 ) -> MockServer {
+    mock_response_with_challenge(status, unfinished, text, content_type, None).await
+}
+
+async fn mock_response_with_challenge(
+    status: u16,
+    unfinished: bool,
+    text: &'static str,
+    content_type: &'static str,
+    challenge: Option<&'static str>,
+) -> MockServer {
     let methods = Arc::new(Mutex::new(Vec::new()));
     let captured = methods.clone();
     let router = Router::new().route(
@@ -77,13 +87,15 @@ async fn mock_response(
                 } else {
                     Body::from(text)
                 };
-                Response::builder()
+                let mut response = Response::builder()
                     .status(status)
                     .header("retry-after", "17")
                     .header("content-type", content_type)
-                    .header("x-private-response", "private-response-header")
-                    .body(body)
-                    .unwrap()
+                    .header("x-private-response", "private-response-header");
+                if let Some(challenge) = challenge {
+                    response = response.header("www-authenticate", challenge);
+                }
+                response.body(body).unwrap()
             }
         }),
     );
@@ -199,6 +211,103 @@ async fn json_rate_limits_return_without_reading_the_body(#[case] unfinished: bo
     assert_status_error(result.unwrap_err(), 429);
 }
 
+/// A 401 or 403 without a `WWW-Authenticate` challenge is settled by its
+/// status alone, on GET and POST alike: body-free metadata, returned before
+/// the body finishes, even when the body is a JSON-RPC error.
+#[rstest::rstest]
+#[tokio::test]
+async fn challenge_less_auth_failures_return_body_free_metadata(
+    #[values(401, 403)] status: u16,
+    #[values(false, true)] get: bool,
+    #[values(false, true)] json: bool,
+    #[values(false, true)] unfinished: bool,
+) {
+    let (text, content_type) = if json {
+        (
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"private-response-body"}}"#,
+            "application/json",
+        )
+    } else {
+        ("private-response-body", "text/plain")
+    };
+    let server = mock_response(status, unfinished, text, content_type).await;
+    let client = reqwest::Client::new();
+    let result = tokio::time::timeout(Duration::from_secs(2), async {
+        if get {
+            client
+                .get_stream(
+                    server.uri.clone(),
+                    Some(Arc::from("private-session")),
+                    None,
+                    Some("private-token".to_owned()),
+                    HashMap::new(),
+                )
+                .await
+                .map(|_| ())
+        } else {
+            client
+                .post_message(
+                    server.uri.clone(),
+                    ping(),
+                    Some(Arc::from("private-session")),
+                    Some("private-token".to_owned()),
+                    HashMap::new(),
+                )
+                .await
+                .map(|_| ())
+        }
+    })
+    .await
+    .expect("auth status classification must not wait for the body to finish");
+    assert_status_error(result.unwrap_err(), status);
+}
+
+/// With a challenge, the specialized auth errors still win over status
+/// metadata, and they too return before the body finishes.
+#[rstest::rstest]
+#[tokio::test]
+async fn auth_challenges_take_precedence_over_status_metadata(
+    #[values(401, 403)] status: u16,
+    #[values(false, true)] get: bool,
+) {
+    let challenge = r#"Bearer error="insufficient_scope", scope="mcp:read""#;
+    let server = mock_response_with_challenge(
+        status,
+        true,
+        "private-response-body",
+        "application/json",
+        Some(challenge),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let error = tokio::time::timeout(Duration::from_secs(2), async {
+        if get {
+            client
+                .get_stream(server.uri.clone(), None, None, None, HashMap::new())
+                .await
+                .map(|_| ())
+        } else {
+            client
+                .post_message(server.uri.clone(), ping(), None, None, HashMap::new())
+                .await
+                .map(|_| ())
+        }
+    })
+    .await
+    .expect("auth challenges must not wait for the body")
+    .expect_err("auth challenge must fail");
+    match error {
+        StreamableHttpError::AuthRequired(error) if status == 401 => {
+            assert_eq!(error.www_authenticate_header, challenge);
+        }
+        StreamableHttpError::InsufficientScope(error) if status == 403 => {
+            assert_eq!(error.www_authenticate_header, challenge);
+            assert_eq!(error.required_scope.as_deref(), Some("mcp:read"));
+        }
+        other => panic!("expected specialized auth error, got {other:?}"),
+    }
+}
+
 #[rstest::rstest]
 #[case("private-invalid-json")]
 #[case(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)]
@@ -211,9 +320,16 @@ async fn unusable_json_error_bodies_fall_back_to_status_metadata(#[case] text: &
     assert_status_error(result.unwrap_err(), 503);
 }
 
+/// A challenge-less 401/403 or a 429 during auto discovery must not trigger
+/// the legacy fallback, and its metadata must be reachable both by walking
+/// the lifecycle error's source chain and by downcasting the transport error.
+#[rstest::rstest]
+#[case::unauthorized(401)]
+#[case::forbidden(403)]
+#[case::rate_limited(429)]
 #[tokio::test]
-async fn rate_limited_auto_discovery_preserves_metadata_without_legacy_fallback() {
-    let server = mock_server(429, false).await;
+async fn auto_discovery_preserves_metadata_without_legacy_fallback(#[case] status: u16) {
+    let server = mock_server(status, true).await;
     let transport = StreamableHttpClientTransport::with_client(
         reqwest::Client::new(),
         StreamableHttpClientTransportConfig::with_uri(server.uri.clone()),
@@ -229,13 +345,34 @@ async fn rate_limited_auto_discovery_preserves_metadata_without_legacy_fallback(
         ),
     )
     .await
-    .expect("rate-limited discovery should fail promptly");
-    match result.expect_err("rate-limited discovery must fail") {
+    .expect("HTTP failure during discovery should fail promptly");
+    let error = result.expect_err("HTTP failure during discovery must fail");
+    assert_eq!(error.is_authorization_required(), status == 401);
+    assert_eq!(error.auth_challenge(), None);
+
+    let mut source: &(dyn std::error::Error + 'static) = &error;
+    let metadata = loop {
+        let rendered = format!("{source:?} {source}");
+        assert!(
+            !rendered.contains("private-"),
+            "lifecycle error retained private state: {rendered}"
+        );
+        if let Some(metadata) = source.downcast_ref::<HttpStatusError>() {
+            break metadata;
+        }
+        source = source
+            .source()
+            .expect("HTTP status metadata must be reachable through the error's sources");
+    };
+    assert_eq!(metadata.status, status);
+    assert_eq!(metadata.retry_after.as_deref(), Some("17"));
+
+    match error {
         ClientInitializeError::TransportError { error, .. } => {
             let error = error
                 .downcast::<StreamableHttpClientTransport<reqwest::Client>, RoleClient>()
                 .expect("transport error type must be preserved");
-            assert_status_error(error, 429);
+            assert_status_error(error, status);
         }
         other => panic!("expected HTTP transport error, got {other:?}"),
     }

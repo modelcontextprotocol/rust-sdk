@@ -82,6 +82,7 @@ pub enum ServerInitializeError {
 
     #[error("Send message error {error}, when {context}")]
     TransportError {
+        #[source]
         error: DynamicTransportError,
         context: Cow<'static, str>,
     },

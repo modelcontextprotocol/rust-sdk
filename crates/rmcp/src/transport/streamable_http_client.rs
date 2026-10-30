@@ -181,15 +181,20 @@ pub(crate) const MAX_RETRY_AFTER_BYTES: usize = 128;
 
 /// Body-free HTTP failure metadata.
 ///
-/// The built-in reqwest client returns this for HTTP 429 and 5xx responses.
-/// HTTP 429 is classified without reading the body. JSON POST 5xx responses
-/// containing a valid JSON-RPC error retain that error instead.
+/// The built-in reqwest client returns this from GET and POST for HTTP 401
+/// and 403 responses that carry no `WWW-Authenticate` challenge, for HTTP
+/// 429, and for 5xx responses. A 401 or 403 with a challenge is
+/// [`StreamableHttpError::AuthRequired`] or
+/// [`StreamableHttpError::InsufficientScope`] instead. 401, 403 and 429 are
+/// classified without reading the body. JSON POST 5xx responses containing a
+/// valid JSON-RPC error retain that error instead.
 /// No response body, request URL, credentials, or other headers are retained.
 #[derive(Debug, Error)]
 #[error("HTTP {status}")]
 #[non_exhaustive]
 pub struct HttpStatusError {
-    /// HTTP status code (429 or 500..=599 for the built-in reqwest client).
+    /// HTTP status code (401, 403, 429 or 500..=599 for the built-in reqwest
+    /// client).
     pub status: u16,
     /// First raw `Retry-After` value, if valid UTF-8 and at most 128 bytes.
     ///
@@ -221,8 +226,10 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Io(#[from] std::io::Error),
     #[error("Client error: {0}")]
     Client(E),
-    /// HTTP failure metadata from a transport backend.
-    #[error(transparent)]
+    /// HTTP failure metadata from a transport backend. The [`HttpStatusError`]
+    /// is also this error's [`source`](std::error::Error::source), so it can
+    /// be found by walking a wrapping error's source chain.
+    #[error("{0}")]
     HttpStatus(#[from] HttpStatusError),
     #[error("unexpected end of stream")]
     UnexpectedEndOfStream,

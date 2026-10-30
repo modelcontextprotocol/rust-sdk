@@ -288,6 +288,16 @@ impl DynamicTransportError {
             if current.is::<streamable_http_client::AuthRequiredError>() {
                 return true;
             }
+            // A 401 without a `WWW-Authenticate` challenge still means the
+            // request lacked valid credentials (RFC 9110 §15.5.2); discovery
+            // then falls back to the well-known URIs.
+            #[cfg(feature = "transport-streamable-http-client")]
+            if current
+                .downcast_ref::<streamable_http_client::HttpStatusError>()
+                .is_some_and(|error| error.status == 401)
+            {
+                return true;
+            }
 
             error = current.source();
         }

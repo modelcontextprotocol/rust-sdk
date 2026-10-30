@@ -50,8 +50,14 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
 }
 
 // Retain only status and bounded Retry-After metadata for HTTP failures.
+// 401 and 403 reach this only without a `WWW-Authenticate` challenge; a
+// challenge is mapped to `AuthRequired` / `InsufficientScope` first.
 fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStatusError> {
-    if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+    if !matches!(
+        status,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+    ) && !status.is_server_error()
+    {
         return None;
     }
     let retry_after = headers
@@ -276,19 +282,15 @@ impl StreamableHttpClient for reqwest::Client {
         let is_json_response = content_type
             .as_deref()
             .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
-        // Rate limits and non-JSON failures return without reading the body. JSON
-        // server failures are read to keep their JSON-RPC error, so an unfinished
-        // body still blocks here.
-        let status_error = match (
-            http_status_error(status, response.headers()),
-            is_json_response,
-        ) {
-            (Some(error), is_json)
-                if !is_json || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
-            {
+        // Challenge-less auth failures, rate limits and non-JSON failures return
+        // without reading the body: the status alone settles them. JSON server
+        // failures are read to keep their JSON-RPC error, so an unfinished body
+        // still blocks here.
+        let status_error = match http_status_error(status, response.headers()) {
+            Some(error) if !(is_json_response && status.is_server_error()) => {
                 return Err(error.into());
             }
-            (error, _) => error,
+            error => error,
         };
         let content_length = response.content_length();
         let session_id = response
@@ -323,14 +325,7 @@ impl StreamableHttpClient for reqwest::Client {
             {
                 return Ok(response);
             }
-            // A 401/403 without a challenge (those with one returned above)
-            // must keep its status rather than pass as an ordinary JSON-RPC
-            // error, matching `legacy_discover_response`.
-            let is_auth_failure = matches!(
-                status,
-                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-            );
-            if !is_auth_failure && is_json_response {
+            if is_json_response {
                 match parse_json_rpc_error(&body) {
                     Some(message) => {
                         return Ok(StreamableHttpPostResponse::Json(message, session_id));
@@ -502,11 +497,15 @@ mod tests {
     };
 
     #[test]
-    fn http_status_error_classifies_only_429_and_5xx() {
+    fn http_status_error_classifies_only_auth_failures_429_and_5xx() {
         let headers = http::HeaderMap::new();
         for code in 100..=599 {
             let error = http_status_error(http::StatusCode::from_u16(code).unwrap(), &headers);
-            assert_eq!(error.is_some(), code == 429 || code >= 500, "HTTP {code}");
+            assert_eq!(
+                error.is_some(),
+                matches!(code, 401 | 403 | 429) || code >= 500,
+                "HTTP {code}"
+            );
             if let Some(error) = error {
                 assert_eq!(error.status, code);
                 assert_eq!(error.retry_after, None);
