@@ -87,7 +87,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    io,
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError, RwLock},
 };
@@ -271,6 +271,8 @@ struct Entry {
     /// Relative to the root, `/`-separated.
     path: String,
     kind: Kind,
+    /// Bytes on disk when walked; `0` for anything but a file.
+    size: u64,
 }
 
 impl Snapshot {
@@ -304,12 +306,25 @@ impl Snapshot {
             }
         }
 
+        // Skip what the walk already rules out before reading any bytes.
+        let mut kept: Vec<(&str, &[&Entry])> = Vec::new();
+        for dir in skill_dirs {
+            if dir.is_empty() {
+                tracing::warn!("skipping the SKILL.md at the catalog root; a skill needs a folder");
+                continue;
+            }
+            let entries = inside.get(dir).map(Vec::as_slice).unwrap_or_default();
+            match check_walked(entries) {
+                Ok(()) => kept.push((dir, entries)),
+                Err(reason) => tracing::warn!(skill = %dir, "skipping skill: {reason}"),
+            }
+        }
+
         let mut bytes_of: HashMap<&str, Arc<[u8]>> = HashMap::new();
-        for entry in inside.values().flatten() {
+        for entry in kept.iter().flat_map(|(_, entries)| entries.iter()) {
             if entry.kind == Kind::File && !bytes_of.contains_key(entry.path.as_str()) {
-                let bytes = handle
-                    .read(&entry.path)
-                    .map_err(|source| SkillCatalogError::Io {
+                let bytes =
+                    read_bounded(&handle, &entry.path).map_err(|source| SkillCatalogError::Io {
                         path: root.join(&entry.path),
                         source,
                     })?;
@@ -319,12 +334,7 @@ impl Snapshot {
 
         let mut snapshot = Snapshot::default();
         let mut directories: BTreeSet<&str> = BTreeSet::new();
-        for dir in skill_dirs {
-            if dir.is_empty() {
-                tracing::warn!("skipping the SKILL.md at the catalog root; a skill needs a folder");
-                continue;
-            }
-            let entries = inside.get(dir).map(Vec::as_slice).unwrap_or_default();
+        for (dir, entries) in kept {
             let (skill, listing) = match build_skill(dir, entries, &bytes_of) {
                 Ok(built) => built,
                 Err(reason) => {
@@ -390,17 +400,44 @@ fn directory_child(entry: &Entry, files: &HashMap<String, CatalogFile>) -> Optio
     }
 }
 
-fn build_skill(
-    dir: &str,
-    entries: &[&Entry],
-    bytes_of: &HashMap<&str, Arc<[u8]>>,
-) -> Result<(Skill, Resource), String> {
+/// Rules that the walk alone can check: no special files, and within the limits.
+fn check_walked(entries: &[&Entry]) -> Result<(), String> {
     if let Some(entry) = entries.iter().find(|entry| entry.kind == Kind::Unsupported) {
         return Err(format!(
             "{} is a symlink, a special file, or not UTF-8; copy the file instead",
             entry.path
         ));
     }
+    let files = entries.iter().filter(|entry| entry.kind == Kind::File);
+    check_limits(files.clone().count(), files.map(|entry| entry.size).sum())
+}
+
+fn check_limits(files: usize, bytes: u64) -> Result<(), String> {
+    if files > SKILL_FILE_LIMIT || bytes > SKILL_BYTE_LIMIT {
+        return Err(format!(
+            "{files} files and {bytes} bytes exceed the limit of {SKILL_FILE_LIMIT} files or \
+             {SKILL_BYTE_LIMIT} bytes, so hosts need not load it"
+        ));
+    }
+    Ok(())
+}
+
+/// Read at most one byte past the skill limit, so a file that grew after the
+/// walk cannot exhaust memory; the limit check on the bytes then rejects it.
+fn read_bounded(handle: &Dir, path: &str) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    handle
+        .open(path)?
+        .take(SKILL_BYTE_LIMIT + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn build_skill(
+    dir: &str,
+    entries: &[&Entry],
+    bytes_of: &HashMap<&str, Arc<[u8]>>,
+) -> Result<(Skill, Resource), String> {
     let manifest_path = format!("{dir}/{SKILL_MD}");
     let manifest = bytes_of
         .get(manifest_path.as_str())
@@ -414,14 +451,7 @@ fn build_skill(
         .collect();
     files.sort_by(|a, b| a.uri.cmp(&b.uri));
 
-    let total: u64 = files.iter().map(|file| file.size).sum();
-    if files.len() > SKILL_FILE_LIMIT || total > SKILL_BYTE_LIMIT {
-        return Err(format!(
-            "{} files and {total} bytes exceed the limit of {SKILL_FILE_LIMIT} files or \
-             {SKILL_BYTE_LIMIT} bytes, so hosts need not load it",
-            files.len()
-        ));
-    }
+    check_limits(files.len(), files.iter().map(|file| file.size).sum())?;
 
     let uri = uri_of(&manifest_path);
     let listing = Resource::new(&uri, &frontmatter.name)
@@ -495,10 +525,15 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
                 tree.push(Entry {
                     path: path.clone(),
                     kind,
+                    size: 0,
                 });
                 visit(root, handle, &path, tree)?;
             } else {
-                tree.push(Entry { path, kind });
+                let size = match kind {
+                    Kind::File => entry.metadata().map_err(io_error)?.len(),
+                    _ => 0,
+                };
+                tree.push(Entry { path, kind, size });
             }
         }
         Ok(())
