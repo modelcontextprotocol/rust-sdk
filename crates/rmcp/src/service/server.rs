@@ -657,7 +657,7 @@ where
                         })?;
                     continue;
                 }
-                peer.require_request_metadata(requested_version);
+                peer.set_inline_protocol_version(requested_version);
                 // Dispatch the request from inside the service loop rather than
                 // inline: its handler may send notifications through `peer`, which
                 // only complete once the loop drains `peer_rx`.

@@ -1038,7 +1038,7 @@ impl<R: ServiceRole> Peer<R> {
 
     /// Marks an inline lifecycle session that opened on `protocol_version`.
     #[cfg(feature = "server")]
-    pub(crate) fn require_request_metadata(&self, protocol_version: ProtocolVersion) {
+    pub(crate) fn set_inline_protocol_version(&self, protocol_version: ProtocolVersion) {
         let _ = self.inline_protocol_version.set(protocol_version);
     }
 
