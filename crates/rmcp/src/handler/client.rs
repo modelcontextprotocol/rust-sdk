@@ -232,18 +232,49 @@ macro_rules! client_handler_methods {
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             std::future::ready(())
         }
+        /// Called for a `notifications/resources/list_changed` notification that
+        /// is not routed to a [`Subscription`](crate::service::Subscription).
+        ///
+        /// See [`Self::on_tool_list_changed`]: on a `2026-07-28` connection,
+        /// request it with [`Peer::listen`](crate::service::Peer::listen) and
+        /// [`SubscriptionFilterBuilder::resources_list_changed`](crate::model::SubscriptionFilterBuilder::resources_list_changed).
+        /// Notifications routed to that subscription are not delivered here. The
+        /// cached resource list is invalidated on either path.
         fn on_resource_list_changed(
             &self,
             context: NotificationContext<RoleClient>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             std::future::ready(())
         }
+        /// Called for a `notifications/tools/list_changed` notification that is
+        /// not routed to a [`Subscription`](crate::service::Subscription).
+        ///
+        /// On a `2026-07-28` connection, a server sends list-changed
+        /// notifications on a listen stream that requested them. Open one with
+        /// [`Peer::listen`](crate::service::Peer::listen) and a filter built with
+        /// [`SubscriptionFilterBuilder::tools_list_changed`](crate::model::SubscriptionFilterBuilder::tools_list_changed),
+        /// then read the notifications from the returned subscription.
+        /// Notifications routed to a subscription are not delivered to this
+        /// callback, so it mainly sees notifications without a matching
+        /// subscription: from servers on earlier protocol versions, or from
+        /// servers that send them unscoped.
+        ///
+        /// The client's cached `tools/list` response is invalidated on either
+        /// path. See `examples/clients/src/subscriptions_streamhttp.rs`.
         fn on_tool_list_changed(
             &self,
             context: NotificationContext<RoleClient>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             std::future::ready(())
         }
+        /// Called for a `notifications/prompts/list_changed` notification that is
+        /// not routed to a [`Subscription`](crate::service::Subscription).
+        ///
+        /// See [`Self::on_tool_list_changed`]: on a `2026-07-28` connection,
+        /// request it with [`Peer::listen`](crate::service::Peer::listen) and
+        /// [`SubscriptionFilterBuilder::prompts_list_changed`](crate::model::SubscriptionFilterBuilder::prompts_list_changed).
+        /// Notifications routed to that subscription are not delivered here. The
+        /// cached prompt list is invalidated on either path.
         fn on_prompt_list_changed(
             &self,
             context: NotificationContext<RoleClient>,
