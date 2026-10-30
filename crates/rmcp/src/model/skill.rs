@@ -328,14 +328,19 @@ fn resource_is_within_skill(skill_uri: &str, resource_uri: &str) -> bool {
         return false;
     };
     let path = relative.split(['?', '#']).next().unwrap_or_default();
-    if path.is_empty() || path.ends_with('/') {
+    // Decode unreserved dots without turning a reserved %2F into a separator.
+    let mut segments = path
+        .split('/')
+        .map(|segment| segment.replace("%2e", ".").replace("%2E", "."));
+    // An empty or dot-segment leaf resolves to a directory.
+    if matches!(
+        segments.next_back().as_deref(),
+        None | Some("" | "." | "..")
+    ) {
         return false;
     }
     let mut depth = 0usize;
-    for segment in path.split('/') {
-        // Dots are unreserved URI characters. Recognize their escaped form,
-        // but leave reserved delimiters such as %2F and query data untouched.
-        let segment = segment.replace("%2e", ".").replace("%2E", ".");
+    for segment in segments {
         match segment.as_str() {
             "." => {}
             ".." => {
@@ -347,7 +352,7 @@ fn resource_is_within_skill(skill_uri: &str, resource_uri: &str) -> bool {
             _ => depth += 1,
         }
     }
-    depth > 0
+    true
 }
 
 /// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
@@ -381,7 +386,7 @@ pub enum SkillValidationError {
     MissingSkillMd(String),
     #[error("skill manifest lists {0} twice")]
     DuplicateResource(String),
-    #[error("skill file {uri} is not within the directory of {skill_uri}")]
+    #[error("resource {uri} does not identify a file within the directory of {skill_uri}")]
     ResourceOutsideSkill { uri: String, skill_uri: String },
     #[error("skill file {uri} has a malformed digest {digest}")]
     MalformedDigest { uri: String, digest: String },
@@ -610,6 +615,16 @@ mod tests {
         }
 
         #[test]
+        fn ignores_skill_md_in_a_query_or_fragment() {
+            for uri in [
+                "skill://acme/billing?reference=/billing/SKILL.md",
+                "skill://acme/billing#reference/billing/SKILL.md",
+            ] {
+                assert_eq!(skill_name_from_uri(uri), None, "{uri}");
+            }
+        }
+
+        #[test]
         fn returns_none_for_skill_md_at_the_root() {
             assert_eq!(skill_name_from_uri("skill:///SKILL.md"), None);
         }
@@ -639,101 +654,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manifest_paths_must_resolve_to_files_within_the_skill_directory() {
+        let skill_uri = "custom:skills/billing/SKILL.md";
+        for (path, valid) in [
+            ("refunds/SKILL.md", true),
+            ("refs/./guide.md", true),
+            ("refs/../invoice.md", true),
+            ("refs/%2e%2E/invoice.md", true),
+            ("refs%2F..%2F..%2Fguide.md?ref=/../../other", true),
+            ("invoice.md#ref/../../other", true),
+            ("refs/../../invoice.md", false),
+            (".%2E/invoice.md", false),
+            ("refs/", false),
+            ("refs/.", false),
+            ("refs/sub/..", false),
+            ("refs/%2E?file=invoice.md", false),
+            ("refs/sub/.%2e#invoice.md", false),
+        ] {
+            let uri = format!("custom:skills/billing/{path}");
+            assert_eq!(resource_is_within_skill(skill_uri, &uri), valid, "{path}");
+        }
+    }
+
+    #[test]
+    fn rejects_resources_with_a_different_root() {
+        for uri in [
+            "skill://acme/billing-other/invoice.md",
+            "skill://other/billing/invoice.md",
+            "github://acme/billing/invoice.md",
+        ] {
+            assert!(
+                !resource_is_within_skill("skill://acme/billing/SKILL.md", uri),
+                "{uri}"
+            );
+        }
+    }
+
     mod skill_validate {
         use super::*;
 
         #[test]
         fn accepts_a_consistent_entry() {
             assert_eq!(billing_skill().validate(), Ok(()));
-        }
-
-        fn with_supporting_file(skill_uri: &str, resource_uri: &str) -> Skill {
-            Skill::new(
-                skill_uri,
-                SkillFrontmatter::new("billing", "Issue invoices"),
-                SkillResources::Files(vec![
-                    SkillResource::from_bytes(skill_uri, b"skill"),
-                    SkillResource::from_bytes(resource_uri, b"supporting file"),
-                ]),
-            )
-        }
-
-        #[test]
-        fn accepts_supporting_files_within_the_skill_directory() {
-            for uri in [
-                "skill://acme/billing/invoice.md",
-                "skill://acme/billing/refunds/SKILL.md",
-                "skill://acme/billing/references/../invoice.md",
-                "skill://acme/billing/references/%2e%2E/invoice.md",
-                "skill://acme/billing/templates/.../invoice.md",
-                "skill://acme/billing/references%2Fguide.md",
-                "skill://acme/billing/invoice.md?reference=/../../other",
-                "skill://acme/billing/invoice.md#reference/../../other",
-            ] {
-                let skill = with_supporting_file("skill://acme/billing/SKILL.md", uri);
-                assert_eq!(skill.validate(), Ok(()), "{uri}");
-            }
-        }
-
-        #[test]
-        fn accepts_supporting_files_under_other_uri_schemes() {
-            for (skill_uri, resource_uri) in [
-                (
-                    "github://owner/repo/skills/billing/SKILL.md",
-                    "github://owner/repo/skills/billing/references/guide.md",
-                ),
-                (
-                    "file:///skills/billing/SKILL.md",
-                    "file:///skills/billing/templates/invoice.md",
-                ),
-                (
-                    "custom:skills/billing/SKILL.md",
-                    "custom:skills/billing/invoice.md",
-                ),
-            ] {
-                assert_eq!(
-                    with_supporting_file(skill_uri, resource_uri).validate(),
-                    Ok(()),
-                    "{resource_uri}"
-                );
-            }
-        }
-
-        #[test]
-        fn rejects_supporting_files_outside_the_skill_directory() {
-            for uri in [
-                "skill://other/billing/invoice.md",
-                "github://acme/billing/invoice.md",
-                "skill://acme/billing-other/invoice.md",
-                "skill://acme/invoice.md",
-                "skill://acme/billing/../invoice.md",
-                "skill://acme/billing/references/../../invoice.md",
-                "skill://acme/billing/%2e%2e/invoice.md",
-                "skill://acme/billing/.%2E/invoice.md",
-                "skill://acme/billing/%2E./invoice.md",
-                "skill://acme/billing/references/%2E%2e/%2e%2E/invoice.md",
-                "skill://acme/billing",
-                "skill://acme/billing/",
-                "skill://acme/billing/references/..",
-                "skill://acme/billing/references/../",
-                "skill://acme/billing/references/../?reference=invoice.md",
-            ] {
-                let skill = with_supporting_file("skill://acme/billing/SKILL.md", uri);
-                assert!(skill.validate().is_err(), "accepted {uri}");
-            }
-        }
-
-        #[test]
-        fn rejects_a_skill_md_suffix_in_a_query_or_fragment() {
-            for uri in [
-                "skill://acme/billing?reference=/billing/SKILL.md",
-                "skill://acme/billing#reference/billing/SKILL.md",
-            ] {
-                assert!(
-                    with_supporting_file(uri, uri).validate().is_err(),
-                    "accepted {uri}"
-                );
-            }
         }
 
         #[test]
