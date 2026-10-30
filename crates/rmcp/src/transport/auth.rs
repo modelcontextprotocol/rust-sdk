@@ -2868,11 +2868,11 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_metadata_url(
-                &self.base_url,
-                &candidate_url,
-                self.allow_private_metadata_addresses,
-            ) {
+            // A resource at an IPv6 unique-local address may name its own origin as issuer.
+            let allow_private = self.allow_private_metadata_addresses
+                || (matches!(candidate_url.host(), Some(Host::Ipv6(ip)) if ip.is_unique_local())
+                    && Self::is_same_origin(&self.base_url, &candidate_url));
+            if !Self::is_allowed_metadata_url(&self.base_url, &candidate_url, allow_private) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -6788,6 +6788,76 @@ mod tests {
                     "https://auth.example.com/.well-known/oauth-authorization-server"
                 ]
             )
+        );
+    }
+
+    #[rstest]
+    #[case::ula_default_port("https://[fc00::1]:443", "https://[fc00::1]", false, true)]
+    #[case::ula_custom_port("https://[fd00::1]:8443", "https://[fd00::1]:8443", false, true)]
+    #[case::other_host("https://[fd00::1]", "https://[fd00::2]", false, false)]
+    #[case::other_port("https://[fd00::1]", "https://[fd00::1]:8443", false, false)]
+    #[case::other_scheme("https://[fd00::1]", "http://[fd00::1]", false, false)]
+    #[case::named_resource("https://mcp.example.com", "https://[fd00::1]", false, false)]
+    #[case::private_ipv4("https://10.0.0.1", "https://10.0.0.1", false, false)]
+    #[case::cgnat("https://100.64.0.1", "https://100.64.0.1", false, false)]
+    #[case::mapped_ipv4("https://[::ffff:a00:1]", "https://[::ffff:a00:1]", false, false)]
+    #[case::nat64("https://[64:ff9b::a00:1]", "https://[64:ff9b::a00:1]", false, false)]
+    #[case::link_local("https://[fe80::1]", "https://[fe80::1]", false, false)]
+    #[case::explicit_opt_in("https://mcp.example.com", "https://[fd00::1]", true, true)]
+    #[tokio::test]
+    async fn private_issuer_discovery(
+        #[case] resource_origin: &str,
+        #[case] candidate: &str,
+        #[case] opt_in: bool,
+        #[case] candidate_allowed: bool,
+    ) {
+        let resource = Url::parse(resource_origin).unwrap().join("/mcp").unwrap();
+        let metadata_url = "https://metadata.example.com/prm";
+        let fallback = "https://auth.example.com";
+        let expected = if candidate_allowed {
+            candidate
+        } else {
+            fallback
+        };
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            challenge_response(&format!(r#"Bearer resource_metadata="{metadata_url}""#)),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": resource.as_str(),
+                    "authorization_servers": [candidate, fallback],
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": expected,
+                    "authorization_endpoint": format!("{expected}/authorize"),
+                    "token_endpoint": format!("{expected}/token"),
+                }),
+            ),
+        ]);
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            resource.as_str(),
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+        manager.allow_private_metadata_addresses = opt_in;
+
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
+        assert_eq!(metadata.issuer.as_deref(), Some(expected));
+        assert_eq!(
+            client
+                .requests()
+                .into_iter()
+                .map(|r| r.uri)
+                .collect::<Vec<_>>(),
+            [
+                resource.to_string(),
+                metadata_url.to_string(),
+                format!("{expected}/.well-known/oauth-authorization-server")
+            ],
         );
     }
 
