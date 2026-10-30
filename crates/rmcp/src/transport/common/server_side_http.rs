@@ -8,8 +8,8 @@ use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use sse_stream::{KeepAlive, Sse, SseBody};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-use super::http_header::EVENT_STREAM_MIME_TYPE;
-use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use super::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
+use crate::model::{ClientJsonRpcMessage, ErrorData, JsonRpcError, ServerJsonRpcMessage};
 
 pub type SessionId = Arc<str>;
 
@@ -255,16 +255,29 @@ where
 
     match serde_json::from_slice::<ClientJsonRpcMessage>(&collected) {
         Ok(message) => Ok(message),
-        Err(e) => {
-            let response = Response::builder()
-                .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
-                .body(
-                    Full::new(Bytes::from(format!("fail to deserialize request body {e}"))).boxed(),
-                )
-                .expect("valid response");
-            Err(response)
-        }
+        Err(e) => Err(malformed_body_response(&e)),
     }
+}
+
+/// The Content-Type was already accepted, so a body that isn't a JSON-RPC
+/// message is a bad request (not 415). The spec lets the 400 carry a JSON-RPC
+/// error with no id: Parse error for invalid JSON, Invalid Request for valid
+/// JSON of the wrong shape, as the stdio transport classifies them.
+fn malformed_body_response(e: &serde_json::Error) -> Response<BoxBody<Bytes, Infallible>> {
+    let error = match e.classify() {
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+            ErrorData::parse_error(format!("Parse error: {e}"), None)
+        }
+        serde_json::error::Category::Data | serde_json::error::Category::Io => {
+            ErrorData::invalid_request(format!("Invalid request: {e}"), None)
+        }
+    };
+    let body = serde_json::to_vec(&JsonRpcError::new(None, error)).expect("serialize JsonRpcError");
+    Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+        .body(Full::new(Bytes::from(body)).boxed())
+        .expect("valid response")
 }
 
 #[cfg(test)]
@@ -370,11 +383,42 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    async fn rejected_body(body: &'static str) -> (http::StatusCode, serde_json::Value) {
+        let response = expect_json(Full::new(Bytes::from(body)), 4 * 1024 * 1024)
+            .await
+            .unwrap_err();
+        let status = response.status();
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            JSON_MIME_TYPE
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[rstest::rstest]
+    #[case::not_json("not valid json")]
+    #[case::truncated(r#"{"jsonrpc":"2.0","id":1,"#)]
+    #[case::empty("")]
     #[tokio::test]
-    async fn expect_json_returns_415_for_invalid_json_under_limit() {
-        let body = Full::new(Bytes::from("not valid json"));
-        let result = expect_json(body, 4 * 1024 * 1024).await;
-        let response = result.unwrap_err();
-        assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    async fn expect_json_answers_invalid_json_with_400_parse_error(#[case] body: &'static str) {
+        let (status, error) = rejected_body(body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(error["jsonrpc"], "2.0");
+        assert_eq!(error["error"]["code"], -32700);
+        assert!(error.get("id").is_none(), "no id can be read: {error}");
+    }
+
+    #[rstest::rstest]
+    #[case::null("null")]
+    #[case::array("[]")]
+    #[case::wrong_version(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#)]
+    #[case::null_id(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)]
+    #[tokio::test]
+    async fn expect_json_answers_wrong_shape_with_400_invalid_request(#[case] body: &'static str) {
+        let (status, error) = rejected_body(body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], -32600);
+        assert!(error.get("id").is_none(), "no id can be read: {error}");
     }
 }

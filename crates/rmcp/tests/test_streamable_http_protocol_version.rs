@@ -293,6 +293,38 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
     Ok(())
 }
 
+/// A body that isn't a JSON-RPC message, sent with a valid Content-Type, is a
+/// 400 with a JSON-RPC error (no id), not 415 Unsupported Media Type.
+#[rstest::rstest]
+#[case::stateful(stateful_config())]
+#[case::stateless(stateless_json_config())]
+#[tokio::test]
+async fn malformed_body_is_bad_request_with_jsonrpc_error(
+    #[case] config: StreamableHttpServerConfig,
+) -> anyhow::Result<()> {
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let (client, url, ct) = spawn_server_with_manager(config, session_manager.clone()).await;
+
+    for (body, code) in [(r#"{"jsonrpc":"2.0","id":1,"#, -32700), ("null", -32600)] {
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .body(body)
+            .send()
+            .await?;
+        assert_eq!(response.status(), 400, "{body}");
+        assert_eq!(response.headers()["content-type"], "application/json");
+        let error: Value = response.json().await?;
+        assert_eq!(error["error"]["code"], code, "{body}: {error}");
+        assert!(error.get("id").is_none(), "{body}: {error}");
+    }
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
+
+    ct.cancel();
+    Ok(())
+}
+
 /// The `initialize` handshake exists only in the revisions before `2026-07-28`,
 /// so naming a later version in it does not make the request a modern one: the
 /// server keeps legacy semantics, opens a session, and answers with a version it
