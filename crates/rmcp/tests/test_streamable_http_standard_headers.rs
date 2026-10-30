@@ -595,54 +595,26 @@ async fn media_type_headers_follow_http_semantics() {
             406,
         ),
         ("wildcard alone", &["*/*"], "application/json", 406),
-        // Invalid weights follow this implementation's admission policy.
+        // Only an explicit zero weight excludes a range; malformed weights are
+        // ignored so they cannot turn a working request into a 406. The weight
+        // spellings themselves are covered by unit tests next to the helpers.
         (
-            "one",
-            &["application/json;q=1, text/event-stream"],
-            "application/json",
-            202,
-        ),
-        (
-            "one decimal",
-            &["application/json;q=1., text/event-stream"],
-            "application/json",
-            202,
-        ),
-        (
-            "one three digits",
-            &["application/json;q=1.000, text/event-stream"],
-            "application/json",
-            202,
-        ),
-        (
-            "over precision",
-            &["application/json;q=0.0001, text/event-stream"],
-            "application/json",
-            406,
-        ),
-        (
-            "above one",
-            &["application/json;q=1.001, text/event-stream"],
-            "application/json",
-            406,
-        ),
-        (
-            "missing leading zero",
+            "malformed weight ignored",
             &["application/json;q=.5, text/event-stream"],
             "application/json",
-            406,
+            202,
         ),
         (
-            "negative quality",
-            &["application/json;q=-0.1, text/event-stream"],
-            "application/json",
-            406,
-        ),
-        (
-            "non digit quality",
+            "non digit weight ignored",
             &["application/json;q=abc, text/event-stream"],
             "application/json",
-            406,
+            202,
+        ),
+        (
+            "over precision weight ignored",
+            &["application/json;q=0.0001, text/event-stream"],
+            "application/json",
+            202,
         ),
         (
             "zero SSE",
@@ -698,13 +670,7 @@ async fn media_type_headers_follow_http_semantics() {
         ("text/event-streamx", 406),
         ("text/event-stream;q=0.0", 406),
         ("text/event-stream;q=1", 400),
-        ("text/event-stream;q=1.", 400),
-        ("text/event-stream;q=1.000", 400),
-        ("text/event-stream;q=1.001", 406),
-        ("text/event-stream;q=0.0001", 406),
-        ("text/event-stream;q=.5", 406),
-        ("text/event-stream;q=-0.1", 406),
-        ("text/event-stream;q=abc", 406),
+        ("text/event-stream;q=abc", 400),
     ] {
         let actual = client
             .get(&url)

@@ -95,16 +95,105 @@ fn accepted_media_types(headers: &HeaderMap) -> impl Iterator<Item = &str> {
         })
 }
 
-// RFC 9110 section 12.4.2 permits up to three fractional digits.
+// RFC 9110 section 12.4.2 permits up to three fractional digits. A weight
+// that fails that grammar is ignored rather than excluding the media range,
+// so a client that lists the media type with a malformed quality value keeps
+// getting served; only an explicitly zero weight excludes the range.
 fn quality_is_acceptable(quality: &str) -> bool {
     let (whole, fraction) = quality.split_once('.').unwrap_or((quality, ""));
     if fraction.len() > 3 || !fraction.bytes().all(|digit| digit.is_ascii_digit()) {
-        return false;
+        return true;
     }
-    match whole {
-        "0" => fraction.bytes().any(|digit| digit != b'0'),
-        "1" => fraction.bytes().all(|digit| digit == b'0'),
-        _ => false,
+    whole != "0" || fraction.bytes().any(|digit| digit != b'0')
+}
+
+#[cfg(test)]
+mod media_type_parsing_tests {
+    use super::{accepted_media_types, quality_is_acceptable, split_unquoted};
+
+    #[test]
+    fn explicit_zero_weights_exclude_the_media_range() {
+        assert!(!quality_is_acceptable("0"));
+        assert!(!quality_is_acceptable("0."));
+        assert!(!quality_is_acceptable("0.0"));
+        assert!(!quality_is_acceptable("0.000"));
+    }
+
+    #[test]
+    fn zero_fraction_digits_may_be_omitted_or_partial() {
+        assert!(quality_is_acceptable("0.5"));
+        assert!(quality_is_acceptable("0.001"));
+    }
+
+    #[test]
+    fn one_and_its_spellings_stay_acceptable() {
+        assert!(quality_is_acceptable("1"));
+        assert!(quality_is_acceptable("1."));
+        assert!(quality_is_acceptable("1.0"));
+        assert!(quality_is_acceptable("1.000"));
+    }
+
+    #[test]
+    fn malformed_weights_are_ignored() {
+        // Values RFC 9110 does not admit no longer drop the media range.
+        assert!(quality_is_acceptable(".5"));
+        assert!(quality_is_acceptable("1.001"));
+        assert!(quality_is_acceptable("1.5"));
+        assert!(quality_is_acceptable("2"));
+        assert!(quality_is_acceptable("-0.1"));
+        assert!(quality_is_acceptable("0.0001"));
+        assert!(quality_is_acceptable("abc"));
+        assert!(quality_is_acceptable(""));
+        assert!(quality_is_acceptable("0.1.2"));
+    }
+
+    #[test]
+    fn split_unquoted_keeps_delimiters_inside_quotes() {
+        assert_eq!(
+            split_unquoted(r#"a,b"c,d"e;f"#, ',').collect::<Vec<_>>(),
+            vec![r#"a"#, r#"b"c,d"e;f"#]
+        );
+        assert_eq!(
+            split_unquoted(r#"a;b"c;d"e"#, ';').collect::<Vec<_>>(),
+            vec!["a", r#"b"c;d"e"#]
+        );
+    }
+
+    #[test]
+    fn split_unquoted_honors_escaped_quotes() {
+        assert_eq!(
+            split_unquoted(r#"a;b"c\";d"e"#, ';').collect::<Vec<_>>(),
+            vec!["a", r#"b"c\";d"e"#]
+        );
+        assert_eq!(
+            split_unquoted(r#""a\",b""#, ',').collect::<Vec<_>>(),
+            vec![r#""a\",b""#]
+        );
+    }
+
+    #[test]
+    fn accepted_media_types_drops_only_zero_weighted_entries() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static(
+                r#"text/plain;q=0, application/json;profile="a;q=0", text/event-stream;q=abc"#,
+            ),
+        );
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/xml, */*;q=0.5"),
+        );
+        let accepted: Vec<&str> = accepted_media_types(&headers).collect();
+        assert_eq!(
+            accepted,
+            vec![
+                "application/json",
+                "text/event-stream",
+                "application/xml",
+                "*/*"
+            ]
+        );
     }
 }
 
@@ -2055,10 +2144,10 @@ where
             .get(http::header::CONTENT_TYPE)
             .and_then(|header| header.to_str().ok())
             .is_some_and(|header| {
-                header
-                    .split(';')
-                    .next()
-                    .is_some_and(|essence| essence.trim().eq_ignore_ascii_case(JSON_MIME_TYPE))
+                let essence = header
+                    .split_once(';')
+                    .map_or(header, |(essence, _)| essence);
+                essence.trim().eq_ignore_ascii_case(JSON_MIME_TYPE)
             })
         {
             return Ok(Response::builder()
