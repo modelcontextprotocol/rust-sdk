@@ -1039,7 +1039,8 @@ impl<R: ServiceRole> Peer<R> {
     /// Marks an inline lifecycle session that opened on `protocol_version`.
     #[cfg(feature = "server")]
     pub(crate) fn set_inline_protocol_version(&self, protocol_version: ProtocolVersion) {
-        let _ = self.inline_protocol_version.set(protocol_version);
+        let result = self.inline_protocol_version.set(protocol_version);
+        debug_assert!(result.is_ok(), "inline protocol version set more than once");
     }
 
     /// The version an inline lifecycle session opened on. Such a session never
