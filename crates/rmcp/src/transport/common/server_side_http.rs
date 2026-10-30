@@ -255,22 +255,23 @@ where
 
     match serde_json::from_slice::<ClientJsonRpcMessage>(&collected) {
         Ok(message) => Ok(message),
-        Err(e) => Err(malformed_body_response(&e)),
+        Err(e) => Err(malformed_body_response(&collected, &e)),
     }
 }
 
 /// The Content-Type was already accepted, so a body that isn't a JSON-RPC
 /// message is a bad request (not 415). The spec lets the 400 carry a JSON-RPC
 /// error with no id: Parse error for invalid JSON, Invalid Request for valid
-/// JSON of the wrong shape, as the stdio transport classifies them.
-fn malformed_body_response(e: &serde_json::Error) -> Response<BoxBody<Bytes, Infallible>> {
-    let error = match e.classify() {
-        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
-            ErrorData::parse_error(format!("Parse error: {e}"), None)
-        }
-        serde_json::error::Category::Data | serde_json::error::Category::Io => {
-            ErrorData::invalid_request(format!("Invalid request: {e}"), None)
-        }
+/// JSON of the wrong shape.
+fn malformed_body_response(
+    body: &[u8],
+    e: &serde_json::Error,
+) -> Response<BoxBody<Bytes, Infallible>> {
+    // A typed deserialize reports a shape error before it checks for trailing
+    // bytes (`null trailing`), so check the whole body is JSON on its own.
+    let error = match serde_json::from_slice::<serde::de::IgnoredAny>(body) {
+        Err(syntax) => ErrorData::parse_error(format!("Parse error: {syntax}"), None),
+        Ok(_) => ErrorData::invalid_request(format!("Invalid request: {e}"), None),
     };
     let body = serde_json::to_vec(&JsonRpcError::new(None, error)).expect("serialize JsonRpcError");
     Response::builder()
@@ -400,6 +401,8 @@ mod tests {
     #[case::not_json("not valid json")]
     #[case::truncated(r#"{"jsonrpc":"2.0","id":1,"#)]
     #[case::empty("")]
+    #[case::trailing_after_null("null trailing")]
+    #[case::trailing_after_array("[] {")]
     #[tokio::test]
     async fn expect_json_answers_invalid_json_with_400_parse_error(#[case] body: &'static str) {
         let (status, error) = rejected_body(body).await;
