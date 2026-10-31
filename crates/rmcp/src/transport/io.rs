@@ -13,6 +13,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 /// Every read from and write to these handles is executed on Tokio's blocking
 /// thread pool. When both standard streams are pipes, prefer [`stdio_pipes`],
 /// which avoids the per-operation thread hand-off on Linux.
+///
+/// A pending read on [`tokio::io::Stdin`] cannot be cancelled. Cancelling an MCP
+/// service can therefore still leave Tokio runtime shutdown waiting for stdin
+/// input or EOF. See the [Tokio stdin documentation](https://docs.rs/tokio/latest/tokio/io/fn.stdin.html).
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
     (tokio::io::stdin(), tokio::io::stdout())
 }
