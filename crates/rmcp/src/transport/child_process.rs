@@ -56,6 +56,25 @@ impl Drop for ChildWithCleanup {
     }
 }
 
+/// Wait up to `MAX_WAIT_ON_DROP_SECS` for the child to exit.
+/// Returns `Ok(None)` if it is still running when the timeout expires.
+async fn wait_for_exit(
+    child: &mut Box<dyn ChildWrapper>,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    let timeout = std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS);
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => {
+            tracing::info!("Child exited gracefully {}", status);
+            Ok(Some(status))
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("Error waiting for child: {e}");
+            Err(e)
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 impl TokioChildProcess {
     /// Convenience: spawn with default `piped` stdio
     pub fn new(command: impl Into<CommandWrap>) -> std::io::Result<Self> {
@@ -75,34 +94,39 @@ impl TokioChildProcess {
 
     /// Gracefully shutdown the child process
     ///
-    /// This will first close the transport to the child process (the server),
-    /// and wait for the child process to exit normally with a timeout.
-    /// If the child process doesn't exit within the timeout, it will be killed.
+    /// This follows the stdio shutdown sequence from the MCP specification:
+    /// close the transport to the child process (the server) and wait for it to
+    /// exit; if it doesn't exit within the timeout, send `SIGTERM` (Unix only) and
+    /// wait again; if it still doesn't exit, kill it.
     pub async fn graceful_shutdown(&mut self) -> std::io::Result<()> {
-        if let Some(mut child) = self.child.inner.take() {
-            self.transport.close().await?;
+        // The child stays in its cleanup guard until it has exited or been killed, so if this
+        // future is cancelled partway through, dropping the transport still kills the child.
+        let Some(child) = self.child.inner.as_mut() else {
+            return Ok(());
+        };
+        self.transport.close().await?;
 
-            let wait_fut = child.wait();
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS)) => {
-                    if let Err(e) = Box::into_pin(child.kill()).await {
-                        tracing::warn!("Error killing child: {e}");
-                        return Err(e);
-                    }
-                },
-                res = wait_fut => {
-                    match res {
-                        Ok(status) => {
-                            tracing::info!("Child exited gracefully {}", status);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Error waiting for child: {e}");
-                            return Err(e);
-                        }
-                    }
+        if wait_for_exit(child).await?.is_some() {
+            self.child.inner = None;
+            return Ok(());
+        }
+
+        #[cfg(unix)]
+        match child.signal(libc::SIGTERM) {
+            Ok(()) => {
+                if wait_for_exit(child).await?.is_some() {
+                    self.child.inner = None;
+                    return Ok(());
                 }
             }
+            Err(e) => tracing::warn!("Error sending SIGTERM to child: {e}"),
         }
+
+        if let Err(e) = Box::into_pin(child.kill()).await {
+            tracing::warn!("Error killing child: {e}");
+            return Err(e);
+        }
+        self.child.inner = None;
         Ok(())
     }
 
@@ -284,6 +308,79 @@ mod tests {
                 panic!("Failed to check process status: {}", e);
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_tokio_child_process_graceful_shutdown_sends_sigterm_before_kill() {
+        // A server that ignores stdin EOF but exits cleanly on SIGTERM, recording that it did.
+        let marker = std::env::temp_dir().join(format!(
+            "rmcp-sigterm-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let script = format!(
+            "trap 'echo term > \"{}\"; exit 0' TERM; while :; do sleep 0.1; done",
+            marker.display()
+        );
+        let mut child_process = TokioChildProcess::new(Command::new("sh").configure(|cmd| {
+            cmd.arg("-c").arg(&script);
+        }))
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        child_process.graceful_shutdown().await.unwrap();
+
+        assert!(
+            marker.exists(),
+            "child was killed without receiving SIGTERM first"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2 * MAX_WAIT_ON_DROP_SECS),
+            "child exited on SIGTERM, so the kill timeout should not be reached"
+        );
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_tokio_child_process_cancelled_graceful_shutdown_still_cleans_up() {
+        // A server that ignores both stdin EOF and SIGTERM.
+        let mut child_process = TokioChildProcess::new(Command::new("sh").configure(|cmd| {
+            cmd.arg("-c")
+                .arg("trap '' TERM; while :; do sleep 0.1; done");
+        }))
+        .unwrap();
+        let id = child_process.id().unwrap();
+
+        // Cancel the shutdown during the second wait, after SIGTERM and before the kill.
+        let shutdown = tokio::time::timeout(
+            std::time::Duration::from_secs(MAX_WAIT_ON_DROP_SECS + 1),
+            child_process.graceful_shutdown(),
+        )
+        .await;
+        assert!(
+            shutdown.is_err(),
+            "shutdown should still be waiting when the timeout fires"
+        );
+
+        // Dropping the transport must still clean the child up.
+        drop(child_process);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let status = Command::new("ps")
+            .arg("-p")
+            .arg(id.to_string())
+            .status()
+            .await
+            .unwrap();
+        assert!(
+            !status.success(),
+            "Process with PID {} survived a cancelled graceful_shutdown",
+            id
+        );
     }
 
     #[tokio::test]
