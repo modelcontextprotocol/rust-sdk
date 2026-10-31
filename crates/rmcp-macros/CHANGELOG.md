@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.8.0...rmcp-macros-v3.9.0) - 2026-10-31
+
+### Other
+
+- add Voltip to built with rmcp list ([#1401](https://github.com/modelcontextprotocol/rust-sdk/pull/1401))
+
 ## [3.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.5.1...rmcp-macros-v3.6.0) - 2026-10-19
 
 ### Fixed
