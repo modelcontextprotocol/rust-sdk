@@ -49,6 +49,19 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
     }
 }
 
+// Match the complete media-type essence; parameters do not change its type.
+fn media_type_is(value: &[u8], expected: &str) -> bool {
+    value
+        .split(|byte| *byte == b';')
+        .next()
+        .and_then(|essence| std::str::from_utf8(essence).ok())
+        .is_some_and(|essence| {
+            essence
+                .trim_matches([' ', '\t'])
+                .eq_ignore_ascii_case(expected)
+        })
+}
+
 // Retain only status and bounded Retry-After metadata for HTTP failures.
 fn http_status_error(status: StatusCode, headers: &HeaderMap) -> Option<HttpStatusError> {
     if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
@@ -147,8 +160,8 @@ impl StreamableHttpClient for reqwest::Client {
         let response = response.error_for_status()?;
         match response.headers().get(reqwest::header::CONTENT_TYPE) {
             Some(ct) => {
-                if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
-                    && !ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes())
+                if !media_type_is(ct.as_bytes(), EVENT_STREAM_MIME_TYPE)
+                    && !media_type_is(ct.as_bytes(), JSON_MIME_TYPE)
                 {
                     return Err(StreamableHttpError::UnexpectedContentType(Some(
                         String::from_utf8_lossy(ct.as_bytes()).to_string(),
@@ -275,7 +288,7 @@ impl StreamableHttpClient for reqwest::Client {
             .map(|ct| String::from_utf8_lossy(ct.as_bytes()).to_string());
         let is_json_response = content_type
             .as_deref()
-            .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+            .is_some_and(|ct| media_type_is(ct.as_bytes(), JSON_MIME_TYPE));
         // Rate limits and non-JSON failures return without reading the body. JSON
         // server failures are read to keep their JSON-RPC error, so an unfinished
         // body still blocks here.
@@ -348,11 +361,11 @@ impl StreamableHttpClient for reqwest::Client {
             )));
         }
         match content_type.as_deref() {
-            Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+            Some(ct) if media_type_is(ct.as_bytes(), EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = bounded_sse_stream(response.bytes_stream(), max_sse_event_size);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
-            Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+            Some(ct) if media_type_is(ct.as_bytes(), JSON_MIME_TYPE) => {
                 // A notification/response/error POST does not await a JSON-RPC
                 // reply. Treat an unusable JSON body as Accepted. A request
                 // still needs a reply; the same body is an error so the worker
@@ -510,6 +523,155 @@ mod tests {
         model::{ClientJsonRpcMessage, ClientRequest, JsonRpcMessage, PingRequest, RequestId},
         transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError},
     };
+
+    #[rstest]
+    #[case::opaque_parameter(b"text/event-stream; note=\"\xff\"", true)]
+    #[case::non_ascii_essence(b"text/event-stream\xff; charset=utf-8", false)]
+    fn response_media_type_essence_bytes(#[case] value: &[u8], #[case] expected: bool) {
+        assert_eq!(super::media_type_is(value, "text/event-stream"), expected);
+    }
+
+    async fn media_type_server(
+        content_type: Option<&'static str>,
+        status: http::StatusCode,
+        body: &'static str,
+    ) -> anyhow::Result<(
+        std::sync::Arc<str>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    )> {
+        use axum::{Router, body::Body, routing::any};
+
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let uri = format!("http://{}/mcp", listener.local_addr()?).into();
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/mcp",
+                any(move || async move {
+                    let mut response = http::Response::new(Body::from(body));
+                    *response.status_mut() = status;
+                    if let Some(content_type) = content_type {
+                        response.headers_mut().insert(
+                            http::header::CONTENT_TYPE,
+                            http::HeaderValue::from_static(content_type),
+                        );
+                    }
+                    response
+                }),
+            );
+            axum::serve(listener, app).await
+        });
+        Ok((uri, server))
+    }
+
+    #[rstest]
+    #[case::json(Some("application/json"), 200, "json")]
+    #[case::json_parameters(Some("application/json; charset=utf-8"), 200, "json")]
+    #[case::json_case(Some("Application/JSON"), 200, "json")]
+    #[case::json_ows(Some("application/json \t; charset=utf-8"), 200, "json")]
+    #[case::json_suffix(Some("application/jsonx"), 200, "unexpected")]
+    #[case::json_sequence(Some("application/json-seq"), 200, "unexpected")]
+    #[case::json_list(Some("application/json, text/event-stream"), 200, "unexpected")]
+    #[case::sse(Some("text/event-stream"), 200, "sse")]
+    #[case::sse_case(Some("Text/Event-Stream; charset=utf-8"), 200, "sse")]
+    #[case::sse_suffix(Some("text/event-streaming"), 200, "unexpected")]
+    #[case::missing(None, 200, "unexpected")]
+    #[case::server_error_case(Some("Application/JSON; charset=utf-8"), 503, "json")]
+    #[case::server_error_suffix(Some("application/jsonx"), 503, "status")]
+    #[case::rate_limit_case(Some("Application/JSON"), 429, "status")]
+    #[tokio::test]
+    async fn post_response_media_types(
+        #[case] content_type: Option<&'static str>,
+        #[case] status: u16,
+        #[case] expected: &str,
+    ) -> anyhow::Result<()> {
+        use futures::StreamExt;
+
+        use crate::transport::streamable_http_client::{
+            StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
+        };
+        let body = if expected == "sse" {
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n"
+        } else {
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"upstream error"}}"#
+        };
+        let (uri, server) =
+            media_type_server(content_type, http::StatusCode::from_u16(status)?, body).await?;
+        let message = ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        );
+        let response = reqwest::Client::new()
+            .post_message(uri, message, None, None, Default::default())
+            .await;
+        server.abort();
+        match (expected, response) {
+            ("json", Ok(StreamableHttpPostResponse::Json(JsonRpcMessage::Error(error), _))) => {
+                anyhow::ensure!(error.id == Some(RequestId::Number(1)));
+                anyhow::ensure!(error.error.message == "upstream error");
+            }
+            ("sse", Ok(StreamableHttpPostResponse::Sse(mut stream, _))) => {
+                let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("missing SSE event"))??;
+                anyhow::ensure!(
+                    event
+                        .data
+                        .as_deref()
+                        .is_some_and(|data| data.contains("jsonrpc"))
+                );
+            }
+            ("unexpected", Err(StreamableHttpError::UnexpectedContentType(actual))) => {
+                anyhow::ensure!(actual.as_deref() == content_type);
+            }
+            ("status", Err(StreamableHttpError::HttpStatus(error))) => {
+                anyhow::ensure!(error.status == status);
+            }
+            _ => anyhow::bail!(
+                "unexpected response classification for {content_type:?}, HTTP {status}"
+            ),
+        }
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::sse(Some("text/event-stream"), true)]
+    #[case::sse_parameters(Some("text/event-stream; charset=utf-8"), true)]
+    #[case::sse_case(Some("Text/Event-Stream"), true)]
+    #[case::sse_ows(Some("text/event-stream \t; charset=utf-8"), true)]
+    #[case::sse_suffix(Some("text/event-streaming"), false)]
+    #[case::json_suffix(Some("application/jsonx"), false)]
+    #[case::sse_list(Some("text/event-stream, application/json"), false)]
+    #[case::missing(None, false)]
+    #[tokio::test]
+    async fn get_response_media_types(
+        #[case] content_type: Option<&'static str>,
+        #[case] accepted: bool,
+    ) -> anyhow::Result<()> {
+        use futures::StreamExt;
+
+        use crate::transport::streamable_http_client::{StreamableHttpClient, StreamableHttpError};
+        let (uri, server) =
+            media_type_server(content_type, http::StatusCode::OK, "data: ping\n\n").await?;
+        let response = reqwest::Client::new()
+            .get_stream(uri, None, None, None, Default::default())
+            .await;
+        server.abort();
+        match response {
+            Ok(mut stream) => {
+                anyhow::ensure!(accepted, "must reject {content_type:?}");
+                let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("missing SSE event"))??;
+                anyhow::ensure!(event.data.as_deref() == Some("ping"));
+            }
+            Err(StreamableHttpError::UnexpectedContentType(actual)) => {
+                anyhow::ensure!(!accepted, "must accept {content_type:?}");
+                anyhow::ensure!(actual.as_deref() == content_type);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
 
     #[test]
     fn http_status_error_classifies_only_429_and_5xx() {
