@@ -31,6 +31,14 @@ pub struct Tool {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotations>,
+    /// Optional authentication schemes advertised to clients as `securitySchemes`.
+    ///
+    /// This extension follows [draft SEP-1488](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1488).
+    /// Each object describes a scheme, such as `{"type": "noauth"}` or
+    /// `{"type": "oauth2", "scopes": ["documents.read"]}`. These declarations
+    /// do not enforce authentication. Servers must validate credentials and permissions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_schemes: Option<Vec<JsonObject>>,
     /// Optional list of icons for the tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
@@ -173,6 +181,7 @@ impl Tool {
             input_schema: input_schema.into(),
             output_schema: None,
             annotations: None,
+            security_schemes: None,
             icons: None,
             meta: None,
         }
@@ -195,6 +204,7 @@ impl Tool {
             input_schema: input_schema.into(),
             output_schema: None,
             annotations: None,
+            security_schemes: None,
             icons: None,
             meta: None,
         }
@@ -215,6 +225,12 @@ impl Tool {
     /// Set the annotations
     pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
         self.annotations = Some(annotations);
+        self
+    }
+
+    /// Set the advertised authentication schemes without changing authorization rules.
+    pub fn with_security_schemes(mut self, security_schemes: Vec<JsonObject>) -> Self {
+        self.security_schemes = Some(security_schemes);
         self
     }
 

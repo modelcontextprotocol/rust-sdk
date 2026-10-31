@@ -108,6 +108,7 @@ pub(crate) fn tool_attribute<T: ToolBase>() -> crate::model::Tool {
         input_schema: T::input_schema().unwrap_or_else(schema_for_empty_input),
         output_schema: T::output_schema(),
         annotations: T::annotations(),
+        security_schemes: None,
         icons: T::icons(),
         meta: T::meta(),
     }
