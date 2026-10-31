@@ -8,8 +8,10 @@ use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use sse_stream::{KeepAlive, Sse, SseBody};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-use super::http_header::EVENT_STREAM_MIME_TYPE;
-use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use super::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
+use crate::model::{
+    ClientJsonRpcMessage, ErrorData, JsonRpcError, RequestId, ServerJsonRpcMessage,
+};
 
 pub type SessionId = Arc<str>;
 
@@ -255,16 +257,38 @@ where
 
     match serde_json::from_slice::<ClientJsonRpcMessage>(&collected) {
         Ok(message) => Ok(message),
-        Err(e) => {
-            let response = Response::builder()
-                .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
-                .body(
-                    Full::new(Bytes::from(format!("fail to deserialize request body {e}"))).boxed(),
-                )
-                .expect("valid response");
-            Err(response)
-        }
+        Err(e) => Err(malformed_body_response(&collected, &e)),
     }
+}
+
+/// The Content-Type was already accepted, so a body that isn't a JSON-RPC
+/// message is a bad request (not 415). The 400 carries a JSON-RPC error:
+/// Parse error for invalid JSON, Invalid Request for valid JSON of the wrong
+/// shape. The id is echoed when it can be read, and omitted otherwise.
+fn malformed_body_response(
+    body: &[u8],
+    e: &serde_json::Error,
+) -> Response<BoxBody<Bytes, Infallible>> {
+    // A typed deserialize reports a shape error before it checks for trailing
+    // bytes (`null trailing`), so check the whole body is JSON on its own.
+    let (id, error) = match serde_json::from_slice::<serde_json::Value>(body) {
+        Err(syntax) => (
+            None,
+            ErrorData::parse_error(format!("Parse error: {syntax}"), None),
+        ),
+        Ok(value) => (
+            value
+                .get("id")
+                .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok()),
+            ErrorData::invalid_request(format!("Invalid request: {e}"), None),
+        ),
+    };
+    let body = serde_json::to_vec(&JsonRpcError::new(id, error)).expect("serialize JsonRpcError");
+    Response::builder()
+        .status(http::StatusCode::BAD_REQUEST)
+        .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+        .body(Full::new(Bytes::from(body)).boxed())
+        .expect("valid response")
 }
 
 #[cfg(test)]
@@ -370,11 +394,59 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    async fn rejected_body(body: &'static str) -> (http::StatusCode, serde_json::Value) {
+        let response = expect_json(Full::new(Bytes::from(body)), 4 * 1024 * 1024)
+            .await
+            .unwrap_err();
+        let status = response.status();
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            JSON_MIME_TYPE
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[rstest::rstest]
+    #[case::not_json("not valid json")]
+    #[case::truncated(r#"{"jsonrpc":"2.0","id":1,"#)]
+    #[case::empty("")]
+    #[case::trailing_after_null("null trailing")]
+    #[case::trailing_after_array("[] {")]
     #[tokio::test]
-    async fn expect_json_returns_415_for_invalid_json_under_limit() {
-        let body = Full::new(Bytes::from("not valid json"));
-        let result = expect_json(body, 4 * 1024 * 1024).await;
-        let response = result.unwrap_err();
-        assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    async fn expect_json_answers_invalid_json_with_400_parse_error(#[case] body: &'static str) {
+        let (status, error) = rejected_body(body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(error["jsonrpc"], "2.0");
+        assert_eq!(error["error"]["code"], -32700);
+        assert!(error.get("id").is_none(), "no id can be read: {error}");
+    }
+
+    #[rstest::rstest]
+    #[case::null("null")]
+    #[case::array("[]")]
+    #[case::null_id(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)]
+    #[case::object_id(r#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#)]
+    #[tokio::test]
+    async fn expect_json_answers_wrong_shape_with_400_invalid_request(#[case] body: &'static str) {
+        let (status, error) = rejected_body(body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], -32600);
+        assert!(error.get("id").is_none(), "no id can be read: {error}");
+    }
+
+    #[rstest::rstest]
+    #[case::number_id(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#, serde_json::json!(1))]
+    #[case::string_id(r#"{"jsonrpc":"1.0","id":"a","method":"ping"}"#, serde_json::json!("a"))]
+    #[case::no_method(r#"{"jsonrpc":"2.0","id":7}"#, serde_json::json!(7))]
+    #[tokio::test]
+    async fn expect_json_echoes_readable_id_in_invalid_request(
+        #[case] body: &'static str,
+        #[case] id: serde_json::Value,
+    ) {
+        let (status, error) = rejected_body(body).await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+        assert_eq!(error["error"]["code"], -32600);
+        assert_eq!(error["id"], id);
     }
 }
