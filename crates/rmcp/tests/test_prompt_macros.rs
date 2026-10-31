@@ -387,3 +387,54 @@ async fn test_optional_i64_field_with_null_input() -> anyhow::Result<()> {
     server_handle.await??;
     Ok(())
 }
+
+/// Regression cover for <https://github.com/modelcontextprotocol/rust-sdk/issues/1092>.
+///
+/// `#[prompt]` rewrites an `async fn` into `-> Pin<Box<dyn Future<Output = T> + Send + '_>>`
+/// exactly as `#[tool]` does, so it carries the same `Send` limitation: a closure taking a
+/// reference and returning an `async move` block, buffered by a `futures` combinator, does
+/// not compile without boxing the stream first (rust-lang/rust#104382).
+#[derive(Debug, Clone)]
+struct BufferedStreamPromptServer;
+
+impl BufferedStreamPromptServer {
+    /// Fan out over borrowed items, boxing the stream so the closure drops out of the
+    /// `Send` computation.
+    async fn fan_out_borrowed(&self, items: &[String]) -> Vec<String> {
+        use futures::stream::{self, StreamExt};
+        stream::iter(items.iter())
+            .map(|item| async move { item.to_uppercase() })
+            .boxed()
+            .buffer_unordered(4)
+            .collect()
+            .await
+    }
+}
+
+#[prompt_router]
+impl BufferedStreamPromptServer {
+    /// Build a message from a fixed list run through a boxed, buffered stream.
+    #[prompt(name = "buffered_stream", description = "Fan out over borrowed items")]
+    async fn buffered_stream(&self) -> Vec<PromptMessage> {
+        let items = vec!["a".to_string(), "b".to_string()];
+        let mut out = self.fan_out_borrowed(&items).await;
+        out.sort();
+        vec![PromptMessage::new_text(Role::User, out.join(","))]
+    }
+}
+
+#[prompt_handler]
+impl ServerHandler for BufferedStreamPromptServer {}
+
+#[tokio::test]
+async fn test_async_prompt_with_buffered_stream() {
+    let server = BufferedStreamPromptServer;
+    let messages = server.buffered_stream().await;
+    match &messages.first().unwrap().content {
+        ContentBlock::Text(text) => assert_eq!(text.text, "A,B"),
+        _ => panic!("Expected text content"),
+    }
+
+    let router = BufferedStreamPromptServer::prompt_router();
+    assert!(router.has_route("buffered_stream"));
+}
