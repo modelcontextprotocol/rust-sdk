@@ -18,14 +18,14 @@ use crate::{
         CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
         DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequest,
-        GetSkillRequestParams, GetSkillResult, GetTaskParams, GetTaskRequest, GetTaskResult,
-        InitializeRequest, InitializeRequestParams, InitializedNotification, InputRequest,
-        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
-        ListPromptsResult, ListResourceTemplatesRequest, ListResourceTemplatesResult,
-        ListResourcesRequest, ListResourcesResult, ListSkillsRequest, ListSkillsResult,
-        ListToolsRequest, ListToolsResult, NumberOrString, PaginatedRequestParams,
-        ProgressNotification, ProgressNotificationParam, ProtocolVersion,
-        ReadResourceDirectoryRequest, ReadResourceDirectoryRequestMethod,
+        GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, GetTaskParams,
+        GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
+        InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
+        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+        ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
+        ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsResult,
+        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
+        ProtocolVersion, ReadResourceDirectoryRequest, ReadResourceDirectoryRequestMethod,
         ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequest,
         ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Reference, RequestId,
         RequestMetaObject, RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification,
@@ -1538,10 +1538,21 @@ impl Peer<RoleClient> {
     /// The result carries the server's cache hints but is not stored in the
     /// client response cache. A 2026-07-28 server that omits the hints is
     /// accepted, as for `list_tools`.
+    ///
+    /// Nothing is sent when the server has not declared the skills extension;
+    /// the call fails with `-32601` instead.
     pub async fn list_skills(
         &self,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListSkillsResult, ServiceError> {
+        if !self
+            .peer_info()
+            .is_some_and(|info| info.capabilities.supports_skills())
+        {
+            return Err(ServiceError::McpError(McpError::method_not_found::<
+                ListSkillsRequestMethod,
+            >()));
+        }
         let result = self
             .send_request_cancel_on_drop(ClientRequest::ListSkillsRequest(ListSkillsRequest {
                 method: Default::default(),
@@ -1557,10 +1568,21 @@ impl Peer<RoleClient> {
 
     /// SEP-2640 `skills/get`: the entry for one skill. A server that does
     /// not serve the URI answers with `-32602`, passed through unchanged.
+    ///
+    /// Nothing is sent when the server has not declared the skills extension;
+    /// the call fails with `-32601` instead.
     pub async fn get_skill(
         &self,
         params: GetSkillRequestParams,
     ) -> Result<GetSkillResult, ServiceError> {
+        if !self
+            .peer_info()
+            .is_some_and(|info| info.capabilities.supports_skills())
+        {
+            return Err(ServiceError::McpError(McpError::method_not_found::<
+                GetSkillRequestMethod,
+            >()));
+        }
         let result = self
             .send_request_cancel_on_drop(ClientRequest::GetSkillRequest(GetSkillRequest::new(
                 params,

@@ -285,6 +285,12 @@ impl Skill {
         }
         let mut seen = std::collections::HashSet::with_capacity(files.len());
         for file in files {
+            if !resource_is_within_skill(&self.uri, &file.uri) {
+                return Err(SkillValidationError::ResourceOutsideSkill {
+                    uri: file.uri.clone(),
+                    skill_uri: self.uri.clone(),
+                });
+            }
             if !seen.insert(file.uri.as_str()) {
                 return Err(SkillValidationError::DuplicateResource(file.uri.clone()));
             }
@@ -304,9 +310,49 @@ pub const SKILL_MD: &str = "SKILL.md";
 
 /// The skill name encoded in a `SKILL.md` URI: the path segment before `SKILL.md`.
 pub fn skill_name_from_uri(uri: &str) -> Option<&str> {
+    if uri.contains(['?', '#']) {
+        return None;
+    }
     let path = uri.strip_suffix(SKILL_MD)?.strip_suffix('/')?;
     let name = path.rsplit('/').next()?;
     (!name.is_empty()).then_some(name)
+}
+
+fn resource_is_within_skill(skill_uri: &str, resource_uri: &str) -> bool {
+    // Keep the trailing slash to distinguish a child from a sibling whose
+    // directory name merely starts with the skill's name, under any scheme.
+    let Some(relative) = skill_uri
+        .strip_suffix(SKILL_MD)
+        .and_then(|root| resource_uri.strip_prefix(root))
+    else {
+        return false;
+    };
+    let path = relative.split(['?', '#']).next().unwrap_or_default();
+    // Decode unreserved dots without turning a reserved %2F into a separator.
+    let mut segments = path
+        .split('/')
+        .map(|segment| segment.replace("%2e", ".").replace("%2E", "."));
+    // An empty or dot-segment leaf resolves to a directory.
+    if matches!(
+        segments.next_back().as_deref(),
+        None | Some("" | "." | "..")
+    ) {
+        return false;
+    }
+    let mut depth = 0usize;
+    for segment in segments {
+        match segment.as_str() {
+            "." => {}
+            ".." => {
+                let Some(parent) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = parent;
+            }
+            _ => depth += 1,
+        }
+    }
+    true
 }
 
 /// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
@@ -340,6 +386,8 @@ pub enum SkillValidationError {
     MissingSkillMd(String),
     #[error("skill manifest lists {0} twice")]
     DuplicateResource(String),
+    #[error("resource {uri} does not identify a file within the directory of {skill_uri}")]
+    ResourceOutsideSkill { uri: String, skill_uri: String },
     #[error("skill file {uri} has a malformed digest {digest}")]
     MalformedDigest { uri: String, digest: String },
     #[error("skill {0} is listed twice")]
@@ -567,6 +615,16 @@ mod tests {
         }
 
         #[test]
+        fn ignores_skill_md_in_a_query_or_fragment() {
+            for uri in [
+                "skill://acme/billing?reference=/billing/SKILL.md",
+                "skill://acme/billing#reference/billing/SKILL.md",
+            ] {
+                assert_eq!(skill_name_from_uri(uri), None, "{uri}");
+            }
+        }
+
+        #[test]
         fn returns_none_for_skill_md_at_the_root() {
             assert_eq!(skill_name_from_uri("skill:///SKILL.md"), None);
         }
@@ -593,6 +651,43 @@ mod tests {
         #[test]
         fn rejects_a_missing_prefix() {
             assert!(!is_sha256_digest(&"a".repeat(64)));
+        }
+    }
+
+    #[test]
+    fn manifest_paths_must_resolve_to_files_within_the_skill_directory() {
+        let skill_uri = "custom:skills/billing/SKILL.md";
+        for (path, valid) in [
+            ("refunds/SKILL.md", true),
+            ("refs/./guide.md", true),
+            ("refs/../invoice.md", true),
+            ("refs/%2e%2E/invoice.md", true),
+            ("refs%2F..%2F..%2Fguide.md?ref=/../../other", true),
+            ("invoice.md#ref/../../other", true),
+            ("refs/../../invoice.md", false),
+            (".%2E/invoice.md", false),
+            ("refs/", false),
+            ("refs/.", false),
+            ("refs/sub/..", false),
+            ("refs/%2E?file=invoice.md", false),
+            ("refs/sub/.%2e#invoice.md", false),
+        ] {
+            let uri = format!("custom:skills/billing/{path}");
+            assert_eq!(resource_is_within_skill(skill_uri, &uri), valid, "{path}");
+        }
+    }
+
+    #[test]
+    fn rejects_resources_with_a_different_root() {
+        for uri in [
+            "skill://acme/billing-other/invoice.md",
+            "skill://other/billing/invoice.md",
+            "github://acme/billing/invoice.md",
+        ] {
+            assert!(
+                !resource_is_within_skill("skill://acme/billing/SKILL.md", uri),
+                "{uri}"
+            );
         }
     }
 
