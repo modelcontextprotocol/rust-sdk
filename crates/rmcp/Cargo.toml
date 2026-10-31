@@ -72,6 +72,11 @@ base64 = { version = "0.23", optional = true }
 # SHA-256 for SEP-2640 skill digests and SEP-2322 requestState sealing
 sha2 = "0.11"
 
+# SKILL.md frontmatter for the `skills-fs` catalog
+yaml_serde = { version = "0.10", optional = true }
+# reads the `skills-fs` catalog through a root handle that cannot escape it
+cap-std = { version = "4", optional = true }
+
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
 zeroize = { version = "1", optional = true }
@@ -138,6 +143,7 @@ elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
 request-state = ["dep:hmac", "dep:zeroize", "base64"]
+skills-fs = ["server", "base64", "dep:cap-std", "dep:yaml_serde"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -223,6 +229,7 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 async-trait = "0.1"
 rstest = "0.27.0"
+tempfile = "3"
 # Cargo unifies this feature into rmcp whenever any crate in a build enables it,
 # so the tests run with it on (see tests/test_deserialization.rs).
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }

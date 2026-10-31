@@ -26,6 +26,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `auth` | OAuth 2.0 authentication support | |
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
+| `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`) | |
 
 ### Transport features
 
