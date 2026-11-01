@@ -63,6 +63,7 @@ impl ServerHandler for CancelProbe {
 }
 
 const CALL_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wait_for_cancel","arguments":{}}}"#;
+const NEGOTIATED_CALL_BODY: &str = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wait_for_cancel","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}"#;
 
 struct TestServer {
     url: String,
@@ -190,6 +191,62 @@ async fn stateless_json_client_disconnect_cancels_request() -> anyhow::Result<()
     tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
         .await
         .expect("RequestContext::ct should fire after client disconnect (JSON)");
+
+    server.server_ct.cancel();
+    Ok(())
+}
+
+/// Per-request protocol metadata: a handler still running after one keep-alive
+/// interval gets its SSE head, so keep-alive comments reach the client instead
+/// of the connection idling until the result. Dropping that stream still
+/// cancels the handler.
+#[tokio::test]
+async fn stateless_negotiated_sse_commits_head_while_handler_runs() -> anyhow::Result<()> {
+    let server = spawn_stateless_server(false).await?;
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()?;
+
+    let mut call = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .post(&server.url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2026-07-28")
+            .header("Mcp-Method", "tools/call")
+            .header("Mcp-Name", "wait_for_cancel")
+            .body(NEGOTIATED_CALL_BODY)
+            .send(),
+    )
+    .await
+    .expect("the response head should not wait for the handler to finish")?;
+    assert_eq!(call.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        call.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), server.started.notified())
+        .await
+        .expect("tool handler should start");
+    let chunk = tokio::time::timeout(Duration::from_secs(5), call.chunk())
+        .await
+        .expect("a keep-alive comment should arrive while the handler runs")?
+        .expect("the stream should stay open while the handler runs");
+    assert!(
+        chunk.starts_with(b":"),
+        "expected an SSE comment before any message, got {chunk:?}"
+    );
+
+    drop(call);
+    drop(client);
+
+    tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
+        .await
+        .expect("RequestContext::ct should fire after client disconnect (negotiated SSE)");
 
     server.server_ct.cancel();
     Ok(())
