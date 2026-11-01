@@ -1724,6 +1724,9 @@ where
         // cancelled.
         let mut disconnect_guard = Some(request_ct.clone().drop_guard());
         let first = tokio::select! {
+            // A message that is ready when the deadline fires still decides
+            // the status: poll it first.
+            biased;
             message = receiver.recv() => {
                 if let Some(guard) = disconnect_guard.take() {
                     guard.disarm();
