@@ -271,15 +271,20 @@ fn malformed_body_response(
 ) -> Response<BoxBody<Bytes, Infallible>> {
     // A typed deserialize reports a shape error before it checks for trailing
     // bytes (`null trailing`), so check the whole body is JSON on its own.
-    let (id, error) = match serde_json::from_slice::<serde_json::Value>(body) {
+    // `IgnoredAny` checks syntax only: unlike `Value`, it accepts numbers such
+    // as `1e400` that are valid JSON but out of range without
+    // `arbitrary_precision`.
+    #[derive(serde::Deserialize)]
+    struct IdOnly {
+        id: RequestId,
+    }
+    let (id, error) = match serde_json::from_slice::<serde::de::IgnoredAny>(body) {
         Err(syntax) => (
             None,
             ErrorData::parse_error(format!("Parse error: {syntax}"), None),
         ),
-        Ok(value) => (
-            value
-                .get("id")
-                .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok()),
+        Ok(_) => (
+            serde_json::from_slice::<IdOnly>(body).ok().map(|v| v.id),
             ErrorData::invalid_request(format!("Invalid request: {e}"), None),
         ),
     };
@@ -427,6 +432,7 @@ mod tests {
     #[case::array("[]")]
     #[case::null_id(r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)]
     #[case::object_id(r#"{"jsonrpc":"2.0","id":{},"method":"ping"}"#)]
+    #[case::out_of_range_number("1e400")]
     #[tokio::test]
     async fn expect_json_answers_wrong_shape_with_400_invalid_request(#[case] body: &'static str) {
         let (status, error) = rejected_body(body).await;
@@ -439,6 +445,10 @@ mod tests {
     #[case::number_id(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#, serde_json::json!(1))]
     #[case::string_id(r#"{"jsonrpc":"1.0","id":"a","method":"ping"}"#, serde_json::json!("a"))]
     #[case::no_method(r#"{"jsonrpc":"2.0","id":7}"#, serde_json::json!(7))]
+    #[case::out_of_range_param(
+        r#"{"jsonrpc":"1.0","id":7,"method":"ping","params":{"n":1e400}}"#,
+        serde_json::json!(7)
+    )]
     #[tokio::test]
     async fn expect_json_echoes_readable_id_in_invalid_request(
         #[case] body: &'static str,
