@@ -4,12 +4,13 @@
     feature = "reqwest",
     feature = "transport-streamable-http-server"
 ))]
-//! SEP-2567 removes sessions and the standalone GET stream at 2026-07-28. A legacy-shaped
-//! handshake can still answer with an `Mcp-Session-Id` while negotiating that version; the
-//! client must not then echo the id or open the stream. That holds for every handshake that
-//! can settle on such a version — reached directly, reached as a fallback after
-//! `server/discover` is refused, or replacing an expired session after a 404 — and for a
-//! request that moves the transport there itself with its own `_meta.protocolVersion`.
+//! SEP-2567 removes sessions and SEP-2575 removes the standalone GET stream at 2026-07-28.
+//! A legacy-shaped handshake can still answer with an `Mcp-Session-Id` while negotiating
+//! that version; the client must not then echo the id or open the stream. That holds for
+//! every handshake that can settle on such a version — reached directly, reached as a
+//! fallback after `server/discover` is refused, or replacing an expired session after a
+//! 404 — and for a request that moves the transport there itself with its own
+//! `_meta.protocolVersion`.
 
 use std::{
     collections::VecDeque,
@@ -382,7 +383,7 @@ async fn connect_and_override_version(inline_version: ProtocolVersion) -> Record
 /// A handshake that settled on a version without sessions: nothing the server volunteered
 /// is echoed, and no standalone GET stream is opened.
 fn assert_session_dropped(recorder: &Recorder) {
-    // No standalone GET stream: SEP-2567 removed the endpoint at this version.
+    // No standalone GET stream: SEP-2575 removed the endpoint at this version.
     assert_eq!(
         recorder.get_requests(),
         Vec::new(),
