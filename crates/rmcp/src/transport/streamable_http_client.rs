@@ -93,7 +93,7 @@ fn request_version_headers(
 
 /// Decides whether a session id survives version negotiation.
 ///
-/// SEP-2567 removes sessions and the standalone GET endpoint at
+/// SEP-2567 removes sessions and SEP-2575 removes the standalone GET endpoint at
 /// [`ProtocolVersion::STANDARD_HEADERS`], so at that version an `Mcp-Session-Id` and a GET
 /// stream are both artifacts of a pre-`2026-07-28` server shape. A legacy-shaped handshake
 /// can still answer with a session id while negotiating that version; the id is dropped
