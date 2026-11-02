@@ -111,7 +111,7 @@ pub use auth::{
 // pub mod ws;
 #[cfg(feature = "transport-streamable-http-server-session")]
 pub mod streamable_http_server;
-#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
+#[cfg(feature = "transport-streamable-http-server")]
 pub use streamable_http_server::tower::{StreamableHttpServerConfig, StreamableHttpService};
 
 #[cfg(feature = "transport-streamable-http-client")]
