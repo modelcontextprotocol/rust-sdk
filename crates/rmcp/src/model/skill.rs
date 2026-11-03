@@ -268,10 +268,13 @@ impl Skill {
     /// Check the rules the spec puts on a skill entry that can be checked
     /// without reading any file.
     pub fn validate(&self) -> Result<(), SkillValidationError> {
-        let Some(name) = skill_name_from_uri(&self.uri) else {
+        let Some(encoded_name) = skill_name_from_uri(&self.uri) else {
             return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
         };
-        if name != self.frontmatter.name {
+        let name = self.name();
+        if name.contains(['/', '\\', '?', '#'])
+            || !percent_encoding::percent_decode_str(encoded_name).eq(name.bytes())
+        {
             return Err(SkillValidationError::NameMismatch {
                 uri: self.uri.clone(),
                 name: self.frontmatter.name.clone(),
@@ -740,6 +743,21 @@ mod tests {
         }
 
         #[test]
+        fn accepts_a_percent_encoded_unicode_name() {
+            for uri in [
+                "skill://caf%C3%A9/SKILL.md",
+                "skill://team/caf%c3%a9/SKILL.md",
+            ] {
+                let skill = Skill::new(
+                    uri,
+                    SkillFrontmatter::new("café", "Coffee recipes"),
+                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                );
+                assert_eq!(skill.validate(), Ok(()), "{uri}");
+            }
+        }
+
+        #[test]
         fn rejects_a_name_that_differs_from_the_uri() {
             let mut skill = billing_skill();
             skill.frontmatter.name = "invoices".into();
@@ -747,6 +765,28 @@ mod tests {
                 skill.validate(),
                 Err(SkillValidationError::NameMismatch { .. })
             ));
+        }
+
+        #[test]
+        fn rejects_invalid_encoded_name_matches() {
+            for (segment, name) in [
+                ("caf%FF", "café"),
+                ("caf%25C3%25A9", "café"),
+                ("coffee%2Ftea", "coffee/tea"),
+            ] {
+                let skill = Skill::new(
+                    format!("skill://team/{segment}/SKILL.md"),
+                    SkillFrontmatter::new(name, "Drinks"),
+                    SkillResources::Dynamic,
+                );
+                assert!(
+                    matches!(
+                        skill.validate(),
+                        Err(SkillValidationError::NameMismatch { .. })
+                    ),
+                    "{segment}"
+                );
+            }
         }
 
         #[test]
