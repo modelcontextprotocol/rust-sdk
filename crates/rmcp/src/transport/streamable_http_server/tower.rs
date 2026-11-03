@@ -30,10 +30,9 @@ use crate::{
         InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
         ProtocolVersion, RequestId, ServerConfig, ServerJsonRpcMessage, ServerResult,
     },
-    serve_server,
     service::{
         NotificationContext, RequestContext, Service, negotiate_protocol_version,
-        serve_directly_with_ct, uses_legacy_lifecycle,
+        serve_directly_with_ct, serve_server_with_ct, uses_legacy_lifecycle,
     },
     transport::{
         OneshotTransport, TransportAdapterIdentity,
@@ -1743,27 +1742,34 @@ where
             .map(|tool| tool.input_schema)
     }
 
-    /// Spawn a task that runs `serve_server` for the given session, waits for
-    /// it to finish, and then calls `close_session`.
+    /// Spawn a task that runs `serve_server_with_ct` for the given session,
+    /// waits for it to finish, and then calls `close_session`.
     ///
-    /// `init_done_tx`: when `Some`, the sender is fired after `serve_server`
-    /// returns successfully, signalling to the caller that the MCP handshake
-    /// is complete. Used by `try_restore_from_store` to synchronise with the
-    /// restore `initialize` replay; `handle_post` passes `None`.
+    /// The session inherits the server's cancellation token so cancelling the
+    /// server terminates stateful sessions as well as their response streams.
+    ///
+    /// `init_done_tx`: when `Some`, the sender is fired after the handshake
+    /// completes successfully, signalling to the caller that the session is
+    /// ready. Used by `try_restore_from_store` to synchronise with the restore
+    /// `initialize` replay; `handle_post` passes `None`.
     fn spawn_session_worker(
         session_manager: Arc<M>,
         session_id: SessionId,
         service: S,
         transport: M::Transport,
         init_done_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        cancellation_token: CancellationToken,
     ) where
         S: crate::ServerHandler + Send + 'static,
         M: SessionManager,
     {
         tokio::spawn(async move {
-            let svc =
-                serve_server::<S, M::Transport, _, TransportAdapterIdentity>(service, transport)
-                    .await;
+            let svc = serve_server_with_ct::<S, M::Transport, _, TransportAdapterIdentity>(
+                service,
+                transport,
+                cancellation_token,
+            )
+            .await;
             match svc {
                 Ok(svc) => {
                     if let Some(tx) = init_done_tx {
@@ -1918,6 +1924,7 @@ where
             service,
             transport,
             Some(init_done_tx),
+            self.config.cancellation_token.child_token(),
         );
 
         self.session_manager
@@ -2316,6 +2323,7 @@ where
                     service,
                     transport,
                     None,
+                    self.config.cancellation_token.child_token(),
                 );
                 // get initialize response
                 let response = self
