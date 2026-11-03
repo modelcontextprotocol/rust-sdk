@@ -57,7 +57,7 @@ indexmap = { version = "2", features = ["serde"] }
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
-percent-encoding = { version = "2", default-features = false }
+percent-encoding = { version = "2", default-features = false, features = ["alloc"] }
 pastey = { version = "0.2.0", optional = true }
 # oauth2 support
 oauth2 = { version = "5.0", optional = true, default-features = false }

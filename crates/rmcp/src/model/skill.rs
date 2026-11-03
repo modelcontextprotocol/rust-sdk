@@ -5,9 +5,9 @@
 //! `resources/read` serves the file bytes. The request and result wiring
 //! lives in the parent module next to the other methods.
 
-#[cfg(feature = "schemars")]
 use std::borrow::Cow;
 
+use percent_encoding::{CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -273,7 +273,7 @@ impl Skill {
         };
         let name = self.name();
         if name.contains(['/', '\\', '?', '#'])
-            || !percent_encoding::percent_decode_str(encoded_name).eq(name.bytes())
+            || !percent_decode_str(encoded_name).eq(name.bytes())
         {
             return Err(SkillValidationError::NameMismatch {
                 uri: self.uri.clone(),
@@ -328,7 +328,7 @@ fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> 
     let root = skill_uri.strip_suffix(SKILL_MD)?;
     let relative = resource_uri.strip_prefix(root)?;
     let (path, suffix) = relative.split_at(relative.find(['?', '#']).unwrap_or(relative.len()));
-    let path = normalize_path_encoding(path);
+    let path = normalize_percent_encoding(path);
     let mut segments = path.split('/');
     // An empty or dot-segment leaf resolves to a directory.
     let file = segments.next_back()?;
@@ -353,10 +353,13 @@ fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> 
 
 // RFC 3986 §6.2.2 decodes unreserved bytes and uppercases the hex digits in
 // other escapes. Reserved delimiters therefore stay encoded in the key.
-fn normalize_path_encoding(path: &str) -> String {
-    let mut parts = path.split('%');
-    let mut normalized = parts.next().unwrap_or_default().to_owned();
-    for part in parts {
+fn normalize_percent_encoding(value: &str) -> Cow<'_, str> {
+    let encoded: Cow<'_, str> = utf8_percent_encode(value, CONTROLS).into();
+    let Some((prefix, escaped)) = encoded.split_once('%') else {
+        return encoded;
+    };
+    let mut normalized = prefix.to_owned();
+    for part in escaped.split('%') {
         if let Some((hex, rest)) = part.split_at_checked(2)
             && hex.bytes().all(|b| b.is_ascii_hexdigit())
         {
@@ -373,7 +376,7 @@ fn normalize_path_encoding(path: &str) -> String {
             normalized.push_str(part);
         }
     }
-    normalized
+    Cow::Owned(normalized)
 }
 
 /// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
@@ -388,7 +391,7 @@ pub fn validate_skills(skills: &[Skill]) -> Result<(), SkillValidationError> {
     let mut seen = std::collections::HashSet::with_capacity(skills.len());
     for skill in skills {
         skill.validate()?;
-        if !seen.insert(skill.uri.as_str()) {
+        if !seen.insert(normalize_percent_encoding(&skill.uri)) {
             return Err(SkillValidationError::DuplicateSkill(skill.uri.clone()));
         }
     }
@@ -851,6 +854,28 @@ mod tests {
                 validate_skills(&skills),
                 Err(SkillValidationError::DuplicateSkill(_))
             ));
+        }
+
+        #[test]
+        fn rejects_equivalent_percent_encodings_of_a_skill_uri() {
+            let skill = |uri| {
+                Skill::new(
+                    uri,
+                    SkillFrontmatter::new("résumé", "Résumé templates"),
+                    SkillResources::Dynamic,
+                )
+            };
+            let uri = "skill://team/r%C3%A9sum%C3%A9/SKILL.md";
+            for alias in [
+                "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
+                "skill://team/%72%C3%A9sum%C3%A9/SKILL.md",
+                "skill://team/résumé/SKILL.md",
+            ] {
+                assert_eq!(
+                    validate_skills(&[skill(uri), skill(alias)]),
+                    Err(SkillValidationError::DuplicateSkill(alias.into()))
+                );
+            }
         }
     }
 
