@@ -12,6 +12,7 @@ use crate::{
     model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
+            client_side_body::{read_bounded_body, read_truncated_body},
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -195,13 +196,13 @@ impl StreamableHttpClient for reqwest::Client {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.post_message_with_max_sse_event_size(
+        self.post_message_with_response_limits(
             uri,
             message,
             session_id,
             auth_token,
             custom_headers,
-            DEFAULT_MAX_SSE_EVENT_SIZE,
+            StreamableHttpResponseLimits::default(),
         )
         .await
     }
@@ -214,6 +215,29 @@ impl StreamableHttpClient for reqwest::Client {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        self.post_message_with_response_limits(
+            uri,
+            message,
+            session_id,
+            auth_token,
+            custom_headers,
+            StreamableHttpResponseLimits {
+                max_sse_event_size,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    async fn post_message_with_response_limits(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        limits: StreamableHttpResponseLimits,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .post(uri.as_ref())
@@ -312,17 +336,24 @@ impl StreamableHttpClient for reqwest::Client {
         // Non-success responses may carry valid JSON-RPC error payloads that
         // should be surfaced as McpError rather than lost in TransportSend.
         if !status.is_success() {
-            let body = response
-                .text()
+            // JSON-RPC errors need the same complete-body limit as success
+            // messages. Other bodies are diagnostics: retain only a prefix so
+            // large legacy error pages can still reach discovery fallback.
+            let body = if is_json_response {
+                read_bounded_body(
+                    response.bytes_stream(),
+                    content_length,
+                    limits.max_json_response_size,
+                )
                 .await
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
-            // Must precede the JSON-RPC branch below, which would forward a
-            // discover rejection with an id the lifecycle cannot correlate.
-            if let Some(response) =
-                legacy_discover_response(&message, session_was_attached, status, &body)
-            {
-                return Ok(response);
-            }
+            } else {
+                read_truncated_body(response.bytes_stream(), limits.max_error_response_size).await
+            };
+            let body = match body {
+                Ok(body) => body,
+                Err(StreamableHttpError::Client(_)) => b"<failed to read response body>".to_vec(),
+                Err(error) => return Err(error),
+            };
             // A 401/403 without a challenge (those with one returned above)
             // must keep its status rather than pass as an ordinary JSON-RPC
             // error, matching `legacy_discover_response`.
@@ -331,14 +362,35 @@ impl StreamableHttpClient for reqwest::Client {
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
             );
             if !is_auth_failure && is_json_response {
-                match parse_json_rpc_error(&body) {
-                    Some(message) => {
-                        return Ok(StreamableHttpPostResponse::Json(message, session_id));
+                let full_body = String::from_utf8_lossy(&body);
+                match parse_json_rpc_error(&full_body) {
+                    Some(error_message) => {
+                        // Must precede returning the raw JSON-RPC error, which
+                        // would forward a discover rejection with an id the
+                        // lifecycle cannot correlate.
+                        if let Some(response) = legacy_discover_response(
+                            &message,
+                            session_was_attached,
+                            status,
+                            &full_body,
+                        ) {
+                            return Ok(response);
+                        }
+                        return Ok(StreamableHttpPostResponse::Json(error_message, session_id));
                     }
                     None => tracing::warn!(
                         "HTTP {status}: could not parse JSON body as a JSON-RPC error"
                     ),
                 }
+            }
+            // Even malformed/non-error JSON gets only a diagnostic prefix.
+            // Truncate raw bytes before lossy UTF-8 conversion, never a String.
+            let body =
+                String::from_utf8_lossy(&body[..body.len().min(limits.max_error_response_size)]);
+            if let Some(response) =
+                legacy_discover_response(&message, session_was_attached, status, &body)
+            {
+                return Ok(response);
             }
             if let Some(error) = status_error {
                 return Err(error.into());
@@ -349,7 +401,8 @@ impl StreamableHttpClient for reqwest::Client {
         }
         match content_type.as_deref() {
             Some(ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
-                let event_stream = bounded_sse_stream(response.bytes_stream(), max_sse_event_size);
+                let event_stream =
+                    bounded_sse_stream(response.bytes_stream(), limits.max_sse_event_size);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
             }
             Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
@@ -357,7 +410,29 @@ impl StreamableHttpClient for reqwest::Client {
                 // reply. Treat an unusable JSON body as Accepted. A request
                 // still needs a reply; the same body is an error so the worker
                 // does not wait on SSE forever.
-                let body = response.bytes().await?;
+                let body = match read_bounded_body(
+                    response.bytes_stream(),
+                    content_length,
+                    limits.max_json_response_size,
+                )
+                .await
+                {
+                    Ok(body) => body,
+                    Err(StreamableHttpError::Client(error))
+                        if matches!(
+                            message,
+                            ClientJsonRpcMessage::Notification(_)
+                                | ClientJsonRpcMessage::Response(_)
+                                | ClientJsonRpcMessage::Error(_)
+                        ) =>
+                    {
+                        tracing::warn!(
+                            "could not read JSON response, treating as accepted: {error}"
+                        );
+                        return Ok(StreamableHttpPostResponse::Accepted);
+                    }
+                    Err(error) => return Err(error),
+                };
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
                     Err(e)

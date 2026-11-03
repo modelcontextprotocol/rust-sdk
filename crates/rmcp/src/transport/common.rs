@@ -15,6 +15,12 @@ mod reqwest;
 #[cfg(feature = "client-side-sse")]
 pub mod client_side_sse;
 
+#[cfg(any(
+    feature = "transport-streamable-http-client-reqwest",
+    all(unix, feature = "transport-streamable-http-client-unix-socket")
+))]
+pub(crate) mod client_side_body;
+
 #[cfg(feature = "auth")]
 pub mod auth;
 
