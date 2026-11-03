@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use http::{HeaderName, HeaderValue, Method, Request, StatusCode, header::WWW_AUTHENTICATE};
+use http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
@@ -16,7 +16,7 @@ use crate::{
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-                extract_scope_from_header, validate_custom_header,
+                validate_custom_header,
             },
         },
         streamable_http_client::*,
@@ -226,37 +226,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         let status = response.status();
 
-        if status == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
-        }
-
-        if status == StatusCode::FORBIDDEN
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let header_str = header.to_str().map_err(|_| {
-                StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                    "invalid www-authenticate header value",
-                ))
-            })?;
-            let scope = extract_scope_from_header(header_str);
-            return Err(StreamableHttpError::InsufficientScope(
-                InsufficientScopeError {
-                    www_authenticate_header: header_str.to_string(),
-                    required_scope: scope,
-                },
-            ));
+        if let Some(error) = auth_challenge_error(status, response.headers())? {
+            return Err(error);
         }
 
         if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
@@ -453,37 +424,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
 
-        if response.status() == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
-        }
-
-        if response.status() == StatusCode::FORBIDDEN
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let header_str = header.to_str().map_err(|_| {
-                StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                    "invalid www-authenticate header value",
-                ))
-            })?;
-            let scope = extract_scope_from_header(header_str);
-            return Err(StreamableHttpError::InsufficientScope(
-                InsufficientScopeError {
-                    www_authenticate_header: header_str.to_string(),
-                    required_scope: scope,
-                },
-            ));
+        if let Some(error) = auth_challenge_error(response.status(), response.headers())? {
+            return Err(error);
         }
 
         if !response.status().is_success() {
