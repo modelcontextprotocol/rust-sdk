@@ -285,13 +285,13 @@ impl Skill {
         }
         let mut seen = std::collections::HashSet::with_capacity(files.len());
         for file in files {
-            if !resource_is_within_skill(&self.uri, &file.uri) {
+            let Some(key) = manifest_resource_key(&self.uri, &file.uri) else {
                 return Err(SkillValidationError::ResourceOutsideSkill {
                     uri: file.uri.clone(),
                     skill_uri: self.uri.clone(),
                 });
-            }
-            if !seen.insert(file.uri.as_str()) {
+            };
+            if !seen.insert(key) {
                 return Err(SkillValidationError::DuplicateResource(file.uri.clone()));
             }
             if !is_sha256_digest(&file.digest) {
@@ -318,41 +318,59 @@ pub fn skill_name_from_uri(uri: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-fn resource_is_within_skill(skill_uri: &str, resource_uri: &str) -> bool {
+/// Comparison key for a file under this skill's root. Reads use the advertised URI.
+fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> {
     // Keep the trailing slash to distinguish a child from a sibling whose
     // directory name merely starts with the skill's name, under any scheme.
-    let Some(relative) = skill_uri
-        .strip_suffix(SKILL_MD)
-        .and_then(|root| resource_uri.strip_prefix(root))
-    else {
-        return false;
-    };
-    let path = relative.split(['?', '#']).next().unwrap_or_default();
-    // Decode unreserved dots without turning a reserved %2F into a separator.
-    let mut segments = path
-        .split('/')
-        .map(|segment| segment.replace("%2e", ".").replace("%2E", "."));
+    let root = skill_uri.strip_suffix(SKILL_MD)?;
+    let relative = resource_uri.strip_prefix(root)?;
+    let (path, suffix) = relative.split_at(relative.find(['?', '#']).unwrap_or(relative.len()));
+    let path = normalize_path_encoding(path);
+    let mut segments = path.split('/');
     // An empty or dot-segment leaf resolves to a directory.
-    if matches!(
-        segments.next_back().as_deref(),
-        None | Some("" | "." | "..")
-    ) {
-        return false;
+    let file = segments.next_back()?;
+    if matches!(file, "" | "." | "..") {
+        return None;
     }
-    let mut depth = 0usize;
+    let mut resolved = Vec::new();
     for segment in segments {
-        match segment.as_str() {
+        match segment {
             "." => {}
             ".." => {
-                let Some(parent) = depth.checked_sub(1) else {
-                    return false;
-                };
-                depth = parent;
+                resolved.pop()?;
             }
-            _ => depth += 1,
+            _ => resolved.push(segment),
         }
     }
-    true
+    resolved.push(file);
+    let mut key = resolved.join("/");
+    key.push_str(suffix);
+    Some(key)
+}
+
+// RFC 3986 §6.2.2 decodes unreserved bytes and uppercases the hex digits in
+// other escapes. Reserved delimiters therefore stay encoded in the key.
+fn normalize_path_encoding(path: &str) -> String {
+    let mut parts = path.split('%');
+    let mut normalized = parts.next().unwrap_or_default().to_owned();
+    for part in parts {
+        if let Some((hex, rest)) = part.split_at_checked(2)
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            let byte = u8::from_str_radix(hex, 16).expect("two hex digits");
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                normalized.push(char::from(byte));
+            } else {
+                normalized.push('%');
+                normalized.push_str(&hex.to_ascii_uppercase());
+            }
+            normalized.push_str(rest);
+        } else {
+            normalized.push('%');
+            normalized.push_str(part);
+        }
+    }
+    normalized
 }
 
 /// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
@@ -657,23 +675,34 @@ mod tests {
     #[test]
     fn manifest_paths_must_resolve_to_files_within_the_skill_directory() {
         let skill_uri = "custom:skills/billing/SKILL.md";
-        for (path, valid) in [
-            ("refunds/SKILL.md", true),
-            ("refs/./guide.md", true),
-            ("refs/../invoice.md", true),
-            ("refs/%2e%2E/invoice.md", true),
-            ("refs%2F..%2F..%2Fguide.md?ref=/../../other", true),
-            ("invoice.md#ref/../../other", true),
-            ("refs/../../invoice.md", false),
-            (".%2E/invoice.md", false),
-            ("refs/", false),
-            ("refs/.", false),
-            ("refs/sub/..", false),
-            ("refs/%2E?file=invoice.md", false),
-            ("refs/sub/.%2e#invoice.md", false),
+        for (path, key) in [
+            ("refunds/SKILL.md", Some("refunds/SKILL.md")),
+            ("refs/./guide.md", Some("refs/guide.md")),
+            ("refs/../invoice.md", Some("invoice.md")),
+            ("refs/%2e%2E/invoice.md", Some("invoice.md")),
+            ("refs//invoice.md", Some("refs//invoice.md")),
+            (
+                "refs%2fguide.md?ref=/../../other",
+                Some("refs%2Fguide.md?ref=/../../other"),
+            ),
+            (
+                "invoice.md#ref/../../other",
+                Some("invoice.md#ref/../../other"),
+            ),
+            ("refs/../../invoice.md", None),
+            (".%2E/invoice.md", None),
+            ("refs/", None),
+            ("refs/.", None),
+            ("refs/sub/..", None),
+            ("refs/%2E?file=invoice.md", None),
+            ("refs/sub/.%2e#invoice.md", None),
         ] {
             let uri = format!("custom:skills/billing/{path}");
-            assert_eq!(resource_is_within_skill(skill_uri, &uri), valid, "{path}");
+            assert_eq!(
+                manifest_resource_key(skill_uri, &uri).as_deref(),
+                key,
+                "{path}"
+            );
         }
     }
 
@@ -684,8 +713,9 @@ mod tests {
             "skill://other/billing/invoice.md",
             "github://acme/billing/invoice.md",
         ] {
-            assert!(
-                !resource_is_within_skill("skill://acme/billing/SKILL.md", uri),
+            assert_eq!(
+                manifest_resource_key("skill://acme/billing/SKILL.md", uri),
+                None,
                 "{uri}"
             );
         }
@@ -740,6 +770,21 @@ mod tests {
                 skill.validate(),
                 Err(SkillValidationError::DuplicateResource(_))
             ));
+        }
+
+        #[test]
+        fn rejects_two_spellings_of_the_same_manifest_file() {
+            let file =
+                |path: &str| SkillResource::from_bytes(format!("skill://acme/billing/{path}"), b"");
+            let mut skill = billing_skill();
+            let entry = file("SKILL.md");
+            let alias = file("refs/../%69nvoice.md");
+            skill.resources = SkillResources::Files(vec![entry.clone(), alias.clone()]);
+            assert_eq!(skill.validate(), Ok(()));
+
+            let duplicate = SkillValidationError::DuplicateResource(alias.uri.clone());
+            skill.resources = SkillResources::Files(vec![entry, file("invoice.md"), alias]);
+            assert_eq!(skill.validate(), Err(duplicate));
         }
 
         #[test]
