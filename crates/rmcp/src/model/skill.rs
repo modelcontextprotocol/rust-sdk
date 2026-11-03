@@ -745,12 +745,12 @@ mod tests {
         #[test]
         fn accepts_a_percent_encoded_unicode_name() {
             for uri in [
-                "skill://caf%C3%A9/SKILL.md",
-                "skill://team/caf%c3%a9/SKILL.md",
+                "skill://r%C3%A9sum%C3%A9/SKILL.md",
+                "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
             ] {
                 let skill = Skill::new(
                     uri,
-                    SkillFrontmatter::new("café", "Coffee recipes"),
+                    SkillFrontmatter::new("résumé", "Résumé templates"),
                     SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
                 );
                 assert_eq!(skill.validate(), Ok(()), "{uri}");
@@ -770,8 +770,8 @@ mod tests {
         #[test]
         fn rejects_invalid_encoded_name_matches() {
             for (segment, name) in [
-                ("caf%FF", "café"),
-                ("caf%25C3%25A9", "café"),
+                ("r%FFsum%C3%A9", "résumé"),
+                ("r%25C3%25A9sum%25C3%25A9", "résumé"),
                 ("coffee%2Ftea", "coffee/tea"),
             ] {
                 let skill = Skill::new(
