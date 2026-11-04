@@ -509,3 +509,13 @@ path = "tests/test_sep_2260_stream_routing.rs"
 name = "test_streamable_http_status_metadata"
 path = "tests/test_streamable_http_status_metadata.rs"
 required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
+
+[[test]]
+name = "test_streamable_http_response_limits"
+path = "tests/test_streamable_http_response_limits.rs"
+required-features = ["transport-streamable-http-client-reqwest"]
+
+[[test]]
+name = "test_unix_socket_response_limits"
+path = "tests/test_unix_socket_response_limits.rs"
+required-features = ["transport-streamable-http-client-unix-socket"]

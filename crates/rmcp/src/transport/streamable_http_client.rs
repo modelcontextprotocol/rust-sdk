@@ -228,6 +228,9 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     UnexpectedEndOfStream,
     #[error("unexpected server response: {0}")]
     UnexpectedServerResponse(Cow<'static, str>),
+    /// A non-streaming HTTP response exceeded the client's byte limit.
+    #[error("HTTP response body exceeded the maximum size of {max_size} bytes")]
+    ResponseBodyTooLarge { max_size: usize },
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     #[error("Server does not support SSE")]
@@ -451,6 +454,14 @@ pub(super) fn legacy_discover_response(
 }
 
 /// HTTP backend used by [`StreamableHttpClientTransport`].
+///
+/// The built-in reqwest and Unix socket clients limit successful JSON response
+/// bodies to 16 MiB and non-success response bodies to 64 KiB. These fixed limits
+/// count bytes before parsing (after decompression, when enabled in reqwest),
+/// independently of the SSE event-size setting. Oversized bodies are rejected,
+/// not truncated and parsed; reqwest JSON 5xx failures retain HTTP status metadata.
+/// Custom clients must enforce their own limits on non-streaming response bodies.
+/// These are size limits, not timeouts for servers that stop sending data.
 ///
 /// Custom implementations that parse SSE responses must override
 /// [`Self::post_message_with_max_sse_event_size`] and

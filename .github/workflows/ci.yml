@@ -320,6 +320,11 @@ jobs:
                       | select(. != "local")] | join(",")')
           cargo test -p rmcp --features "$FEATURES"
 
+      - name: Run response-limit tests with reqwest charset
+        run: |
+          cargo test -p rmcp --test test_streamable_http_response_limits \
+            --features client,transport-streamable-http-client-reqwest,reqwest/charset
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
