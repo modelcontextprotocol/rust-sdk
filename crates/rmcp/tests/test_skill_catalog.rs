@@ -333,6 +333,25 @@ mod serving {
     }
 
     #[test]
+    fn should_omit_the_mime_type_of_an_unknown_extension() {
+        let dir = skills_tree();
+        write(dir.path(), "pdf-processing/data.bin", "DATA");
+        let catalog = load(&dir);
+
+        let result = catalog
+            .read_resource("skill://pdf-processing/data.bin")
+            .expect("served");
+
+        assert!(matches!(
+            &result.contents[0],
+            ResourceContents::BlobResourceContents {
+                mime_type: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn should_return_none_for_a_uri_it_does_not_serve() {
         let dir = skills_tree();
 

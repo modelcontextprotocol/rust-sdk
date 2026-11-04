@@ -3,7 +3,8 @@
 //! Each folder below the root that holds a `SKILL.md` is a skill, served at
 //! `skill://<path from the root>/SKILL.md`. A folder of skills can nest other
 //! skills: the nested skill is listed on its own, and its files also appear
-//! in the manifest of every skill above it.
+//! in the manifest of every skill above it. Hidden entries, whose names
+//! start with `.`, are neither listed nor served.
 //!
 //! A server delegates the skills methods and `resources/read` to the catalog:
 //!
@@ -210,16 +211,20 @@ impl SkillCatalog {
     pub fn read_resource(&self, uri: &str) -> Option<ReadResourceResult> {
         let snapshot = self.current();
         let file = snapshot.files.get(uri)?;
-        let text = is_textual(file.mime_type)
+        let text = file
+            .mime_type
+            .is_some_and(is_textual)
             .then(|| std::str::from_utf8(&file.bytes).ok())
             .flatten();
         let contents = match text {
             Some(text) => ResourceContents::text(text, uri),
             None => ResourceContents::blob(BASE64_STANDARD.encode(&file.bytes), uri),
         };
-        Some(ReadResourceResult::new(vec![
-            contents.with_mime_type(file.mime_type),
-        ]))
+        let contents = match file.mime_type {
+            Some(mime_type) => contents.with_mime_type(mime_type),
+            None => contents,
+        };
+        Some(ReadResourceResult::new(vec![contents]))
     }
 
     /// The answer to `resources/directory/read`; `-32602` when `uri` is not a
@@ -255,7 +260,7 @@ struct Snapshot {
 #[derive(Debug)]
 struct CatalogFile {
     bytes: Arc<[u8]>,
-    mime_type: &'static str,
+    mime_type: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,11 +395,9 @@ fn directory_child(entry: &Entry, files: &HashMap<String, CatalogFile>) -> Optio
         Kind::Directory => Some(Resource::new(uri, name).with_mime_type(DIRECTORY_MIME_TYPE)),
         Kind::File => {
             let file = files.get(&uri)?;
-            Some(
-                Resource::new(uri, name)
-                    .with_mime_type(file.mime_type)
-                    .with_size(file.bytes.len() as u64),
-            )
+            let mut resource = Resource::new(uri, name).with_size(file.bytes.len() as u64);
+            resource.mime_type = file.mime_type.map(Into::into);
+            Some(resource)
         }
         Kind::Unsupported => None,
     }
@@ -583,11 +586,12 @@ fn is_textual(mime_type: &str) -> bool {
         )
 }
 
-fn mime_type_of(path: &str) -> &'static str {
+/// `None` for an unknown extension, so `mimeType` is omitted.
+fn mime_type_of(path: &str) -> Option<&'static str> {
     let extension = file_name(path)
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase());
-    match extension.as_deref() {
+    let mime_type = match extension.as_deref() {
         Some("md" | "markdown") => MARKDOWN_MIME_TYPE,
         Some("txt") => "text/plain",
         Some("html" | "htm") => "text/html",
@@ -609,6 +613,7 @@ fn mime_type_of(path: &str) -> &'static str {
         Some("webp") => "image/webp",
         Some("pdf") => "application/pdf",
         Some("zip") => "application/zip",
-        _ => "application/octet-stream",
-    }
+        _ => return None,
+    };
+    Some(mime_type)
 }
