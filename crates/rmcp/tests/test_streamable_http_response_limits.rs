@@ -353,7 +353,7 @@ fn assert_outcome(result: PostResult, expected: Outcome) {
     Framing::Chunked,
     End::Hold
 )]
-#[case::notification_unparseable_not_accepted(
+#[case::notification_unparsable_not_accepted(
     Message::Notification,
     Payload::Text,
     Framing::Length,
@@ -657,21 +657,21 @@ async fn body_free_responses_ignore_the_declared_size(
 // Run this suite with and without `reqwest/charset`: Cargo can enable the
 // dependency feature through another consumer without an rmcp feature flag.
 #[rstest::rstest]
-#[case::windows_1252("text/plain; charset=windows-1252", b"caf\xe9 \x80")]
-#[case::quoted_charset("text/plain; charset=\"windows-1252\"", b"caf\xe9")]
+#[case::windows_1252("text/plain; charset=windows-1252", b"\xe9t\xe9 \x80")]
+#[case::quoted_charset("text/plain; charset=\"windows-1252\"", b"\xe9t\xe9")]
 #[case::shift_jis(
     "text/plain; charset=shift_jis",
     b"\x82\xb1\x82\xf1\x82\xc9\x82\xbf\x82\xcd"
 )]
 #[case::utf16_bom("text/plain; charset=windows-1252", b"\xff\xfec\0a\0f\0\xe9\0")]
-#[case::utf8_bom("text/plain", b"\xef\xbb\xbfcaf\xc3\xa9")]
-#[case::unknown_charset("text/plain; charset=unknown", b"caf\xc3\xa9")]
+#[case::utf8_bom("text/plain", b"\xef\xbb\xbf\xc3\xa9t\xc3\xa9")]
+#[case::unknown_charset("text/plain; charset=unknown", b"\xc3\xa9t\xc3\xa9")]
 #[case::invalid_utf8("text/plain; charset=utf-8", b"bad \xff")]
-#[case::malformed_content_type("text/plain; charset=", b"caf\xc3\xa9")]
+#[case::malformed_content_type("text/plain; charset=", b"\xc3\xa9t\xc3\xa9")]
 #[case::empty("text/plain; charset=windows-1252", b"")]
 #[case::json_error(
     "application/json; charset=windows-1252",
-    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"caf\xe9\"}}"
+    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"\xe9t\xe9\"}}"
 )]
 #[case::json_error_utf16_bom("application/json; charset=utf-16le", b"\xff\xfe{\0}\0")]
 #[tokio::test]
