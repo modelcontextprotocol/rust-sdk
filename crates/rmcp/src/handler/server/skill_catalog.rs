@@ -326,20 +326,21 @@ impl Snapshot {
         }
 
         let mut bytes_of: HashMap<&str, Arc<[u8]>> = HashMap::new();
-        for entry in kept.iter().flat_map(|(_, entries)| entries.iter()) {
-            if entry.kind == Kind::File && !bytes_of.contains_key(entry.path.as_str()) {
-                let bytes =
-                    read_bounded(&handle, &entry.path).map_err(|source| SkillCatalogError::Io {
-                        path: root.join(&entry.path),
-                        source,
-                    })?;
-                bytes_of.insert(&entry.path, bytes.into());
+        let mut within_limit: Vec<(&str, &[&Entry])> = Vec::new();
+        for (dir, entries) in kept {
+            if read_within_limit(&handle, root, entries, &mut bytes_of)? {
+                within_limit.push((dir, entries));
+            } else {
+                tracing::warn!(
+                    skill = %dir,
+                    "skipping skill: grew past {SKILL_BYTE_LIMIT} bytes after the walk"
+                );
             }
         }
 
         let mut snapshot = Snapshot::default();
         let mut directories: BTreeSet<&str> = BTreeSet::new();
-        for (dir, entries) in kept {
+        for (dir, entries) in within_limit {
             let (skill, listing) = match build_skill(dir, entries, &bytes_of) {
                 Ok(built) => built,
                 Err(reason) => {
@@ -412,10 +413,10 @@ fn check_walked(entries: &[&Entry]) -> Result<(), String> {
         ));
     }
     let files = entries.iter().filter(|entry| entry.kind == Kind::File);
-    check_limits(files.clone().count(), files.map(|entry| entry.size).sum())
-}
-
-fn check_limits(files: usize, bytes: u64) -> Result<(), String> {
+    let (files, bytes) = (
+        files.clone().count(),
+        files.map(|entry| entry.size).sum::<u64>(),
+    );
     if files > SKILL_FILE_LIMIT || bytes > SKILL_BYTE_LIMIT {
         return Err(format!(
             "{files} files and {bytes} bytes exceed the limit of {SKILL_FILE_LIMIT} files or \
@@ -425,15 +426,41 @@ fn check_limits(files: usize, bytes: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Read at most one byte past the skill limit, so a file that grew after the
-/// walk cannot exhaust memory; the limit check on the bytes then rejects it.
-fn read_bounded(handle: &Dir, path: &str) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    handle
-        .open(path)?
-        .take(SKILL_BYTE_LIMIT + 1)
-        .read_to_end(&mut bytes)?;
-    Ok(bytes)
+/// Read the files of one skill into `bytes_of` under one running budget, so a
+/// file that grew after the walk cannot exhaust memory. `false` when the skill
+/// passed the limit; a truncated read is never cached.
+fn read_within_limit<'a>(
+    handle: &Dir,
+    root: &Path,
+    entries: &[&'a Entry],
+    bytes_of: &mut HashMap<&'a str, Arc<[u8]>>,
+) -> Result<bool, SkillCatalogError> {
+    let mut budget = SKILL_BYTE_LIMIT + 1;
+    for entry in entries.iter().filter(|entry| entry.kind == Kind::File) {
+        let len = match bytes_of.get(entry.path.as_str()) {
+            Some(bytes) => bytes.len() as u64,
+            None => {
+                let mut bytes = Vec::new();
+                handle
+                    .open(&entry.path)
+                    .and_then(|file| file.take(budget).read_to_end(&mut bytes))
+                    .map_err(|source| SkillCatalogError::Io {
+                        path: root.join(&entry.path),
+                        source,
+                    })?;
+                let len = bytes.len() as u64;
+                if len < budget {
+                    bytes_of.insert(&entry.path, bytes.into());
+                }
+                len
+            }
+        };
+        budget = budget.saturating_sub(len);
+        if budget == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn build_skill(
@@ -453,8 +480,6 @@ fn build_skill(
         .map(|entry| SkillResource::from_bytes(uri_of(&entry.path), &bytes_of[entry.path.as_str()]))
         .collect();
     files.sort_by(|a, b| a.uri.cmp(&b.uri));
-
-    check_limits(files.len(), files.iter().map(|file| file.size).sum())?;
 
     let uri = uri_of(&manifest_path);
     let listing = Resource::new(&uri, &frontmatter.name)
@@ -616,4 +641,36 @@ fn mime_type_of(path: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(mime_type)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use super::*;
+
+    #[test]
+    fn read_within_limit_should_stop_at_the_budget_and_not_cache_the_truncated_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            File::create(dir.path().join(name))
+                .unwrap()
+                .set_len(SKILL_BYTE_LIMIT)
+                .unwrap();
+        }
+        // Sizes the walk recorded before the files grew.
+        let stale = |name: &str| Entry {
+            path: name.to_string(),
+            kind: Kind::File,
+            size: 1,
+        };
+        let (a, b) = (stale("a"), stale("b"));
+        let handle = Dir::open_ambient_dir(dir.path(), ambient_authority()).unwrap();
+        let mut bytes_of = HashMap::new();
+
+        let within = read_within_limit(&handle, dir.path(), &[&a, &b], &mut bytes_of).unwrap();
+
+        assert!(!within);
+        assert_eq!(bytes_of.keys().collect::<Vec<_>>(), vec![&"a"]);
+    }
 }
