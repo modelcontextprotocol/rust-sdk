@@ -1266,6 +1266,8 @@ pub struct AuthorizationManager {
     application_type: Option<String>,
     allow_missing_issuer: bool,
     allow_private_metadata_addresses: bool,
+    /// Scopes the caller asked to send on refresh. `None` omits the parameter.
+    refresh_scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1578,6 +1580,7 @@ impl AuthorizationManager {
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
             allow_missing_issuer: false,
             allow_private_metadata_addresses: false,
+            refresh_scopes: None,
         };
 
         Ok(manager)
@@ -1586,6 +1589,19 @@ impl AuthorizationManager {
     /// Set the scope upgrade configuration
     pub fn set_scope_upgrade_config(&mut self, config: ScopeUpgradeConfig) {
         self.scope_upgrade_config = config;
+    }
+
+    /// Set the scopes to include on a refresh-token request.
+    ///
+    /// RFC 6749 §6 makes `scope` optional. Refresh omits it unless the caller
+    /// sets one here. A scope that was not part of the original grant is not
+    /// sent. An empty list omits the parameter again.
+    pub fn set_refresh_scopes<I, S>(&mut self, scopes: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.refresh_scopes = Some(scopes.into_iter().map(Into::into).collect());
     }
 
     /// Configure whether authorization server metadata discovery tolerates a
@@ -2123,6 +2139,28 @@ impl AuthorizationManager {
         Self::dedup_scopes(scopes)
     }
 
+    /// Scopes to put on a refresh request.
+    ///
+    /// `None` or an empty list omits the parameter. Otherwise only scopes from
+    /// the original grant are kept. When that grant was not recorded, the
+    /// caller-provided scopes are used as-is.
+    fn refresh_request_scopes(explicit: Option<&[String]>, granted: &[String]) -> Vec<String> {
+        let Some(explicit) = explicit.filter(|scopes| !scopes.is_empty()) else {
+            return Vec::new();
+        };
+        if granted.is_empty() {
+            return Self::dedup_scopes(explicit.to_vec());
+        }
+        let granted_set: HashSet<&str> = granted.iter().map(String::as_str).collect();
+        Self::dedup_scopes(
+            explicit
+                .iter()
+                .filter(|scope| granted_set.contains(scope.as_str()))
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// deduplicate scopes preserving first-seen order (SEP-2350: stable for testability)
     fn dedup_scopes(scopes: Vec<String>) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
@@ -2561,10 +2599,21 @@ impl AuthorizationManager {
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
-        let requested_scopes = stored_credentials.granted_scopes.clone();
-        for scope in requested_scopes.iter().cloned() {
+        // RFC 6749 §6: `scope` is optional on refresh and must not exceed the
+        // original grant. Omit it unless the caller set scopes explicitly.
+        let granted_scopes = stored_credentials.granted_scopes.clone();
+        let scopes_to_send =
+            Self::refresh_request_scopes(self.refresh_scopes.as_deref(), &granted_scopes);
+        for scope in scopes_to_send.iter().cloned() {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
+        // Omitting `scope` asks for the original grant. Keep that as the
+        // fallback when the token response also omits `scope` (RFC 6749 §5.1).
+        let requested_scopes = if scopes_to_send.is_empty() {
+            granted_scopes
+        } else {
+            scopes_to_send
+        };
         let mut token_result = match refresh_request
             .request_async(&OAuth2HttpClient {
                 client: self.http_client.as_ref(),
@@ -10015,6 +10064,7 @@ mod tests {
         }))
         .await;
         manager.configure_client(test_client_config()).unwrap();
+        manager.set_refresh_scopes(["read", "write"]);
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
@@ -10091,6 +10141,7 @@ mod tests {
         }))
         .await;
         manager.configure_client(test_client_config()).unwrap();
+        manager.set_refresh_scopes(["read"]);
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
@@ -10130,6 +10181,7 @@ mod tests {
         }))
         .await;
         manager.configure_client(test_client_config()).unwrap();
+        manager.set_refresh_scopes(["read", "offline_access"]);
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
@@ -10190,6 +10242,45 @@ mod tests {
         assert!(
             !params.contains_key("scope"),
             "scope should be absent when granted_scopes is empty, body: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_token_omits_scope_unless_caller_sets_one() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        // The token response recorded these scopes. That must not put `scope`
+        // on the refresh by itself: Salesforce rejects the parameter, and
+        // RFC 6749 §6 says omitting it keeps the original grant.
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["mcp_api".to_string(), "refresh_token".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert!(
+            !params.contains_key("scope"),
+            "scope should be absent when the caller did not set one, body: {body}"
         );
     }
 
