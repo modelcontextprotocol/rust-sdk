@@ -272,6 +272,9 @@ const DEFAULT_APPLICATION_TYPE: &str = "native";
 #[non_exhaustive]
 pub struct StoredCredentials {
     pub client_id: String,
+    /// Client authentication material required for token refresh after restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<ClientSecret>,
     pub token_response: Option<OAuthTokenResponse>,
     #[serde(default)]
     pub granted_scopes: Vec<String>,
@@ -285,6 +288,10 @@ impl std::fmt::Debug for StoredCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoredCredentials")
             .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field(
                 "token_response",
                 &self.token_response.as_ref().map(|_| "[REDACTED]"),
@@ -306,11 +313,18 @@ impl StoredCredentials {
     ) -> Self {
         Self {
             client_id,
+            client_secret: None,
             token_response,
             granted_scopes,
             token_received_at,
             issuer: None,
         }
+    }
+
+    /// Retain client authentication with the token grant. Empty secrets denote public clients.
+    pub fn with_client_secret(mut self, secret: Option<ClientSecret>) -> Self {
+        self.client_secret = secret.filter(|value| !value.secret().is_empty());
+        self
     }
 
     pub fn with_issuer(mut self, issuer: Option<String>) -> Self {
@@ -1249,6 +1263,7 @@ pub struct AuthorizationManager {
     refresh_redirect_policy: OAuthHttpRedirectPolicy,
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
+    client_secret: Option<ClientSecret>,
     credential_store: Arc<dyn CredentialStore>,
     state_store: Arc<dyn StateStore>,
     base_url: Url,
@@ -1565,6 +1580,7 @@ impl AuthorizationManager {
             refresh_redirect_policy,
             metadata: None,
             oauth_client: None,
+            client_secret: None,
             credential_store: Arc::new(InMemoryCredentialStore::new()),
             state_store: Arc::new(InMemoryStateStore::new()),
             base_url,
@@ -1679,7 +1695,9 @@ impl AuthorizationManager {
                 }
             }
 
-            self.configure_client_id(&stored.client_id)?;
+            let mut config = OAuthClientConfig::new(&stored.client_id, self.base_url.to_string());
+            config.client_secret = stored.client_secret.map(|secret| secret.secret().clone());
+            self.configure_client(config)?;
             return Ok(true);
         }
         Ok(false)
@@ -1847,6 +1865,11 @@ impl AuthorizationManager {
         Ok((client_id.to_string(), token_response))
     }
 
+    /// Return the secret needed to persist this client registration.
+    pub fn client_secret(&self) -> Option<&ClientSecret> {
+        self.client_secret.as_ref()
+    }
+
     /// configure oauth2 client with client credentials
     pub fn configure_client(&mut self, config: OAuthClientConfig) -> Result<(), AuthError> {
         if self.metadata.is_none() {
@@ -1875,8 +1898,12 @@ impl AuthorizationManager {
             .set_token_uri(token_url)
             .set_redirect_uri(redirect_url);
 
-        if let Some(secret) = config.client_secret {
-            client_builder = client_builder.set_client_secret(ClientSecret::new(secret));
+        let client_secret = config
+            .client_secret
+            .filter(|secret| !secret.is_empty())
+            .map(ClientSecret::new);
+        if let Some(secret) = &client_secret {
+            client_builder = client_builder.set_client_secret(secret.clone());
         }
 
         let uses_secret_post = metadata
@@ -1897,6 +1924,7 @@ impl AuthorizationManager {
         }
 
         self.oauth_client = Some(client_builder);
+        self.client_secret = client_secret;
         Ok(())
     }
     /// validate authorization server metadata before starting authorization.
@@ -2444,6 +2472,7 @@ impl AuthorizationManager {
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
+            client_secret: self.client_secret.clone(),
             token_response: Some(token_result.clone()),
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
@@ -2613,6 +2642,7 @@ impl AuthorizationManager {
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
+            client_secret: self.client_secret.clone(),
             token_response: Some(token_result.clone()),
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
@@ -3642,6 +3672,7 @@ impl AuthorizationManager {
         let client_id = config.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
+            client_secret: None,
             token_response: Some(token_result.clone()),
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
@@ -3763,6 +3794,7 @@ impl AuthorizationManager {
 
         let stored = StoredCredentials {
             client_id: client_id.clone(),
+            client_secret: None,
             token_response: Some(token_result.clone()),
             granted_scopes,
             token_received_at: Some(Self::now_epoch_secs()),
@@ -4172,6 +4204,15 @@ impl OAuthState {
         }
     }
 
+    /// Return registration authentication material for external credential storage.
+    pub fn client_secret(&self) -> Option<&ClientSecret> {
+        match self {
+            Self::Unauthorized(manager) | Self::Authorized(manager) => manager.client_secret(),
+            Self::Session(session) => session.auth_manager.client_secret(),
+            Self::AuthorizedHttpClient(client) => client.auth_manager.client_secret(),
+        }
+    }
+
     /// Manually set credentials and move into authorized state
     /// Useful if you're caching credentials externally and wish to reuse them
     pub async fn set_credentials(
@@ -4200,6 +4241,7 @@ impl OAuthState {
 
             let stored = StoredCredentials {
                 client_id: client_id.to_string(),
+                client_secret: None,
                 token_response: Some(credentials),
                 granted_scopes,
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
@@ -7802,6 +7844,7 @@ mod tests {
         );
         let creds = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(token_response),
             granted_scopes: vec![],
             token_received_at: None,
@@ -7997,6 +8040,7 @@ mod tests {
         store
             .save(StoredCredentials {
                 client_id: "dcr-client".to_string(),
+                client_secret: None,
                 token_response: Some(make_token_response("old-token", Some(3600))),
                 granted_scopes: vec![],
                 token_received_at: Some(AuthorizationManager::now_epoch_secs()),
@@ -9178,6 +9222,7 @@ mod tests {
         let manager = AuthorizationManager::new("http://localhost").await.unwrap();
         let stored = StoredCredentials {
             client_id: "test".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("my-access-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
@@ -9196,6 +9241,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("stale-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
@@ -9215,6 +9261,7 @@ mod tests {
         let manager = AuthorizationManager::new("http://localhost").await.unwrap();
         let stored = StoredCredentials {
             client_id: "test".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("no-expiry-token", None)),
             granted_scopes: vec![],
             token_received_at: None,
@@ -9233,6 +9280,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("almost-expired", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 3590),
@@ -9252,6 +9300,7 @@ mod tests {
         let manager = AuthorizationManager::new("http://localhost").await.unwrap();
         let stored = StoredCredentials {
             client_id: "test".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("stale-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs() - 7200),
@@ -9665,6 +9714,7 @@ mod tests {
             .credential_store
             .save(StoredCredentials {
                 client_id: "my-client".to_string(),
+                client_secret: None,
                 token_response: Some(make_token_response_with_refresh(
                     "old-token",
                     "my-refresh-token",
@@ -9697,6 +9747,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: None,
             granted_scopes: vec![],
             token_received_at: None,
@@ -9718,6 +9769,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response("old-token", Some(3600))),
             granted_scopes: vec![],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
@@ -9812,6 +9864,7 @@ mod tests {
             .credential_store
             .save(StoredCredentials {
                 client_id: "my-client".to_string(),
+                client_secret: None,
                 token_response: Some(make_token_response_with_refresh(
                     "old-token",
                     "my-refresh-token",
@@ -10018,6 +10071,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10056,6 +10110,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10094,6 +10149,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10171,6 +10227,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10210,6 +10267,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10274,6 +10332,7 @@ mod tests {
 
         let stored = StoredCredentials {
             client_id: "my-client".to_string(),
+            client_secret: None,
             token_response: Some(make_token_response_with_refresh(
                 "old-token",
                 "my-refresh-token",
@@ -10740,3 +10799,7 @@ mod tests {
         assert!(store.lock.try_lock().is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "auth/client_secret_tests.rs"]
+mod client_secret_tests;
