@@ -299,17 +299,17 @@ impl StreamableHttpClient for reqwest::Client {
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
+        // A POST carrying only notifications/responses/errors leaves no request
+        // outstanding, so nothing in the response is load-bearing for us.
+        let awaits_no_response = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
         // Spec requires 202 Accepted for these, but some servers return an empty 200.
         // Treat empty success responses as equivalent to Accepted.
-        if status.is_success()
-            && content_length == Some(0)
-            && matches!(
-                message,
-                ClientJsonRpcMessage::Notification(_)
-                    | ClientJsonRpcMessage::Response(_)
-                    | ClientJsonRpcMessage::Error(_)
-            )
-        {
+        if status.is_success() && content_length == Some(0) && awaits_no_response {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
         // Non-success responses may carry valid JSON-RPC error payloads that
@@ -412,6 +412,18 @@ impl StreamableHttpClient for reqwest::Client {
                         json_rpc_parse_error_message(&e, &body),
                     ))),
                 }
+            }
+            // Neither JSON nor SSE. A POST that awaits no response needs nothing
+            // from the body, so accept any 2xx rather than failing the send on an
+            // unexpected or absent Content-Type. This covers servers that answer
+            // `notifications/initialized` with 200 instead of 202, and a chunked
+            // empty body, where an absent Content-Length stops the check above
+            // from firing.
+            _ if awaits_no_response => {
+                tracing::debug!(
+                    "ignoring unexpected content type {content_type:?} on a POST that awaits no response"
+                );
+                Ok(StreamableHttpPostResponse::Accepted)
             }
             _ => {
                 // unexpected content type

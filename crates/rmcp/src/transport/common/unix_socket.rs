@@ -307,15 +307,17 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        if status.is_success()
-            && content_length == Some(0)
-            && matches!(
-                message,
-                ClientJsonRpcMessage::Notification(_)
-                    | ClientJsonRpcMessage::Response(_)
-                    | ClientJsonRpcMessage::Error(_)
-            )
-        {
+        // A POST carrying only notifications/responses/errors leaves no request
+        // outstanding, so nothing in the response is load-bearing for us.
+        let awaits_no_response = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
+        // Spec requires 202 Accepted for these, but some servers return an empty 200.
+        // Treat empty success responses as equivalent to Accepted.
+        if status.is_success() && content_length == Some(0) && awaits_no_response {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
 
@@ -354,6 +356,16 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                         json_rpc_parse_error_message(&e, &body),
                     ))),
                 }
+            }
+            // Neither JSON nor SSE. A POST that awaits no response needs nothing
+            // from the body, so accept any 2xx rather than failing the send on an
+            // unexpected or absent Content-Type.
+            _ if awaits_no_response => {
+                tracing::debug!(
+                    "ignoring unexpected content type {:?} on a POST that awaits no response",
+                    content_type
+                );
+                Ok(StreamableHttpPostResponse::Accepted)
             }
             _ => Err(StreamableHttpError::UnexpectedContentType(
                 content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).into_owned()),
