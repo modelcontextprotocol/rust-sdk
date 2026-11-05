@@ -964,6 +964,175 @@ async fn test_server_validates_host_when_origin_validation_is_disabled_by_defaul
     assert_eq!(response.status(), http::StatusCode::OK);
 }
 
+/// The public check must agree with the service before middleware authenticates.
+#[tokio::test]
+async fn test_public_host_check_matches_service_validation() {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::{Request, StatusCode, header::HOST};
+    use http_body_util::{BodyExt, Full};
+    use rmcp::{
+        ServerHandler,
+        model::{ServerCapabilities, ServerConfig},
+        transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    };
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    impl ServerHandler for TestHandler {
+        fn get_info(&self) -> ServerConfig {
+            ServerConfig::new(ServerCapabilities::builder().build())
+        }
+    }
+
+    let cases: &[(&[&str], &str, Option<&str>, StatusCode)] = &[
+        (&["localhost"], "/", Some("localhost"), StatusCode::OK),
+        (&["localhost"], "/", Some("localhost:8080"), StatusCode::OK),
+        (
+            &["localhost:8080"],
+            "/",
+            Some("localhost:8080"),
+            StatusCode::OK,
+        ),
+        (
+            &["localhost:8080"],
+            "/",
+            Some("localhost:3000"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            &["localhost:8080"],
+            "/",
+            Some("localhost"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            &["localhost"],
+            "/",
+            Some("attacker.example"),
+            StatusCode::FORBIDDEN,
+        ),
+        (&[], "/", Some("attacker.example:8080"), StatusCode::OK),
+        (&[], "http://attacker.example:8080/", None, StatusCode::OK),
+        (
+            &["localhost"],
+            "http://localhost:8080/",
+            None,
+            StatusCode::OK,
+        ),
+        (
+            &["localhost:8080"],
+            "http://localhost:8080/",
+            None,
+            StatusCode::OK,
+        ),
+        (
+            &["localhost:8080"],
+            "http://localhost:3000/",
+            None,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            &["localhost"],
+            "http://attacker.example/",
+            None,
+            StatusCode::FORBIDDEN,
+        ),
+        (&["localhost"], "/", None, StatusCode::BAD_REQUEST),
+        (&[], "/", None, StatusCode::BAD_REQUEST),
+        (
+            &["localhost"],
+            "/",
+            Some("invalid host"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (&[], "/", Some("invalid host"), StatusCode::BAD_REQUEST),
+        (
+            &["localhost"],
+            "http://attacker.example/",
+            Some("localhost"),
+            StatusCode::OK,
+        ),
+        (
+            &["localhost"],
+            "http://localhost/",
+            Some("attacker.example"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            &["localhost"],
+            "http://localhost/",
+            Some("invalid host"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            &[" LocalHost "],
+            "/",
+            Some("LOCALHOST:8080"),
+            StatusCode::OK,
+        ),
+        (&["::1"], "/", Some("[::1]:8080"), StatusCode::OK),
+        (&["[::1]:8080"], "/", Some("[::1]:8080"), StatusCode::OK),
+        (
+            &["[::1]:8080"],
+            "/",
+            Some("[::1]:3000"),
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+
+    for (allowed_hosts, uri, host, expected_status) in cases {
+        let config =
+            StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts.iter().copied());
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(*uri)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .body(Full::new(Bytes::from_static(
+                br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#,
+            )))
+            .unwrap();
+        if let Some(host) = host {
+            request.headers_mut().insert(HOST, host.parse().unwrap());
+        }
+
+        let allowed = config.is_host_allowed(request.uri(), request.headers());
+        assert_eq!(
+            allowed,
+            *expected_status == StatusCode::OK,
+            "{allowed_hosts:?}, {uri}, {host:?}"
+        );
+
+        // This executes the service's private validation path without a listener.
+        let service = StreamableHttpService::new(
+            || Ok(TestHandler),
+            Arc::new(LocalSessionManager::default()),
+            config,
+        );
+        let response = service.handle(request).await;
+        assert_eq!(
+            response.status(),
+            *expected_status,
+            "{allowed_hosts:?}, {uri}, {host:?}"
+        );
+        assert_eq!(allowed, response.status() == StatusCode::OK);
+        if *expected_status != StatusCode::OK {
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let expected_body = match expected_status {
+                &StatusCode::FORBIDDEN => "Forbidden: Host header is not allowed",
+                _ if host.is_none() => "Bad Request: missing Host header",
+                _ => "Bad Request: Invalid Host header",
+            };
+            assert_eq!(body.as_ref(), expected_body.as_bytes());
+        }
+    }
+}
+
 /// Integration test: Verify server can enforce an allowed Host port when configured
 #[tokio::test]
 #[cfg(all(feature = "transport-streamable-http-server", feature = "server",))]
