@@ -106,6 +106,37 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn meta_does_not_shadow_custom_result() {
+        // `_meta` can appear on any result, so it alone must not make
+        // CallToolResult swallow a custom result (e.g. SEP-2640 skills/list).
+        let payload = json!({
+            "resultType": "complete",
+            "skills": [{ "uri": "skill://a/SKILL.md" }],
+            "ttlMs": 0,
+            "cacheScope": "private",
+            "_meta": { "x": true }
+        });
+        let result = parse_result(wrap_response(payload.clone()));
+        let ServerResult::CustomResult(result) = result else {
+            panic!("expected CustomResult, got {result:?}");
+        };
+        assert_eq!(result.0, payload);
+    }
+
+    #[test]
+    fn call_tool_result_with_meta_deserializes_to_correct_variant() {
+        let result = parse_result(wrap_response(json!({
+            "content": [{ "type": "text", "text": "hi" }],
+            "_meta": {}
+        })));
+        let ServerResult::CallToolResult(result) = result else {
+            panic!("expected CallToolResult, got {result:?}");
+        };
+        assert_eq!(result.content.len(), 1);
+        assert!(result.meta.is_some());
+    }
+
+    #[test]
     fn input_required_result_with_meta_deserializes_to_correct_variant() {
         let result = parse_result(wrap_response(json!({
             "resultType": "input_required",
