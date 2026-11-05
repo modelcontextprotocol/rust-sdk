@@ -2615,6 +2615,46 @@ mod tests {
     }
 
     #[test]
+    fn cache_tools_keeps_property_names_in_dependent_required() {
+        let valid = tool(
+            "valid",
+            json!({
+                "type": "object",
+                "properties": {
+                    "x-mcp-header": { "type": "string" },
+                    "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                },
+                "dependentRequired": { "x-mcp-header": ["tenant"] }
+            }),
+        );
+        let mut message = ServerJsonRpcMessage::response(
+            ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![valid])),
+            NumberOrString::Number(1),
+        );
+        let mut cache = HashMap::new();
+
+        cache_tools_from_response(&mut cache, &mut message, &ProtocolVersion::V_2026_07_28);
+
+        let ServerJsonRpcMessage::Response(response) = message else {
+            panic!("expected tools/list response");
+        };
+        let ServerResult::ListToolsResult(result) = response.result else {
+            panic!("expected tools/list result");
+        };
+        assert_eq!(
+            (
+                result
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name.as_ref())
+                    .collect::<Vec<_>>(),
+                cache.keys().map(String::as_str).collect::<Vec<_>>(),
+            ),
+            (vec!["valid"], vec!["valid"])
+        );
+    }
+
+    #[test]
     fn cache_tools_keeps_nested_annotations_and_drops_array_annotations() {
         let nested = tool(
             "nested",

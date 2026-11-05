@@ -211,8 +211,8 @@ fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
         "$defs" | "definitions" | "dependentSchemas" | "patternProperties" => {
             schema_map_has_off_chain_annotation(value, false)
         }
-        // Instance data, not subschemas.
-        "default" | "const" | "enum" | "examples" => false,
+        // These contain instance data or property names, not subschemas.
+        "default" | "const" | "enum" | "examples" | "dependentRequired" => false,
         _ => subschema_has_off_chain_annotation(value, false),
     })
 }
@@ -733,6 +733,35 @@ mod tests {
                 .unwrap()
                 .clone();
             assert!(validate_param_header_annotations(&schema).is_err());
+        }
+
+        #[test]
+        fn accepts_property_name_in_dependent_required() {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "x-mcp-header": { "type": "string" },
+                    "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                },
+                "dependentRequired": { "x-mcp-header": ["tenant"] }
+            });
+            assert_eq!(
+                validate_param_header_annotations(schema.as_object().unwrap()),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn rejects_header_annotation_inside_dependent_schema() {
+            let schema = json!({
+                "type": "object",
+                "dependentSchemas": {
+                    "tenant": {
+                        "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                    }
+                }
+            });
+            assert!(validate_param_header_annotations(schema.as_object().unwrap()).is_err());
         }
 
         #[test]
