@@ -6,7 +6,7 @@ use std::{
 
 use super::RoleClient;
 use crate::{
-    model::CacheScope,
+    model::{CacheScope, ServerResult},
     service::{Peer, ServiceRole},
 };
 
@@ -104,6 +104,48 @@ impl ClientCacheConfig {
     }
 }
 
+/// A cached response whose `ttlMs` can be rewritten when it is served.
+pub(crate) trait RemainingTtl {
+    /// Replaces a server-provided `ttlMs` with `remaining`; leaves an absent one absent.
+    fn set_remaining_ttl(&mut self, remaining: Duration);
+}
+
+impl RemainingTtl for ServerResult {
+    fn set_remaining_ttl(&mut self, remaining: Duration) {
+        let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+        match self {
+            ServerResult::DiscoverResult(crate::model::DiscoverResult { ttl_ms, .. })
+            | ServerResult::ListToolsResult(crate::model::ListToolsResult {
+                ttl_ms: Some(ttl_ms),
+                ..
+            })
+            | ServerResult::ListPromptsResult(crate::model::ListPromptsResult {
+                ttl_ms: Some(ttl_ms),
+                ..
+            })
+            | ServerResult::ListResourcesResult(crate::model::ListResourcesResult {
+                ttl_ms: Some(ttl_ms),
+                ..
+            })
+            | ServerResult::ListResourceTemplatesResult(
+                crate::model::ListResourceTemplatesResult {
+                    ttl_ms: Some(ttl_ms),
+                    ..
+                },
+            )
+            | ServerResult::ListSkillsResult(crate::model::ListSkillsResult {
+                ttl_ms: Some(ttl_ms),
+                ..
+            })
+            | ServerResult::ReadResourceResult(crate::model::ReadResourceResult {
+                ttl_ms: Some(ttl_ms),
+                ..
+            }) => *ttl_ms = remaining_ms,
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CachePartition {
     Public,
@@ -122,6 +164,20 @@ struct CachedPeerResponse<T> {
     expires_at: Instant,
     inserted_at: Instant,
     scope: CacheScope,
+}
+
+impl<T: Clone + RemainingTtl> CachedPeerResponse<T> {
+    fn fresh_value(&self, now: Instant) -> T {
+        let mut value = self.value.clone();
+        value.set_remaining_ttl(self.expires_at.saturating_duration_since(now));
+        value
+    }
+
+    fn stale_value(&self) -> T {
+        let mut value = self.value.clone();
+        value.set_remaining_ttl(Duration::ZERO);
+        value
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,12 +253,15 @@ impl<R: ServiceRole> Peer<R> {
     }
 
     /// Returns a fresh cached response, preferring the current private partition
-    /// before the public partition.
+    /// before the public partition. Its `ttlMs` is the time left until expiry.
     ///
     /// Expired entries are removed on access unless `serve_stale_on_error` is
     /// enabled, in which case they are retained so a later re-fetch failure can
     /// fall back to them via [`Peer::stale_cached_response`].
-    pub(crate) async fn cached_response(&self, logical_key: &str) -> Option<R::PeerResp> {
+    pub(crate) async fn cached_response(&self, logical_key: &str) -> Option<R::PeerResp>
+    where
+        R::PeerResp: RemainingTtl,
+    {
         let now = Instant::now();
         let mut cache = self.response_cache.write().await;
         if !cache.config.enabled {
@@ -216,7 +275,7 @@ impl<R: ServiceRole> Peer<R> {
         );
         let private_fresh = cache.entries.get(&private_key).and_then(|entry| {
             (entry.expires_at > now && entry.scope == CacheScope::Private)
-                .then(|| entry.value.clone())
+                .then(|| entry.fresh_value(now))
         });
         if let Some(value) = private_fresh {
             return Some(value);
@@ -228,7 +287,7 @@ impl<R: ServiceRole> Peer<R> {
         let public_key = Self::cache_key(logical_key, CachePartition::Public);
         let public_fresh = cache.entries.get(&public_key).and_then(|entry| {
             (entry.expires_at > now && entry.scope == CacheScope::Public)
-                .then(|| entry.value.clone())
+                .then(|| entry.fresh_value(now))
         });
         if let Some(value) = public_fresh {
             return Some(value);
@@ -240,13 +299,17 @@ impl<R: ServiceRole> Peer<R> {
     }
 
     /// Returns a cached response ignoring its TTL, for use as a fallback when a
-    /// re-fetch fails (SEP-2549 permits serving stale responses on error).
+    /// re-fetch fails (SEP-2549 permits serving stale responses on error). Its
+    /// `ttlMs` is zero.
     ///
     /// Returns `None` when the cache is disabled or `serve_stale_on_error` is
     /// turned off. The private partition is preferred over the public one. The
     /// entry is left in place so repeated failures keep serving it until a
     /// successful re-fetch overwrites it or a notification invalidates it.
-    pub(crate) async fn stale_cached_response(&self, logical_key: &str) -> Option<R::PeerResp> {
+    pub(crate) async fn stale_cached_response(&self, logical_key: &str) -> Option<R::PeerResp>
+    where
+        R::PeerResp: RemainingTtl,
+    {
         let cache = self.response_cache.read().await;
         if !cache.config.enabled || !cache.config.serve_stale_on_error {
             return None;
@@ -259,14 +322,14 @@ impl<R: ServiceRole> Peer<R> {
         if let Some(entry) = cache.entries.get(&private_key)
             && entry.scope == CacheScope::Private
         {
-            return Some(entry.value.clone());
+            return Some(entry.stale_value());
         }
 
         let public_key = Self::cache_key(logical_key, CachePartition::Public);
         if let Some(entry) = cache.entries.get(&public_key)
             && entry.scope == CacheScope::Public
         {
-            return Some(entry.value.clone());
+            return Some(entry.stale_value());
         }
         None
     }
