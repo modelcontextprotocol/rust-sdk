@@ -5,13 +5,9 @@
     not(feature = "local")
 ))]
 
-//! Regression test for #857: when a stateless streamable-HTTP client disconnects
+//! Regression tests for #857 and #1325: when a streamable-HTTP client disconnects
 //! (drops the response) while a tool handler is still awaiting, the per-request
 //! `RequestContext::ct` should fire so the handler can cancel cooperatively.
-//!
-//! Stateless requests are one-shot (no session, no resumption), so a dropped
-//! response is terminal and safe to cancel — unlike the stateful/resumable path,
-//! where a disconnect may be recovered via `Last-Event-ID`.
 
 use std::{sync::Arc, time::Duration};
 
@@ -114,6 +110,47 @@ async fn spawn_stateless_server(json_response: bool) -> anyhow::Result<TestServe
     })
 }
 
+async fn spawn_session_server() -> anyhow::Result<TestServer> {
+    let started = Arc::new(Notify::new());
+    let cancelled = Arc::new(Notify::new());
+    let probe = CancelProbe {
+        started: started.clone(),
+        cancelled: cancelled.clone(),
+    };
+
+    let server_ct = CancellationToken::new();
+    let config = StreamableHttpServerConfig::default()
+        // A short keep-alive lets the SSE server notice a dropped connection
+        // quickly (hyper only observes the disconnect on its next write).
+        .with_sse_keep_alive(Some(Duration::from_millis(100)))
+        .with_cancellation_token(server_ct.child_token());
+
+    let service: StreamableHttpService<CancelProbe, LocalSessionManager> =
+        StreamableHttpService::new(
+            move || Ok(probe.clone()),
+            Arc::new(LocalSessionManager::default()),
+            config,
+        );
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn({
+        let ct = server_ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    Ok(TestServer {
+        url: format!("http://{addr}/mcp"),
+        server_ct,
+        started,
+        cancelled,
+    })
+}
+
 /// SSE mode: the response is a stream; dropping it (client disconnect) must fire
 /// the handler's cancellation token.
 #[tokio::test]
@@ -149,6 +186,77 @@ async fn stateless_sse_client_disconnect_cancels_request() -> anyhow::Result<()>
     tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
         .await
         .expect("RequestContext::ct should fire after client disconnect (SSE)");
+
+    server.server_ct.cancel();
+    Ok(())
+}
+
+/// Session mode: dropping the request-wise response stream must cancel the
+/// in-flight request owned by the local session worker.
+#[tokio::test]
+async fn stateful_sse_client_disconnect_cancels_request() -> anyhow::Result<()> {
+    let server = spawn_session_server().await?;
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()?;
+
+    let init = client
+        .post(&server.url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.1.0"}}}"#)
+        .send()
+        .await?;
+    assert!(
+        init.status().is_success(),
+        "initialize failed: {:?}",
+        init.status()
+    );
+    let session_id = init
+        .headers()
+        .get("mcp-session-id")
+        .expect("initialize response should include session id")
+        .to_str()?
+        .to_owned();
+    let _ = init.text().await?;
+
+    let initialized = client
+        .post(&server.url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session_id)
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?;
+    assert_eq!(initialized.status(), reqwest::StatusCode::ACCEPTED);
+
+    let call = client
+        .post(&server.url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session_id)
+        .header("MCP-Protocol-Version", "2025-06-18")
+        .body(CALL_BODY)
+        .send()
+        .await?;
+    assert!(
+        call.status().is_success(),
+        "tools/call failed: {:?}",
+        call.status()
+    );
+
+    tokio::time::timeout(Duration::from_secs(5), server.started.notified())
+        .await
+        .expect("tool handler should start");
+
+    drop(call);
+    drop(client);
+
+    tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
+        .await
+        .expect("RequestContext::ct should fire after client disconnect (stateful SSE)");
 
     server.server_ct.cancel();
     Ok(())
