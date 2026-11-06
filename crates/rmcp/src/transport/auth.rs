@@ -2602,6 +2602,7 @@ impl AuthorizationManager {
         // RFC 6749 §6: `scope` is optional on refresh and must not exceed the
         // original grant. Omit it unless the caller set scopes explicitly.
         let granted_scopes = stored_credentials.granted_scopes.clone();
+        let original_grant = granted_scopes.clone();
         let scopes_to_send =
             Self::refresh_request_scopes(self.refresh_scopes.as_deref(), &granted_scopes);
         for scope in scopes_to_send.iter().cloned() {
@@ -2659,11 +2660,19 @@ impl AuthorizationManager {
 
         *self.current_scopes.write().await = granted_scopes.clone();
 
+        // A caller-narrowed refresh must not shrink the stored grant, or later
+        // refreshes could never ask for the dropped scopes again.
+        let stored_grant = if original_grant.is_empty() || self.refresh_scopes.is_none() {
+            granted_scopes
+        } else {
+            original_grant
+        };
+
         let client_id = oauth_client.client_id().to_string();
         let stored = StoredCredentials {
             client_id,
             token_response: Some(token_result.clone()),
-            granted_scopes,
+            granted_scopes: stored_grant,
             token_received_at: Some(Self::now_epoch_secs()),
             issuer: self.metadata_issuer(),
         };
@@ -10282,6 +10291,51 @@ mod tests {
             !params.contains_key("scope"),
             "scope should be absent when the caller did not set one, body: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn narrowed_refresh_keeps_original_grant() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        manager.set_refresh_scopes(["read"]);
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string(), "write".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+        captured.lock().unwrap().take();
+
+        let saved = manager.credential_store.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved.granted_scopes,
+            vec!["read".to_string(), "write".to_string()],
+            "a narrowed refresh must not shrink the stored grant"
+        );
+
+        // A later refresh can still ask for the full grant.
+        manager.set_refresh_scopes(["read", "write"]);
+        manager.refresh_token().await.unwrap();
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(params.get("scope").map(String::as_str), Some("read write"));
     }
 
     #[tokio::test]

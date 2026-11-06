@@ -452,7 +452,7 @@ cargo run -p mcp-client-examples --example clients_client_credentials -- \
 6. **Authorization Request**: Build authorization URL with PKCE (S256) and RFC 8707 resource parameter
 7. **Authorization Code Exchange**: After user authorization, exchange code for access token (with resource parameter)
 8. **Token Usage**: Use access token for API calls via `AuthClient` or `AuthorizedHttpClient`
-9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires; previously granted scopes are forwarded in the refresh request so providers that require them (e.g. Azure AD v2) work correctly
+9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires; `scope` is omitted by default, which keeps the original grant (RFC 6749 §6). Providers that require it (e.g. Azure AD v2) can opt in with `AuthorizationManager::set_refresh_scopes`; only scopes from the original grant are sent, and a narrowed refresh does not shrink the stored grant
 10. **Scope Upgrade**: On 403 insufficient_scope, compute scope union and re-authorize with upgraded scopes
 
 ## Security Considerations
