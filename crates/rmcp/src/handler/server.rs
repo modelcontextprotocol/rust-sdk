@@ -311,11 +311,13 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 ))
             } else {
                 // 2026-07-28 requires caching hints on cacheable results; older
-                // peers keep the legacy shape without `resultType: "complete"`.
+                // peers keep the legacy shape without `resultType: "complete"`
+                // and without non-object tool output (SEP-2106).
                 if is_2026_07_28_or_later {
                     result.fill_missing_cache_hints();
                 } else {
                     result.strip_result_type_for_legacy_peer();
+                    result.strip_non_object_output_for_legacy_peer();
                 }
                 Ok(result)
             }
