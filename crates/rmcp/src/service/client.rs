@@ -2,7 +2,15 @@
 #![expect(deprecated)]
 pub(super) mod cache;
 
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
@@ -711,8 +719,9 @@ pub enum ClientLifecycleMode {
     Discover {
         preferred_versions: Vec<ProtocolVersion>,
     },
-    /// Probe with `server/discover`, falling back when the peer reports that it is legacy or does
-    /// not respond within 10 seconds.
+    /// Probe with `server/discover` and fall back if the peer reports that it is legacy.
+    /// Streamable HTTP waits for the discovery POST within the caller's startup deadline.
+    /// Other transports also fall back if discovery does not finish within 10 seconds.
     Auto {
         preferred_versions: Vec<ProtocolVersion>,
         legacy_version: Option<ProtocolVersion>,
@@ -720,6 +729,21 @@ pub enum ClientLifecycleMode {
 }
 
 const DEFAULT_AUTO_DISCOVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shared with the transport so Auto can tell an outstanding HTTP POST from a silent peer.
+#[derive(Default)]
+pub(crate) struct DiscoveryProbe {
+    submitted_to_http: AtomicBool,
+}
+
+impl DiscoveryProbe {
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) fn observe_http_request(extensions: &Extensions) {
+        if let Some(probe) = extensions.get::<Arc<Self>>() {
+            probe.submitted_to_http.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 /// Client-specific lifecycle entry points.
 pub trait ClientServiceExt: Service<RoleClient> + Sized {
@@ -853,6 +877,7 @@ where
                 &peer,
                 &client_info,
                 preferred_versions,
+                None,
             )
             .await?
             {
@@ -865,18 +890,25 @@ where
             preferred_versions,
             legacy_version,
         } => {
-            let discover_result = tokio::time::timeout(
-                auto_discover_timeout,
-                discover_startup(
+            let probe = Arc::new(DiscoveryProbe::default());
+            let discover_result = {
+                let discovery = discover_startup(
                     &service,
                     &mut transport,
                     &id_provider,
                     &peer,
                     &client_info,
                     preferred_versions,
-                ),
-            )
-            .await;
+                    Some(&probe),
+                );
+                tokio::pin!(discovery);
+                match tokio::time::timeout(auto_discover_timeout, &mut discovery).await {
+                    Err(_) if probe.submitted_to_http.load(Ordering::Relaxed) => {
+                        Ok(discovery.await)
+                    }
+                    result => result,
+                }
+            };
             match discover_result {
                 Ok(Ok(DiscoverOutcome::Modern)) => {}
                 Ok(Ok(DiscoverOutcome::Legacy(discover_error))) => {
@@ -1026,6 +1058,7 @@ async fn discover_startup<S, T>(
     peer: &Peer<RoleClient>,
     client_info: &InitializeRequestParams,
     preferred_versions: Vec<ProtocolVersion>,
+    probe: Option<&Arc<DiscoveryProbe>>,
 ) -> Result<DiscoverOutcome, ClientInitializeError>
 where
     S: Service<RoleClient>,
@@ -1047,6 +1080,9 @@ where
         );
         let mut discover = DiscoverRequest::new(DiscoverRequestParams {});
         discover.extensions.insert(meta);
+        if let Some(probe) = probe {
+            discover.extensions.insert(Arc::clone(probe));
+        }
         let id = id_provider.next_request_id();
         transport
             .send(ClientJsonRpcMessage::request(
@@ -2656,9 +2692,12 @@ mod tests {
         client.cancel().await.unwrap();
     }
 
-    #[tokio::test]
-    async fn auto_startup_falls_back_when_discover_is_ignored() {
-        use crate::model::{InitializeResult, ServerCapabilities};
+    #[rstest::rstest]
+    #[case::initial_probe(false)]
+    #[case::version_retry(true)]
+    #[tokio::test(start_paused = true)]
+    async fn auto_startup_falls_back_when_discover_is_ignored(#[case] retry: bool) {
+        use crate::model::{ErrorCode, InitializeResult, ServerCapabilities};
 
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -2678,8 +2717,27 @@ mod tests {
                         ClientRequest::DiscoverRequest(_)
                     ));
 
+                    if retry {
+                        let error = ErrorData::new(
+                            ErrorCode::UNSUPPORTED_PROTOCOL_VERSION,
+                            "Unsupported version",
+                            Some(serde_json::json!({"supported": ["2026-07-28"]})),
+                        );
+                        server
+                            .send(ServerJsonRpcMessage::error(error, Some(discover.id)))
+                            .await
+                            .unwrap();
+                        assert!(matches!(
+                            server.receive().await,
+                            Some(ClientJsonRpcMessage::Request(request))
+                                if matches!(request.request, ClientRequest::DiscoverRequest(_))
+                        ));
+                    }
                     let ClientJsonRpcMessage::Request(initialize) =
-                        server.receive().await.expect("expected initialize request")
+                        tokio::time::timeout(Duration::from_secs(1), server.receive())
+                            .await
+                            .expect("fallback deadline")
+                            .expect("expected initialize request")
                     else {
                         panic!("expected initialize request");
                     };
