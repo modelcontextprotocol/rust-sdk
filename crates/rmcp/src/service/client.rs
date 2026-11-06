@@ -175,7 +175,8 @@ enum PreInitPing {
 /// Both success and error responses are checked here: a mismatched id on a
 /// success response is `ConflictInitResponseId`; on an error response (whose
 /// `id` is optional per spec) it is `UncorrelatedErrorResponse`. The caller
-/// never sees an uncorrelated response.
+/// never sees an uncorrelated response. During timeout fallback, replies to
+/// the abandoned discovery request are skipped while waiting for `initialize`.
 ///
 /// A server ping is answered only with `PreInitPing::Answer`. The discover
 /// wait, including Auto's timeout-bounded probe, leaves it unanswered:
@@ -187,15 +188,21 @@ async fn expect_response<T, S>(
     peer: Peer<RoleClient>,
     expected_id: &RequestId,
     pre_init_ping: PreInitPing,
+    timed_out_probe: Option<&RequestId>,
 ) -> Result<ServerResult, ClientInitializeError>
 where
     T: Transport<RoleClient> + 'static,
     S: Service<RoleClient>,
 {
+    let is_timed_out_probe =
+        |id: &RequestId| timed_out_probe.is_some_and(|probe| probe.matches_response_id(id));
     loop {
         let message = expect_next_message(transport, context).await?;
         match message {
             ServerJsonRpcMessage::Response(JsonRpcResponse { id, result, .. }) => {
+                if is_timed_out_probe(&id) {
+                    continue;
+                }
                 if !expected_id.matches_response_id(&id) {
                     return Err(ClientInitializeError::ConflictInitResponseId(
                         expected_id.clone(),
@@ -205,6 +212,9 @@ where
                 return Ok(result);
             }
             ServerJsonRpcMessage::Error(error) => {
+                if error.id.as_ref().is_some_and(is_timed_out_probe) {
+                    continue;
+                }
                 return Err(match &error.id {
                     Some(id) if expected_id.matches_response_id(id) => {
                         ClientInitializeError::JsonRpcError(error.error)
@@ -837,19 +847,19 @@ where
     T: Transport<RoleClient> + 'static,
 {
     let mut transport = transport.into_transport();
-    let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
-    let (peer, peer_rx) = Peer::new(id_provider.clone(), None);
+    let (peer, peer_rx) = Peer::new(Arc::<AtomicU32RequestIdProvider>::default(), None);
+    let mut last_discover_id = None;
     let client_info = service.get_info();
 
     match lifecycle {
         ClientLifecycleMode::Initialize => {
-            legacy_startup(&service, &mut transport, &id_provider, &peer, client_info).await?;
+            legacy_startup(&service, &mut transport, &peer, client_info, None).await?;
         }
         ClientLifecycleMode::Discover { preferred_versions } => {
             match discover_startup(
                 &service,
                 &mut transport,
-                &id_provider,
+                &mut last_discover_id,
                 &peer,
                 &client_info,
                 preferred_versions,
@@ -870,7 +880,7 @@ where
                 discover_startup(
                     &service,
                     &mut transport,
-                    &id_provider,
+                    &mut last_discover_id,
                     &peer,
                     &client_info,
                     preferred_versions,
@@ -885,8 +895,7 @@ where
                         legacy_info.protocol_version = version;
                     }
                     if let Err(fallback_error) =
-                        legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
-                            .await
+                        legacy_startup(&service, &mut transport, &peer, legacy_info, None).await
                     {
                         return Err(ClientInitializeError::LegacyFallbackFailed {
                             discover: discover_error,
@@ -900,8 +909,14 @@ where
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
                     }
-                    legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
-                        .await?;
+                    legacy_startup(
+                        &service,
+                        &mut transport,
+                        &peer,
+                        legacy_info,
+                        last_discover_id.as_ref(),
+                    )
+                    .await?;
                 }
             }
         }
@@ -954,15 +969,15 @@ enum DiscoverOutcome {
 async fn legacy_startup<S, T>(
     service: &S,
     transport: &mut T,
-    id_provider: &Arc<AtomicU32RequestIdProvider>,
     peer: &Peer<RoleClient>,
     client_info: InitializeRequestParams,
+    timed_out_probe: Option<&RequestId>,
 ) -> Result<(), ClientInitializeError>
 where
     S: Service<RoleClient>,
     T: Transport<RoleClient> + 'static,
 {
-    let id = id_provider.next_request_id();
+    let id = peer.request_id_provider.next_request_id();
     let client_info_for_meta = client_info.clone();
     let init_request = InitializeRequest {
         method: Default::default(),
@@ -987,6 +1002,7 @@ where
         peer.clone(),
         &id,
         PreInitPing::Answer,
+        timed_out_probe,
     )
     .await?;
 
@@ -1022,7 +1038,7 @@ where
 async fn discover_startup<S, T>(
     service: &S,
     transport: &mut T,
-    id_provider: &Arc<AtomicU32RequestIdProvider>,
+    last_discover_id: &mut Option<RequestId>,
     peer: &Peer<RoleClient>,
     client_info: &InitializeRequestParams,
     preferred_versions: Vec<ProtocolVersion>,
@@ -1035,6 +1051,7 @@ where
         return Err(ClientInitializeError::NoPreferredProtocolVersion);
     }
 
+    let id_provider = &peer.request_id_provider;
     let mut attempted = Vec::new();
     let mut candidate = preferred_versions[0].clone();
     loop {
@@ -1048,6 +1065,7 @@ where
         let mut discover = DiscoverRequest::new(DiscoverRequestParams {});
         discover.extensions.insert(meta);
         let id = id_provider.next_request_id();
+        *last_discover_id = Some(id.clone());
         transport
             .send(ClientJsonRpcMessage::request(
                 ClientRequest::DiscoverRequest(discover),
@@ -1065,6 +1083,7 @@ where
             peer.clone(),
             &id,
             PreInitPing::Ignore,
+            None,
         )
         .await
         {
