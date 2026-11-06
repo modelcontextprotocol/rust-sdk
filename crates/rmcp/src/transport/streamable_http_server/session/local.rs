@@ -1051,6 +1051,7 @@ impl Worker for LocalSessionWorker {
         crate::transport::worker::WorkerConfig {
             name: Some(format!("streamable-http-session-{}", self.id)),
             channel_buffer_capacity: self.session_config.channel_capacity,
+            ..Default::default()
         }
     }
     #[instrument(name = "streamable_http_session", skip_all, fields(id = self.id.as_ref()))]

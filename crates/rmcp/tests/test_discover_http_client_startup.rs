@@ -5,7 +5,7 @@
     feature = "transport-streamable-http-server"
 ))]
 
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -14,12 +14,16 @@ use axum::{
     http::{Response, StatusCode},
     routing::post,
 };
+use futures::StreamExt;
 use rmcp::{
-    ClientLifecycleMode, ClientServiceExt, ServerHandler,
-    model::{ClientConfig, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion},
+    ClientLifecycleMode, ClientServiceExt, RoleClient, ServerHandler,
+    model::{
+        ClientConfig, ClientJsonRpcMessage, ClientRequest, DiscoverResult, ErrorCode, ErrorData,
+        ProtocolVersion, ServerJsonRpcMessage,
+    },
     service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{
-        StreamableHttpClientTransport,
+        StreamableHttpClientTransport, Transport,
         streamable_http_client::StreamableHttpClientTransportConfig,
         streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -103,8 +107,51 @@ async fn plain_text_legacy_http_handler(
         .expect("build notification response")
 }
 
-#[tokio::test]
-async fn discover_http_client_bootstraps_headers_without_initialize() {
+struct DelayedTransport<T> {
+    inner: T,
+    defer_discovery_send: bool,
+}
+
+impl<T: Transport<RoleClient>> Transport<RoleClient> for DelayedTransport<T> {
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        message: ClientJsonRpcMessage,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let defer = self.defer_discovery_send
+            && matches!(&message, ClientJsonRpcMessage::Request(r)
+            if matches!(r.request, ClientRequest::DiscoverRequest(_)));
+        let send = self.inner.send(message);
+        async move {
+            if defer {
+                tokio::time::sleep(Duration::from_secs(12)).await;
+            }
+            send.await
+        }
+    }
+
+    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
+        tokio::task::yield_now().await;
+        self.inner.receive().await
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        self.inner.close().await
+    }
+}
+
+#[rstest::rstest]
+#[case::discover_json(false, true, false)]
+#[case::auto_json(true, true, false)]
+#[case::auto_sse(true, false, false)]
+#[case::queued_http_send(true, true, true)]
+#[tokio::test(start_paused = true)]
+async fn discover_http_client_bootstraps_headers_without_initialize(
+    #[case] auto: bool,
+    #[case] json_response: bool,
+    #[case] defer_discovery_send: bool,
+) {
     let ct = CancellationToken::new();
     let service: StreamableHttpService<DiscoverHttpServer, LocalSessionManager> =
         StreamableHttpService::new(
@@ -112,10 +159,22 @@ async fn discover_http_client_bootstraps_headers_without_initialize() {
             Default::default(),
             StreamableHttpServerConfig::default()
                 .with_legacy_session_mode(false)
-                .with_json_response(true)
+                .with_json_response(json_response)
                 .with_cancellation_token(ct.child_token()),
         );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    // Send headers immediately but delay body chunks past the 10-second fallback.
+    let router = Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::map_response(
+            |response: Response<Body>| async {
+                response.map(|body| {
+                    Body::from_stream(body.into_data_stream().then(|chunk| async move {
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+                        chunk
+                    }))
+                })
+            },
+        ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -132,12 +191,22 @@ async fn discover_http_client_bootstraps_headers_without_initialize() {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
     );
+    let preferred_versions = vec![ProtocolVersion::V_2026_07_28];
+    let lifecycle = if auto {
+        ClientLifecycleMode::Auto {
+            preferred_versions,
+            legacy_version: None,
+        }
+    } else {
+        ClientLifecycleMode::Discover { preferred_versions }
+    };
     let client = ClientConfig::default()
         .serve_with_lifecycle(
-            transport,
-            ClientLifecycleMode::Discover {
-                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            DelayedTransport {
+                inner: transport,
+                defer_discovery_send,
             },
+            lifecycle,
         )
         .await
         .expect("discover HTTP client should start");
@@ -275,6 +344,7 @@ async fn version_negotiating_http_handler(
                 .expect("build version rejection response");
         }
 
+        tokio::time::sleep(Duration::from_secs(12)).await;
         let result = DiscoverResult::new(vec![ProtocolVersion::V_2025_11_25], Default::default());
         return Response::builder()
             .status(StatusCode::OK)
@@ -296,7 +366,7 @@ async fn version_negotiating_http_handler(
 /// A recognized modern error in a 4xx discover rejection identifies a modern
 /// server, so the client retries at a supported version instead of falling back
 /// to legacy `initialize`.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn auto_http_client_retries_version_after_modern_4xx_rejection() {
     let ct = CancellationToken::new();
     let state = VersionNegotiatingHttpState::default();

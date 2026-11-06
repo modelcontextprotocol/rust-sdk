@@ -13,7 +13,7 @@ use tracing::{Instrument, Level};
 
 use super::{IntoTransport, Transport};
 use crate::{
-    model::{CancelledNotification, JsonRpcMessage, RequestId},
+    model::{CancelledNotification, Extensions, GetExtensions, JsonRpcMessage, RequestId},
     service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
 };
 
@@ -167,6 +167,7 @@ impl<W: Worker> WorkerSendRequest<W> {
 }
 
 pub struct WorkerTransport<W: Worker> {
+    on_request_submitted: Option<fn(&Extensions)>,
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     control_send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
@@ -179,6 +180,8 @@ pub struct WorkerTransport<W: Worker> {
 
 #[non_exhaustive]
 pub struct WorkerConfig {
+    /// Runs synchronously in `Transport::send`, before its future is polled.
+    pub(crate) on_request_submitted: Option<fn(&Extensions)>,
     pub name: Option<String>,
     pub channel_buffer_capacity: usize,
 }
@@ -188,6 +191,7 @@ impl Default for WorkerConfig {
         Self {
             name: None,
             channel_buffer_capacity: 16,
+            on_request_submitted: None,
         }
     }
 }
@@ -254,6 +258,7 @@ impl<W: Worker> WorkerTransport<W> {
                 })
         });
         Self {
+            on_request_submitted: config.on_request_submitted,
             rx: from_transport_rx,
             send_service: to_transport_tx,
             control_send_service: control_to_transport_tx,
@@ -347,6 +352,11 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
         &mut self,
         item: TxJsonRpcMessage<W::Role>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        if let Some(on_request_submitted) = self.on_request_submitted
+            && let JsonRpcMessage::Request(request) = &item
+        {
+            on_request_submitted(request.request.extensions());
+        }
         let control_generation = self.control_generation.load(Ordering::SeqCst);
         let mut cancellation_target = None;
         let registration = if W::supports_request_cancellation() {
@@ -450,6 +460,39 @@ mod tests {
         fn supports_request_cancellation() -> bool {
             true
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_falls_back_while_discovery_send_awaits_acknowledgment() {
+        use crate::{
+            ClientLifecycleMode, ClientServiceExt,
+            model::{ClientConfig, ClientRequest, ProtocolVersion},
+        };
+        let (worker, context) = tokio::sync::oneshot::channel();
+        let transport = WorkerTransport::spawn(TestWorker(worker));
+        let startup = ClientConfig::default().serve_with_lifecycle(
+            transport,
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: None,
+            },
+        );
+        let (_, ()) = tokio::join!(startup, async {
+            let mut context = context.await.unwrap();
+            // Keep the discovery send pending while the bridge accepts the next request.
+            let probe = context.recv_from_handler().await.unwrap();
+            assert!(matches!(&probe.message, JsonRpcMessage::Request(request)
+                if matches!(request.request, ClientRequest::DiscoverRequest(_))));
+            let initialize =
+                tokio::time::timeout(Duration::from_secs(15), context.recv_from_handler())
+                    .await
+                    .expect("Auto should fall back after 10 seconds")
+                    .unwrap();
+            assert!(
+                matches!(initialize.message, JsonRpcMessage::Request(request)
+                if matches!(request.request, ClientRequest::InitializeRequest(_)))
+            );
+        });
     }
 
     fn cancellation_message(id: RequestId) -> ClientJsonRpcMessage {
