@@ -218,6 +218,13 @@ type PendingRestores = Arc<tokio::sync::RwLock<HashMap<SessionId, RestoreResultS
 #[derive(Debug, Clone)]
 pub struct StreamableHttpServerConfig {
     /// The ping message duration for SSE connections.
+    ///
+    /// A stateless request with per-request protocol metadata is answered with
+    /// an HTTP status taken from its first message. When `json_response` is
+    /// false and the handler has sent nothing for this long, the server commits
+    /// the `text/event-stream` head (HTTP 200) instead, so these pings reach the
+    /// client while the handler runs; its result, or an error, then arrives as
+    /// an SSE event.
     pub sse_keep_alive: Option<Duration>,
     /// The retry interval for SSE priming events.
     pub sse_retry: Option<Duration>,
@@ -1663,7 +1670,8 @@ where
         }
     }
 
-    // The HTTP status must be known before opening an SSE stream.
+    // The first message decides the HTTP status, unless the handler is still
+    // silent after one keep-alive interval: then the SSE head is committed.
     async fn serve_negotiated_request_directly(
         &self,
         service: S,
@@ -1694,12 +1702,30 @@ where
         });
 
         let cancel = self.config.cancellation_token.child_token();
+        // Without a head, keep-alive comments cannot flow, and a long-running
+        // handler leaves the connection idle until its first message: long
+        // enough for clients and proxies to drop it. Committing after one
+        // keep-alive interval keeps the status mapping for prompt answers.
+        let commit_after = self
+            .config
+            .sse_keep_alive
+            .filter(|_| !self.config.json_response);
+        let commit_deadline = async move {
+            match commit_after {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         // Cancel the handler if the client disconnects while it is still
         // producing its first message (this future is dropped before
         // `receiver.recv()` completes). Disarmed once the handler emits
-        // anything, so a normal response is never cancelled.
+        // anything or the stream is committed, so a normal response is never
+        // cancelled.
         let mut disconnect_guard = Some(request_ct.clone().drop_guard());
         let first = tokio::select! {
+            // A message that is ready when the deadline fires still decides
+            // the status: poll it first.
+            biased;
             message = receiver.recv() => {
                 if let Some(guard) = disconnect_guard.take() {
                     guard.disarm();
@@ -1707,6 +1733,12 @@ where
                 message
             }
             _ = cancel.cancelled() => None,
+            () = commit_deadline => {
+                if let Some(guard) = disconnect_guard.take() {
+                    guard.disarm();
+                }
+                return Ok(self.stateless_sse_response(None, receiver, request_ct));
+            }
         }
         .ok_or_else(|| {
             internal_error_response("empty response")(std::io::Error::new(
