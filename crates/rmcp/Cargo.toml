@@ -76,6 +76,7 @@ sha2 = "0.11"
 yaml_serde = { version = "0.10", optional = true }
 # reads the `skills-fs` catalog through a root handle that cannot escape it
 cap-std = { version = "4", optional = true }
+cap-fs-ext = { version = "4", optional = true }
 
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
@@ -144,7 +145,7 @@ elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
 request-state = ["dep:hmac", "dep:zeroize", "base64"]
-skills-fs = ["server", "base64", "dep:cap-std", "dep:yaml_serde"]
+skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
