@@ -94,7 +94,11 @@ use std::{
 };
 
 use base64::{Engine, prelude::BASE64_STANDARD};
-use cap_std::{ambient_authority, fs::Dir};
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions},
+};
 
 use crate::{
     error::ErrorData as McpError,
@@ -124,6 +128,7 @@ const MARKDOWN_MIME_TYPE: &str = "text/markdown";
 /// warning. Every listing and read goes through a handle on the root that
 /// cannot resolve outside it, so no file outside the root is served, even if
 /// the tree changes while it loads.
+/// If a path becomes a symlink between the walk and the read, loading fails.
 /// Entries whose name starts with `.` are ignored, and a skill over
 /// [`SKILL_FILE_LIMIT`] files or [`SKILL_BYTE_LIMIT`] bytes is skipped. Skipped
 /// skills are reported through `tracing`.
@@ -440,14 +445,12 @@ fn read_within_limit<'a>(
         let len = match bytes_of.get(entry.path.as_str()) {
             Some(bytes) => bytes.len() as u64,
             None => {
-                let mut bytes = Vec::new();
-                handle
-                    .open(&entry.path)
-                    .and_then(|file| file.take(budget).read_to_end(&mut bytes))
-                    .map_err(|source| SkillCatalogError::Io {
+                let bytes = read_regular_file(handle, &entry.path, budget).map_err(|source| {
+                    SkillCatalogError::Io {
                         path: root.join(&entry.path),
                         source,
-                    })?;
+                    }
+                })?;
                 let len = bytes.len() as u64;
                 if len < budget {
                     bytes_of.insert(&entry.path, bytes.into());
@@ -461,6 +464,30 @@ fn read_within_limit<'a>(
         }
     }
     Ok(true)
+}
+
+fn read_regular_file(root: &Dir, path: &str, budget: u64) -> io::Result<Vec<u8>> {
+    // No-follow applies to the last component of an open. Open each directory
+    // separately so an ancestor replaced since the walk cannot redirect the read.
+    let mut components = path.split('/');
+    let name = components.next_back().expect("a walked file has a name");
+    let mut dir = root.try_clone()?;
+    for component in components {
+        dir = dir.open_dir_nofollow(component)?;
+    }
+    let mut options = OpenOptions::new();
+    // Open nonblocking so we can reject a substituted FIFO before reading it.
+    options.read(true).follow(FollowSymlinks::No).nonblock(true);
+    let file = dir.open_with(name, &options)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(budget).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn build_skill(
@@ -523,7 +550,7 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
             source,
         };
         let mut entries = handle
-            .read_dir(if dir.is_empty() { "." } else { dir })
+            .entries()
             .map_err(io_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(io_error)?;
@@ -550,12 +577,18 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
                 format!("{dir}/{name}")
             };
             if kind == Kind::Directory {
+                let child = handle
+                    .open_dir_nofollow(entry.file_name())
+                    .map_err(|source| SkillCatalogError::Io {
+                        path: root.join(&path),
+                        source,
+                    })?;
                 tree.push(Entry {
                     path: path.clone(),
                     kind,
                     size: 0,
                 });
-                visit(root, handle, &path, tree)?;
+                visit(root, &child, &path, tree)?;
             } else {
                 let size = match kind {
                     Kind::File => entry.metadata().map_err(io_error)?.len(),
@@ -672,5 +705,38 @@ mod tests {
 
         assert!(!within);
         assert_eq!(bytes_of.keys().collect::<Vec<_>>(), vec![&"a"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_reject_file_and_directory_symlinks_installed_after_the_walk() {
+        use std::{fs, os::unix::fs::symlink};
+
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join(".private");
+        let public = root.path().join("public");
+        fs::create_dir(&private).unwrap();
+        fs::create_dir_all(public.join("assets")).unwrap();
+        fs::write(private.join("notes.txt"), "private").unwrap();
+        fs::write(public.join("notes.txt"), "public").unwrap();
+        fs::write(public.join("assets/notes.txt"), "public").unwrap();
+
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let tree = walk(root.path(), &handle).unwrap();
+        fs::remove_file(public.join("notes.txt")).unwrap();
+        symlink("../.private/notes.txt", public.join("notes.txt")).unwrap();
+        fs::rename(public.join("assets"), public.join("old-assets")).unwrap();
+        symlink("../.private", public.join("assets")).unwrap();
+
+        for path in ["public/notes.txt", "public/assets/notes.txt"] {
+            let entry = tree.iter().find(|entry| entry.path == path).unwrap();
+            assert_eq!(entry.kind, Kind::File);
+            let mut bytes = HashMap::new();
+            assert!(
+                read_within_limit(&handle, root.path(), &[entry], &mut bytes).is_err(),
+                "followed a replacement symlink in {path}"
+            );
+            assert!(bytes.is_empty());
+        }
     }
 }
