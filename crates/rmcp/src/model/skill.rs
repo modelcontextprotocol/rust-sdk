@@ -9,6 +9,8 @@ use std::borrow::Cow;
 
 use percent_encoding::{CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
+use unicode_general_category::{GeneralCategory, get_general_category};
+use unicode_normalization::UnicodeNormalization;
 
 use super::{
     CacheScope, JsonObject, MetaObject, Resource, ResultType, deserialize_cache_scope,
@@ -272,8 +274,12 @@ impl Skill {
             return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
         };
         let name = self.name();
-        if name.contains(['/', '\\', '?', '#'])
-            || !percent_decode_str(encoded_name).eq(name.bytes())
+        if !is_valid_skill_name(name) {
+            return Err(SkillValidationError::InvalidName(name.to_owned()));
+        }
+        if !percent_decode_str(encoded_name)
+            .decode_utf8()
+            .is_ok_and(|segment| segment.nfkc().eq(name.nfkc()))
         {
             return Err(SkillValidationError::NameMismatch {
                 uri: self.uri.clone(),
@@ -321,6 +327,28 @@ pub fn skill_name_from_uri(uri: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Validate the NFKC form, as in the Agent Skills reference validator.
+/// Letters from scripts without case are valid in a skill name.
+fn is_valid_skill_name(name: &str) -> bool {
+    let mut needs_alphanumeric = true;
+    for (index, ch) in name.nfkc().enumerate() {
+        if index >= 64 {
+            return false;
+        }
+        match get_general_category(ch) {
+            GeneralCategory::LowercaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::DecimalNumber
+            | GeneralCategory::LetterNumber
+            | GeneralCategory::OtherNumber => needs_alphanumeric = false,
+            _ if ch == '-' && !needs_alphanumeric => needs_alphanumeric = true,
+            _ => return false,
+        }
+    }
+    !needs_alphanumeric
+}
+
 /// Comparison key for a file under this skill's root. Reads use the advertised URI.
 fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> {
     // Keep the trailing slash to distinguish a child from a sibling whose
@@ -351,8 +379,9 @@ fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> 
     Some(key)
 }
 
-// RFC 3986 §6.2.2 decodes unreserved bytes and uppercases the hex digits in
-// other escapes. Reserved delimiters therefore stay encoded in the key.
+// First percent-encode literal Unicode and ASCII control characters. Then apply
+// RFC 3986 §6.2.2: decode unreserved bytes and uppercase the other escapes,
+// keeping reserved delimiters encoded in the comparison key.
 fn normalize_percent_encoding(value: &str) -> Cow<'_, str> {
     let encoded: Cow<'_, str> = utf8_percent_encode(value, CONTROLS).into();
     let Some((prefix, escaped)) = encoded.split_once('%') else {
@@ -404,6 +433,10 @@ pub fn validate_skills(skills: &[Skill]) -> Result<(), SkillValidationError> {
 pub enum SkillValidationError {
     #[error("skill uri {0} does not end in /SKILL.md")]
     UriNotSkillMd(String),
+    #[error(
+        "invalid skill name {0:?}: use 1–64 characters with lowercase letters, numbers, and single internal hyphens"
+    )]
+    InvalidName(String),
     #[error("skill uri {uri} does not end in the frontmatter name {name}")]
     NameMismatch { uri: String, name: String },
     #[error("skill manifest {0} does not list its own SKILL.md")]
@@ -761,6 +794,54 @@ mod tests {
         }
 
         #[test]
+        fn enforces_the_agent_skills_name_rules() {
+            let longest = "界".repeat(64);
+            let too_long = "界".repeat(65);
+            for (name, valid) in [
+                ("a", true),
+                ("東京-٢", true),
+                (longest.as_str(), true),
+                (too_long.as_str(), false),
+                ("", false),
+                ("PDF", false),
+                ("École", false),
+                ("two_words", false),
+                ("two.words", false),
+                ("two words", false),
+                ("coffee/tea", false),
+                ("-two", false),
+                ("two-", false),
+                ("two--words", false),
+                ("☕", false),
+            ] {
+                let skill = Skill::new(
+                    format!(
+                        "skill://team/{}/SKILL.md",
+                        utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
+                    ),
+                    SkillFrontmatter::new(name, "Example skill"),
+                    SkillResources::Dynamic,
+                );
+                assert_eq!(skill.validate().is_ok(), valid, "{name:?}");
+            }
+        }
+
+        #[test]
+        fn compares_unicode_names_in_normalized_form() {
+            for (segment, name) in [
+                ("re%CC%81sume%CC%81", "résumé"),
+                ("r%C3%A9sum%C3%A9", "re\u{301}sume\u{301}"),
+            ] {
+                let skill = Skill::new(
+                    format!("skill://team/{segment}/SKILL.md"),
+                    SkillFrontmatter::new(name, "Résumé templates"),
+                    SkillResources::Dynamic,
+                );
+                assert_eq!(skill.validate(), Ok(()), "{segment}");
+            }
+        }
+
+        #[test]
         fn rejects_a_name_that_differs_from_the_uri() {
             let mut skill = billing_skill();
             skill.frontmatter.name = "invoices".into();
@@ -775,7 +856,6 @@ mod tests {
             for (segment, name) in [
                 ("r%FFsum%C3%A9", "résumé"),
                 ("r%25C3%25A9sum%25C3%25A9", "résumé"),
-                ("coffee%2Ftea", "coffee/tea"),
             ] {
                 let skill = Skill::new(
                     format!("skill://team/{segment}/SKILL.md"),
