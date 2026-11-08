@@ -325,14 +325,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                     .to_bytes();
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
-                    Err(e)
-                        if matches!(
-                            message,
-                            ClientJsonRpcMessage::Notification(_)
-                                | ClientJsonRpcMessage::Response(_)
-                                | ClientJsonRpcMessage::Error(_)
-                        ) =>
-                    {
+                    Err(e) if awaits_no_response => {
                         tracing::warn!(
                             "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
                         );
@@ -347,7 +340,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             // from the body, so accept any 2xx rather than failing the send on an
             // unexpected or absent Content-Type.
             _ if awaits_no_response => {
-                tracing::debug!(
+                tracing::warn!(
                     "ignoring unexpected content type {:?} on a POST that awaits no response",
                     content_type
                 );

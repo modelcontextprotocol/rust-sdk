@@ -360,14 +360,7 @@ impl StreamableHttpClient for reqwest::Client {
                 let body = response.bytes().await?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
-                    Err(e)
-                        if matches!(
-                            message,
-                            ClientJsonRpcMessage::Notification(_)
-                                | ClientJsonRpcMessage::Response(_)
-                                | ClientJsonRpcMessage::Error(_)
-                        ) =>
-                    {
+                    Err(e) if awaits_no_response => {
                         tracing::warn!(
                             "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
                         );
@@ -385,7 +378,7 @@ impl StreamableHttpClient for reqwest::Client {
             // empty body, where an absent Content-Length stops the check above
             // from firing.
             _ if awaits_no_response => {
-                tracing::debug!(
+                tracing::warn!(
                     "ignoring unexpected content type {content_type:?} on a POST that awaits no response"
                 );
                 Ok(StreamableHttpPostResponse::Accepted)
