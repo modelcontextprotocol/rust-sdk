@@ -333,6 +333,27 @@ mod serving {
     }
 
     #[test]
+    fn should_serve_a_text_type_containing_nul_as_a_blob() {
+        let dir = skills_tree();
+        let utf16le: Vec<u8> = "<a/>".bytes().flat_map(|b| [b, 0]).collect();
+        write(dir.path(), "pdf-processing/form.xml", &utf16le);
+        let catalog = load(&dir);
+
+        let result = catalog
+            .read_resource("skill://pdf-processing/form.xml")
+            .expect("served");
+
+        assert!(matches!(
+            &result.contents[0],
+            ResourceContents::BlobResourceContents { mime_type: Some(mime), .. } if mime == "application/xml"
+        ));
+        assert_eq!(
+            read_bytes(&catalog, "skill://pdf-processing/form.xml"),
+            utf16le
+        );
+    }
+
+    #[test]
     fn should_omit_the_mime_type_of_an_unknown_extension() {
         let dir = skills_tree();
         write(dir.path(), "pdf-processing/data.bin", "DATA");

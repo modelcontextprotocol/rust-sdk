@@ -215,7 +215,8 @@ impl SkillCatalog {
             .mime_type
             .is_some_and(is_textual)
             .then(|| std::str::from_utf8(&file.bytes).ok())
-            .flatten();
+            .flatten()
+            .filter(|text| !text.contains('\0'));
         let contents = match text {
             Some(text) => ResourceContents::text(text, uri),
             None => ResourceContents::blob(BASE64_STANDARD.encode(&file.bytes), uri),
