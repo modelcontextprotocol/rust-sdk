@@ -333,6 +333,17 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     fn into_dyn(self) -> Box<dyn DynService<R>> {
         Box::new(self)
     }
+    /// Initialize the protocol over `transport` and return a running service.
+    ///
+    /// On a server, this waits for peer input that establishes a protocol
+    /// lifecycle, such as a legacy `initialize` request. A stdio server normally
+    /// runs as a child process of an MCP client; starting it in a terminal with
+    /// no protocol input leaves this future pending.
+    ///
+    /// Once this returns, the service handles messages in the background and
+    /// other asynchronous work can run. Use [`RunningService::waiting`] to wait
+    /// for shutdown or [`RunningService::cancel`] to stop the running service.
+    /// Use [`Self::serve_with_ct`] to supply a cancellation token during startup.
     fn serve<T, E, A>(
         self,
         transport: T,
@@ -344,6 +355,15 @@ pub trait ServiceExt<R: ServiceRole>: Service<R> + Sized {
     {
         Self::serve_with_ct(self, transport, Default::default())
     }
+    /// Initialize and run the service with the supplied cancellation token.
+    ///
+    /// Like [`Self::serve`], this waits for protocol initialization before
+    /// returning a [`RunningService`]. Cancelling `ct` interrupts initialization
+    /// or signals shutdown of the running service.
+    ///
+    /// Transport shutdown can have additional constraints: Tokio's standard
+    /// input uses a blocking read that cancellation cannot interrupt. See
+    /// <https://docs.rs/tokio/latest/tokio/io/fn.stdin.html>.
     fn serve_with_ct<T, E, A>(
         self,
         transport: T,
