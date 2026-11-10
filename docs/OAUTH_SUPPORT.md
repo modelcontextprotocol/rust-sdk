@@ -452,8 +452,22 @@ cargo run -p mcp-client-examples --example clients_client_credentials -- \
 6. **Authorization Request**: Build authorization URL with PKCE (S256) and RFC 8707 resource parameter
 7. **Authorization Code Exchange**: After user authorization, exchange code for access token (with resource parameter)
 8. **Token Usage**: Use access token for API calls via `AuthClient` or `AuthorizedHttpClient`
-9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires; `scope` is omitted by default, which keeps the original grant (RFC 6749 §6). Providers that require it (e.g. Azure AD v2) can opt in with `AuthorizationManager::set_refresh_scopes`; only scopes from the original grant are sent, and a narrowed refresh does not shrink the stored grant
+9. **Token Refresh**: Automatically use refresh token to get new access token when current one expires; `scope` is omitted by default, which keeps the original grant (RFC 6749 §6). See [Refresh scopes](#refresh-scopes)
 10. **Scope Upgrade**: On 403 insufficient_scope, compute scope union and re-authorize with upgraded scopes
+
+## Refresh scopes
+
+Refresh requests leave out `scope` by default. RFC 6749 §6 makes it optional, and leaving it out keeps the original grant. Some providers (e.g. Salesforce) reject `scope` on refresh.
+
+**Behaviour change:** earlier releases always sent the granted scopes on refresh. If your provider requires `scope` on refresh (e.g. Azure AD v2), you now need to set it:
+
+```rust,ignore
+auth_manager.set_refresh_scopes(["https://graph.microsoft.com/.default", "offline_access"]);
+```
+
+- Only scopes from the original grant are sent.
+- If none of the scopes you set are in the original grant, refresh fails with `AuthError::TokenRefreshFailed` instead of leaving `scope` out, since that would hand back the full grant.
+- A refresh never shrinks the stored grant, even when the provider returns a narrower access token.
 
 ## Security Considerations
 

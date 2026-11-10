@@ -1594,8 +1594,14 @@ impl AuthorizationManager {
     /// Set the scopes to include on a refresh-token request.
     ///
     /// RFC 6749 §6 makes `scope` optional. Refresh omits it unless the caller
-    /// sets one here. A scope that was not part of the original grant is not
-    /// sent. An empty list omits the parameter again.
+    /// sets one here, so providers that require `scope` on refresh (e.g. Azure
+    /// AD v2) must call this. Earlier releases always sent the granted scopes.
+    ///
+    /// Only scopes from the original grant are sent. If none of the scopes set
+    /// here are in the original grant, refresh fails with
+    /// [`AuthError::TokenRefreshFailed`] instead of omitting `scope`, because
+    /// omitting it would return the full original grant. An empty list omits
+    /// the parameter again.
     pub fn set_refresh_scopes<I, S>(&mut self, scopes: I)
     where
         I: IntoIterator<Item = S>,
@@ -2143,22 +2149,33 @@ impl AuthorizationManager {
     ///
     /// `None` or an empty list omits the parameter. Otherwise only scopes from
     /// the original grant are kept. When that grant was not recorded, the
-    /// caller-provided scopes are used as-is.
-    fn refresh_request_scopes(explicit: Option<&[String]>, granted: &[String]) -> Vec<String> {
+    /// caller-provided scopes are used as-is. Errors when the caller set scopes
+    /// but none of them are in the original grant: omitting `scope` then would
+    /// silently return the full grant instead of the narrower one asked for.
+    fn refresh_request_scopes(
+        explicit: Option<&[String]>,
+        granted: &[String],
+    ) -> Result<Vec<String>, AuthError> {
         let Some(explicit) = explicit.filter(|scopes| !scopes.is_empty()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         if granted.is_empty() {
-            return Self::dedup_scopes(explicit.to_vec());
+            return Ok(Self::dedup_scopes(explicit.to_vec()));
         }
         let granted_set: HashSet<&str> = granted.iter().map(String::as_str).collect();
-        Self::dedup_scopes(
+        let kept = Self::dedup_scopes(
             explicit
                 .iter()
                 .filter(|scope| granted_set.contains(scope.as_str()))
                 .cloned()
                 .collect(),
-        )
+        );
+        if kept.is_empty() {
+            return Err(AuthError::TokenRefreshFailed(format!(
+                "none of the refresh scopes {explicit:?} are in the original grant {granted:?}"
+            )));
+        }
+        Ok(kept)
     }
 
     /// deduplicate scopes preserving first-seen order (SEP-2350: stable for testability)
@@ -2604,7 +2621,7 @@ impl AuthorizationManager {
         let granted_scopes = stored_credentials.granted_scopes.clone();
         let original_grant = granted_scopes.clone();
         let scopes_to_send =
-            Self::refresh_request_scopes(self.refresh_scopes.as_deref(), &granted_scopes);
+            Self::refresh_request_scopes(self.refresh_scopes.as_deref(), &granted_scopes)?;
         for scope in scopes_to_send.iter().cloned() {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
@@ -2660,9 +2677,10 @@ impl AuthorizationManager {
 
         *self.current_scopes.write().await = granted_scopes.clone();
 
-        // A caller-narrowed refresh must not shrink the stored grant, or later
-        // refreshes could never ask for the dropped scopes again.
-        let stored_grant = if original_grant.is_empty() || self.refresh_scopes.is_none() {
+        // RFC 6749 §6: a refresh never changes the refresh token's scope, even
+        // when the access token comes back narrower. Keep the original grant so
+        // later refreshes can still ask for any of it.
+        let stored_grant = if original_grant.is_empty() {
             granted_scopes
         } else {
             original_grant
@@ -10033,6 +10051,15 @@ mod tests {
     }
 
     async fn start_token_server() -> (String, Arc<std::sync::Mutex<Option<String>>>) {
+        start_token_server_with_body(
+            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
+        )
+        .await
+    }
+
+    async fn start_token_server_with_body(
+        response_body: &'static str,
+    ) -> (String, Arc<std::sync::Mutex<Option<String>>>) {
         use axum::{Router, body::Body, http::Response, routing::post};
         let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
         let captured_clone = Arc::clone(&captured);
@@ -10042,14 +10069,11 @@ mod tests {
             post(move |body: axum::body::Bytes| {
                 let cap = Arc::clone(&captured_clone);
                 async move {
-                    *cap.lock().unwrap() =
-                        Some(String::from_utf8(body.to_vec()).unwrap());
+                    *cap.lock().unwrap() = Some(String::from_utf8(body.to_vec()).unwrap());
                     Response::builder()
                         .status(200)
                         .header("content-type", "application/json")
-                        .body(Body::from(
-                            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600}"#,
-                        ))
+                        .body(Body::from(response_body))
                         .unwrap()
                 }
             }),
@@ -10290,6 +10314,66 @@ mod tests {
         assert!(
             !params.contains_key("scope"),
             "scope should be absent when the caller did not set one, body: {body}"
+        );
+    }
+
+    async fn manager_with_grant(base_url: &str, grant: &[&str]) -> AuthorizationManager {
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: grant.iter().map(|s| s.to_string()).collect(),
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+        manager
+    }
+
+    #[tokio::test]
+    async fn refresh_fails_when_no_refresh_scope_is_in_the_grant() {
+        let (base_url, captured) = start_token_server().await;
+        let mut manager = manager_with_grant(&base_url, &["read", "write"]).await;
+        manager.set_refresh_scopes(["admin"]);
+
+        let err = manager.refresh_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::TokenRefreshFailed(_)),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "no refresh request should be sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_narrowed_refresh_keeps_original_grant() {
+        let (base_url, _captured) = start_token_server_with_body(
+            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600,"scope":"read"}"#,
+        )
+        .await;
+        let manager = manager_with_grant(&base_url, &["read", "write"]).await;
+
+        manager.refresh_token().await.unwrap();
+
+        let saved = manager.credential_store.load().await.unwrap().unwrap();
+        assert_eq!(
+            saved.granted_scopes,
+            vec!["read".to_string(), "write".to_string()]
+        );
+        assert_eq!(
+            *manager.current_scopes.read().await,
+            vec!["read".to_string()]
         );
     }
 
