@@ -354,6 +354,26 @@ mod serving {
     }
 
     #[test]
+    fn should_serve_utf8_text_with_a_stray_nul_as_a_blob() {
+        let dir = skills_tree();
+        write(dir.path(), "pdf-processing/notes.txt", b"before\0after");
+        let catalog = load(&dir);
+
+        let result = catalog
+            .read_resource("skill://pdf-processing/notes.txt")
+            .expect("served");
+
+        assert!(matches!(
+            &result.contents[0],
+            ResourceContents::BlobResourceContents { mime_type: Some(mime), .. } if mime == "text/plain"
+        ));
+        assert_eq!(
+            read_bytes(&catalog, "skill://pdf-processing/notes.txt"),
+            b"before\0after"
+        );
+    }
+
+    #[test]
     fn should_omit_the_mime_type_of_an_unknown_extension() {
         let dir = skills_tree();
         write(dir.path(), "pdf-processing/data.bin", "DATA");

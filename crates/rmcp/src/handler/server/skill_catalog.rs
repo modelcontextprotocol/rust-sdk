@@ -214,9 +214,9 @@ impl SkillCatalog {
         let text = file
             .mime_type
             .is_some_and(is_textual)
-            .then(|| std::str::from_utf8(&file.bytes).ok())
-            .flatten()
-            .filter(|text| !text.contains('\0'));
+            .then_some(&file.bytes)
+            .filter(|bytes| !bytes.contains(&0))
+            .and_then(|bytes| std::str::from_utf8(bytes).ok());
         let contents = match text {
             Some(text) => ResourceContents::text(text, uri),
             None => ResourceContents::blob(BASE64_STANDARD.encode(&file.bytes), uri),
@@ -598,7 +598,8 @@ fn uri_of(path: &str) -> String {
     uri
 }
 
-/// Whether files of this type are sent as `text` rather than a base64 `blob`.
+/// Whether files of this type may be sent as `text`; the bytes must also be
+/// UTF-8 without NUL, or they go out as a base64 `blob`.
 fn is_textual(mime_type: &str) -> bool {
     mime_type.starts_with("text/")
         || matches!(
