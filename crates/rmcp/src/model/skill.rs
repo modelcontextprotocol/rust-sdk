@@ -269,6 +269,11 @@ impl Skill {
 
     /// Check the rules the spec puts on a skill entry that can be checked
     /// without reading any file.
+    ///
+    /// The 1–64 character limit counts Unicode scalar values after NFKC
+    /// normalization. This same form is used to compare the frontmatter name
+    /// with the decoded URI segment. Use the advertised URI for reads and
+    /// pair it with the originating server for cache and approval keys.
     pub fn validate(&self) -> Result<(), SkillValidationError> {
         let Some(encoded_name) = skill_name_from_uri(&self.uri) else {
             return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
@@ -434,7 +439,7 @@ pub enum SkillValidationError {
     #[error("skill uri {0} does not end in /SKILL.md")]
     UriNotSkillMd(String),
     #[error(
-        "invalid skill name {0:?}: use 1–64 characters with lowercase letters, numbers, and single internal hyphens"
+        "invalid skill name {0:?}: after NFKC normalization, use 1–64 characters with lowercase letters, numbers, and single internal hyphens"
     )]
     InvalidName(String),
     #[error("skill uri {uri} does not end in the frontmatter name {name}")]
@@ -797,11 +802,15 @@ mod tests {
         fn enforces_the_agent_skills_name_rules() {
             let longest = "界".repeat(64);
             let too_long = "界".repeat(65);
+            let decomposed_accents = "e\u{301}".repeat(64); // 128 scalars normalize to 64.
+            let ffi_ligatures = "\u{fb03}".repeat(22); // 22 scalars normalize to 66.
             for (name, valid) in [
                 ("a", true),
                 ("東京-٢", true),
                 (longest.as_str(), true),
                 (too_long.as_str(), false),
+                (decomposed_accents.as_str(), true),
+                (ffi_ligatures.as_str(), false),
                 ("", false),
                 ("PDF", false),
                 ("École", false),
@@ -926,6 +935,18 @@ mod tests {
 
     mod validate_skills {
         use super::*;
+
+        #[test]
+        fn compatibility_equivalent_names_can_identify_distinct_resources() {
+            let skills = ["skill://ｃａｆｅ/SKILL.md", "skill://cafe/SKILL.md"].map(|uri| {
+                Skill::new(
+                    uri,
+                    SkillFrontmatter::new("cafe", "Coffee recipes"),
+                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                )
+            });
+            assert_eq!(validate_skills(&skills), Ok(()));
+        }
 
         #[test]
         fn rejects_the_same_skill_listed_twice() {
