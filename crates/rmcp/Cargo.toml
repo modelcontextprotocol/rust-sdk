@@ -135,6 +135,9 @@ chrono = { version = "0.4.38", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = true }
+
 [features]
 default = ["base64", "macros", "server"]
 local = ["rmcp-macros?/local"]
@@ -145,7 +148,7 @@ elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
 request-state = ["dep:hmac", "dep:zeroize", "base64"]
-skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde"]
+skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde", "dep:windows-sys"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
