@@ -2627,6 +2627,7 @@ impl AuthorizationManager {
         }
         // Omitting `scope` asks for the original grant. Keep that as the
         // fallback when the token response also omits `scope` (RFC 6749 §5.1).
+        let asked_for_subset = !scopes_to_send.is_empty();
         let requested_scopes = if scopes_to_send.is_empty() {
             granted_scopes
         } else {
@@ -2679,8 +2680,10 @@ impl AuthorizationManager {
 
         // RFC 6749 §6: a refresh never changes the refresh token's scope, even
         // when the access token comes back narrower. Keep the original grant so
-        // later refreshes can still ask for any of it.
-        let stored_grant = if original_grant.is_empty() {
+        // later refreshes can still ask for any of it. An unknown grant (imported
+        // or legacy credentials) stays unknown after a refresh that asked for a
+        // subset, since that response only shows the subset.
+        let stored_grant = if original_grant.is_empty() && !asked_for_subset {
             granted_scopes
         } else {
             original_grant
@@ -10375,6 +10378,29 @@ mod tests {
             *manager.current_scopes.read().await,
             vec!["read".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn subset_refresh_keeps_unknown_grant_unknown() {
+        let (base_url, _captured) = start_token_server_with_body(
+            r#"{"access_token":"new-token","token_type":"Bearer","expires_in":3600,"scope":"read"}"#,
+        )
+        .await;
+        let mut manager = manager_with_grant(&base_url, &[]).await;
+        manager.set_refresh_scopes(["read"]);
+
+        manager.refresh_token().await.unwrap();
+
+        let saved = manager.credential_store.load().await.unwrap().unwrap();
+        assert!(
+            saved.granted_scopes.is_empty(),
+            "{:?}",
+            saved.granted_scopes
+        );
+
+        // a later refresh for a different scope is still sent, not rejected locally
+        manager.set_refresh_scopes(["write"]);
+        manager.refresh_token().await.unwrap();
     }
 
     #[tokio::test]
