@@ -208,11 +208,11 @@ fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
     schema.iter().any(|(key, value)| match key.as_str() {
         "x-mcp-header" => !on_chain,
         "properties" => schema_map_has_off_chain_annotation(value, on_chain),
-        "$defs" | "definitions" | "dependentSchemas" | "patternProperties" => {
+        "$defs" | "definitions" | "dependencies" | "dependentSchemas" | "patternProperties" => {
             schema_map_has_off_chain_annotation(value, false)
         }
-        // Instance data, not subschemas.
-        "default" | "const" | "enum" | "examples" => false,
+        // These contain instance data or property names, not subschemas.
+        "default" | "const" | "enum" | "examples" | "dependentRequired" => false,
         _ => subschema_has_off_chain_annotation(value, false),
     })
 }
@@ -733,6 +733,77 @@ mod tests {
                 .unwrap()
                 .clone();
             assert!(validate_param_header_annotations(&schema).is_err());
+        }
+
+        #[test]
+        fn accepts_property_name_in_dependent_required() {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "x-mcp-header": { "type": "string" },
+                    "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                },
+                "dependentRequired": { "x-mcp-header": ["tenant"] }
+            });
+            assert_eq!(
+                validate_param_header_annotations(schema.as_object().unwrap()),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn accepts_property_names_in_legacy_dependencies() {
+            for dependency in [
+                json!(["tenant"]),
+                json!({ "required": ["tenant"] }),
+                json!(true),
+                json!(false),
+            ] {
+                let schema = json!({
+                    "type": "object",
+                    "properties": {
+                        "x-mcp-header": { "type": "string" },
+                        "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                    },
+                    "dependencies": { "x-mcp-header": dependency }
+                });
+                assert_eq!(
+                    validate_param_header_annotations(schema.as_object().unwrap()),
+                    Ok(()),
+                    "dependency must not turn its property name into an annotation: {schema}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_annotations_in_legacy_dependency_schemas() {
+            for name in ["tenant", "default", "properties", "x-mcp-header"] {
+                let schema = json!({
+                    "type": "object",
+                    "dependencies": {
+                        (name): {
+                            "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                        }
+                    }
+                });
+                assert!(
+                    validate_param_header_annotations(schema.as_object().unwrap()).is_err(),
+                    "annotation must be rejected regardless of the dependency name: {schema}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_header_annotation_inside_dependent_schema() {
+            let schema = json!({
+                "type": "object",
+                "dependentSchemas": {
+                    "tenant": {
+                        "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                    }
+                }
+            });
+            assert!(validate_param_header_annotations(schema.as_object().unwrap()).is_err());
         }
 
         #[test]
