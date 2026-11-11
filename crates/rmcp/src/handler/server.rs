@@ -465,7 +465,11 @@ macro_rules! server_handler_methods {
             request: CompleteRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<CompleteResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(CompleteResult::default()))
+            std::future::ready(if self.get_info().capabilities.completions.is_some() {
+                Ok(CompleteResult::default())
+            } else {
+                Err(McpError::method_not_found::<CompleteRequestMethod>())
+            })
         }
         fn set_level(
             &self,
@@ -486,7 +490,11 @@ macro_rules! server_handler_methods {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListPromptsResult::default()))
+            std::future::ready(if self.get_info().capabilities.prompts.is_some() {
+                Ok(ListPromptsResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListPromptsRequestMethod>())
+            })
         }
         fn list_resources(
             &self,
