@@ -111,6 +111,38 @@ async fn server_error_response_to_notification_is_still_rejected() {
 }
 
 #[tokio::test]
+async fn success_response_to_a_client_response_is_accepted() {
+    use axum::{Router, http::StatusCode, routing::post};
+    use rmcp::model::{ClientResult, EmptyResult, RequestId};
+
+    // A client Response also awaits no reply, so it shares the notification
+    // fallback; this pins that arm alongside the Notification cases.
+    let url = spawn_server(Router::new().route(
+        "/mcp",
+        post(|| async { (StatusCode::OK, "this is not a JSON-RPC message") }),
+    ))
+    .await;
+
+    let result = reqwest::Client::new()
+        .post_message(
+            Arc::from(url.as_str()),
+            ClientJsonRpcMessage::response(
+                ClientResult::EmptyResult(EmptyResult {}),
+                RequestId::Number(1),
+            ),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    match result {
+        Ok(StreamableHttpPostResponse::Accepted) => {}
+        other => panic!("expected Accepted, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn request_response_with_unexpected_content_type_is_still_rejected() {
     use axum::{Router, routing::post};
     use rmcp::{
