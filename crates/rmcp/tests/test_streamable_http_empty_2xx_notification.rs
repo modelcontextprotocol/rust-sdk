@@ -91,6 +91,26 @@ async fn success_response_without_content_type_or_length_to_notification_is_acce
 }
 
 #[tokio::test]
+async fn server_error_response_to_notification_is_still_rejected() {
+    use axum::{Router, http::StatusCode, routing::post};
+    use rmcp::transport::streamable_http_client::StreamableHttpError;
+
+    // A non-2xx reply is an error even for a notification: the 2xx fallback
+    // must stay below the status check, or server failures become accepted
+    // sends.
+    let url = spawn_server(Router::new().route(
+        "/mcp",
+        post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "server error") }),
+    ))
+    .await;
+
+    match post_initialized(&url).await {
+        Err(StreamableHttpError::HttpStatus(error)) => assert_eq!(error.status, 500),
+        other => panic!("expected HttpStatus(500), got: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn request_response_with_unexpected_content_type_is_still_rejected() {
     use axum::{Router, routing::post};
     use rmcp::{

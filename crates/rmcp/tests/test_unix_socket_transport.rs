@@ -446,3 +446,49 @@ async fn test_unix_socket_notification_without_content_type_is_accepted() -> any
     }
     Ok(())
 }
+
+/// A non-2xx reply to a notification must stay an error: the 2xx fallback is
+/// safe only while it sits below the transport's status check. Runs on Linux
+/// CI; the whole file is `cfg(unix)`.
+#[tokio::test]
+async fn test_unix_socket_notification_server_error_is_rejected() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-unix-error-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn error_handler() -> impl IntoResponse {
+        (StatusCode::INTERNAL_SERVER_ERROR, "server error")
+    }
+
+    let app = Router::new().route("/mcp", post(error_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                InitializedNotification::default(),
+            )),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(msg)) => {
+            assert!(msg.contains("500"), "expected 500 in error, got: {msg}");
+        }
+        other => panic!("expected UnexpectedServerResponse(500), got: {other:?}"),
+    }
+    Ok(())
+}
