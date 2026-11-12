@@ -18,8 +18,8 @@ use std::{sync::Arc, time::Duration};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
-        ServerConfig,
+        CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+        ContentBlock, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -28,6 +28,11 @@ use rmcp::{
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+
+/// A short keep-alive lets the SSE server notice a dropped connection quickly
+/// (hyper only observes the disconnect on its next write), and is the deadline
+/// after which a silent per-request-negotiated handler gets its SSE head.
+const KEEP_ALIVE: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 struct CancelProbe {
@@ -43,9 +48,13 @@ impl ServerHandler for CancelProbe {
 
     async fn call_tool(
         &self,
-        _request: CallToolRequestParams,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        if request.name == "answer_soon" {
+            tokio::time::sleep(KEEP_ALIVE / 2).await;
+            return Err(McpError::method_not_found::<CallToolRequestMethod>());
+        }
         self.started.notify_one();
         // Wait until the per-request cancellation token fires, or give up after a
         // generous timeout so a buggy build fails via the outer assertion rather
@@ -63,7 +72,24 @@ impl ServerHandler for CancelProbe {
 }
 
 const CALL_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wait_for_cancel","arguments":{}}}"#;
-const NEGOTIATED_CALL_BODY: &str = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wait_for_cancel","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},"io.modelcontextprotocol/clientCapabilities":{}}}}"#;
+
+fn negotiated_call(id: u32, tool: &str) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": tool,
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1.0"},
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    })
+    .to_string()
+}
 
 struct TestServer {
     url: String,
@@ -84,9 +110,7 @@ async fn spawn_stateless_server(json_response: bool) -> anyhow::Result<TestServe
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(json_response)
-        // A short keep-alive lets the SSE server notice a dropped connection
-        // quickly (hyper only observes the disconnect on its next write).
-        .with_sse_keep_alive(Some(Duration::from_millis(100)))
+        .with_sse_keep_alive(Some(KEEP_ALIVE))
         .with_cancellation_token(server_ct.child_token());
 
     let service: StreamableHttpService<CancelProbe, LocalSessionManager> =
@@ -216,7 +240,7 @@ async fn stateless_negotiated_sse_commits_head_while_handler_runs() -> anyhow::R
             .header("MCP-Protocol-Version", "2026-07-28")
             .header("Mcp-Method", "tools/call")
             .header("Mcp-Name", "wait_for_cancel")
-            .body(NEGOTIATED_CALL_BODY)
+            .body(negotiated_call(2, "wait_for_cancel"))
             .send(),
     )
     .await
@@ -247,6 +271,42 @@ async fn stateless_negotiated_sse_commits_head_while_handler_runs() -> anyhow::R
     tokio::time::timeout(Duration::from_secs(10), server.cancelled.notified())
         .await
         .expect("RequestContext::ct should fire after client disconnect (negotiated SSE)");
+
+    server.server_ct.cancel();
+    Ok(())
+}
+
+/// Per-request protocol metadata: a handler that answers within one keep-alive
+/// interval keeps the HTTP status its answer maps to, with a JSON body, rather
+/// than a committed event stream carrying the error.
+#[tokio::test]
+async fn stateless_negotiated_answer_within_interval_keeps_its_status() -> anyhow::Result<()> {
+    let server = spawn_stateless_server(false).await?;
+    let client = reqwest::Client::new();
+
+    for id in 0..3 {
+        let answer = client
+            .post(&server.url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2026-07-28")
+            .header("Mcp-Method", "tools/call")
+            .header("Mcp-Name", "answer_soon")
+            .body(negotiated_call(id, "answer_soon"))
+            .send()
+            .await?;
+        assert_eq!(answer.status(), reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(
+            answer
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body: serde_json::Value = serde_json::from_slice(&answer.bytes().await?)?;
+        assert_eq!(body["id"], id);
+        assert_eq!(body["error"]["code"], -32601);
+    }
 
     server.server_ct.cancel();
     Ok(())

@@ -225,7 +225,11 @@ pub struct StreamableHttpServerConfig {
     /// false and the handler has sent nothing for this long, the server commits
     /// the `text/event-stream` head (HTTP 200) instead, so these pings reach the
     /// client while the handler runs; its result, or an error, then arrives as
-    /// an SSE event.
+    /// an SSE event. With the default 15 s, a `-32601` answered after 14 s is a
+    /// `404` with an `application/json` body, and the same answer after 16 s is a
+    /// `200` `text/event-stream` carrying the error as an event. Set this below
+    /// the shortest idle timeout between server and client: the stream is silent
+    /// for at most this long, before and after the head.
     pub sse_keep_alive: Option<Duration>,
     /// The retry interval for SSE priming events.
     pub sse_retry: Option<Duration>,
