@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.9.0...rmcp-v3.10.0) - 2026-11-12
+
+### Added
+
+- load skills from a directory tree ([#1409](https://github.com/modelcontextprotocol/rust-sdk/pull/1409))
+
+### Fixed
+
+- preserve tools with dependency property-name maps ([#1428](https://github.com/modelcontextprotocol/rust-sdk/pull/1428))
+
+### Other
+
+- *(macros)* document the Send limitation on async #[tool]/#[prompt] bodies ([#1396](https://github.com/modelcontextprotocol/rust-sdk/pull/1396))
+- *(service)* clarify startup and stdio lifecycle ([#1387](https://github.com/modelcontextprotocol/rust-sdk/pull/1387))
+
 ## [3.9.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.8.0...rmcp-v3.9.0) - 2026-11-05
 
 ### Added
