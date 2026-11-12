@@ -501,7 +501,11 @@ macro_rules! server_handler_methods {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListResourcesResult::default()))
+            std::future::ready(if self.get_info().capabilities.resources.is_some() {
+                Ok(ListResourcesResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListResourcesRequestMethod>())
+            })
         }
         fn list_resource_templates(
             &self,
@@ -510,7 +514,11 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>>
                + MaybeSendFuture
                + '_ {
-            std::future::ready(Ok(ListResourceTemplatesResult::default()))
+            std::future::ready(if self.get_info().capabilities.resources.is_some() {
+                Ok(ListResourceTemplatesResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListResourceTemplatesRequestMethod>())
+            })
         }
         fn read_resource(
             &self,
@@ -610,7 +618,11 @@ macro_rules! server_handler_methods {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListToolsResult::default()))
+            std::future::ready(if self.get_info().capabilities.tools.is_some() {
+                Ok(ListToolsResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListToolsRequestMethod>())
+            })
         }
         /// Get a tool definition by name.
         ///

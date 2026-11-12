@@ -20,10 +20,6 @@ const client = new Client(
 await client.connect(transport);
 const tools = await client.listTools();
 console.log(tools);
-const resources = await client.listResources();
-console.log(resources);
-const templates = await client.listResourceTemplates();
-console.log(templates);
 // The calculator server declares only the tools capability, so unsupported
 // request methods must fail rather than returning empty successful results.
 async function expectMethodNotFound(name, operation) {
@@ -37,6 +33,8 @@ async function expectMethodNotFound(name, operation) {
   }
   console.log(`${name} correctly rejected with method-not-found`);
 }
+await expectMethodNotFound("resources/list", () => client.listResources());
+await expectMethodNotFound("resources/templates/list", () => client.listResourceTemplates());
 await expectMethodNotFound("prompts/list", () => client.listPrompts());
 await expectMethodNotFound("completion/complete", () =>
   client.complete({
