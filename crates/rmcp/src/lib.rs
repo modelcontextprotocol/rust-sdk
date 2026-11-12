@@ -28,6 +28,9 @@ pub use service::{RoleServer, serve_server};
 pub mod handler;
 #[cfg(feature = "server")]
 pub mod task_manager;
+/// Dependency-free BM25 tool discovery, with an optional server wrapper.
+#[cfg(feature = "tool-search")]
+pub mod tool_search;
 #[cfg(any(feature = "client", feature = "server"))]
 pub mod transport;
 

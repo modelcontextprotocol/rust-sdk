@@ -27,6 +27,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
 | `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`) | |
+| `tool-search` | Dependency-free BM25 tool search and optional server discovery wrapper | |
 
 ### Transport features
 
@@ -66,6 +67,54 @@ Any type that implements the [`Transport`](crate::transport::Transport) trait ca
 2. `(AsyncRead, AsyncWrite)` or a combined `AsyncRead + AsyncWrite`
 3. A [`Worker`](crate::transport::worker::Worker) implementation
 4. A [`Transport`](crate::transport::Transport) implementation directly
+
+## Tool search
+
+Enable `tool-search` for a standalone, lazily built BM25 Okapi index:
+
+```rust,ignore
+use rmcp::tool_search::ToolSearchIndex;
+
+let mut index = ToolSearchIndex::new(tools);
+let hits = index.search("create a github issue", 5);
+// After an upstream tools/list_changed notification, fetch the new catalog:
+index.replace_tools(updated_tools);
+```
+
+Names, titles, descriptions, and input-schema parameter names/descriptions are
+searched case-insensitively. Use `with_parameter_indexing(tools, false)` to omit
+parameters. Hits include full `Tool` definitions and scores; unmatched queries
+return no hits.
+
+With `server` enabled, wrap your existing `ServerHandler` (including handlers
+using `#[tool_handler]` / `ToolRouter`):
+
+```rust,ignore
+use rmcp::tool_search::{ToolSearchConfig, ToolSearchServer};
+
+let mut config = ToolSearchConfig::default();
+config.max_results = 5;
+config.always_visible = vec!["health_check".into()];
+let server = ToolSearchServer::with_config(my_handler, config)?;
+// Serve `server` as usual.
+```
+
+`tools/list` exposes `search_tools` and `call_tool`, plus `always_visible` tools
+which are excluded from search. Search arguments are
+`{"query": "create an issue", "max_results": 3}`; the optional limit defaults to
+the configured maximum (five by default) and cannot exceed it. Search returns
+`{"tools": [...]}` as both structured and text content, including input schemas.
+Dispatch arguments are `{"name": "create_issue", "arguments": {...}}`.
+Original tools remain directly callable, and dispatch preserves request metadata
+and retry state. Search controls discovery, **not authorization**: underlying
+handlers must still enforce access checks.
+
+Use `search_tool_name` / `call_tool_name` to avoid catalog collisions. Invalid
+settings are rejected at construction, and catalog collisions fail listing/search.
+The wrapper fetches every catalog page on each listing/search and lazily rebuilds
+its index only when definitions change, so dynamic or request-specific catalogs
+do not require a notification invalidation hook. Other handler methods and
+notifications are delegated unchanged. Regex and embedding search are not included.
 
 ## License
 

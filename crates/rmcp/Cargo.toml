@@ -33,6 +33,7 @@ features = [
   "server",
   "server-side-http",
   "tower",
+  "tool-search",
   "transport-async-rw",
   "transport-child-process",
   "transport-io",
@@ -138,6 +139,7 @@ libc = "0.2"
 default = ["base64", "macros", "server"]
 local = ["rmcp-macros?/local"]
 client = ["dep:tokio-stream"]
+tool-search = []
 server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
