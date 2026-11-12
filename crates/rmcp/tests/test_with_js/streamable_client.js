@@ -24,17 +24,24 @@ const resources = await client.listResources();
 console.log(resources);
 const templates = await client.listResourceTemplates();
 console.log(templates);
-// The calculator server declares only the tools capability, so the server
-// must answer prompts/list with method-not-found instead of an empty result.
-try {
-  const prompts = await client.listPrompts();
-  console.error(`listPrompts unexpectedly succeeded: ${JSON.stringify(prompts)}`);
-  process.exit(1);
-} catch (err) {
-  if (err.code !== ErrorCode.MethodNotFound) {
-    console.error(`listPrompts failed with an unexpected error: ${err}`);
-    process.exit(1);
+// The calculator server declares only the tools capability, so unsupported
+// request methods must fail rather than returning empty successful results.
+async function expectMethodNotFound(name, operation) {
+  try {
+    const result = await operation();
+    throw new Error(`${name} unexpectedly succeeded: ${JSON.stringify(result)}`);
+  } catch (err) {
+    if (err.code !== ErrorCode.MethodNotFound) {
+      throw err;
+    }
   }
-  console.log("listPrompts correctly rejected with method-not-found");
+  console.log(`${name} correctly rejected with method-not-found`);
 }
+await expectMethodNotFound("prompts/list", () => client.listPrompts());
+await expectMethodNotFound("completion/complete", () =>
+  client.complete({
+    ref: { type: "ref/prompt", name: "unknown" },
+    argument: { name: "input", value: "value" },
+  }),
+);
 await client.close();
