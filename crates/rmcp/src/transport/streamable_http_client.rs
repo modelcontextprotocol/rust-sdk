@@ -1145,6 +1145,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     }
     fn config(&self) -> super::worker::WorkerConfig {
         super::worker::WorkerConfig {
+            #[cfg(feature = "client")]
+            on_request_submitted: Some(crate::service::DiscoveryProbe::observe_http_request),
+            #[cfg(not(feature = "client"))]
+            on_request_submitted: None,
             name: Some("StreamableHttpClientWorker".into()),
             channel_buffer_capacity: self.config.channel_buffer_capacity,
         }
@@ -1169,6 +1173,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             ClientJsonRpcMessage::Request(request)
                 if matches!(&request.request, ClientRequest::InitializeRequest(_))
         );
+        let is_discover = matches!(
+            &startup_request, ClientJsonRpcMessage::Request(request)
+                if matches!(request.request, ClientRequest::DiscoverRequest(_))
+        );
         let mut saved_init_request = is_legacy_startup.then(|| startup_request.clone());
         let empty_tool_cache = HashMap::new();
         let (bootstrap_version, bootstrap_headers) = if is_legacy_startup {
@@ -1181,32 +1189,34 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 &empty_tool_cache,
             )
         };
-        let (message, session_id) = match self
-            .client
-            .post_message_with_max_sse_event_size(
-                config.uri.clone(),
-                startup_request,
-                None,
-                config.auth_header.clone(),
-                bootstrap_headers.clone(),
-                config.max_sse_event_size,
+        let post = self.client.post_message_with_max_sse_event_size(
+            config.uri.clone(),
+            startup_request,
+            None,
+            config.auth_header.clone(),
+            bootstrap_headers.clone(),
+            config.max_sse_event_size,
+        );
+        let startup = async {
+            let response = match post.await {
+                Ok(response) => response,
+                Err(err) => {
+                    let msg = format!("{err:?}");
+                    let _ = responder.send(Err(err));
+                    return Err(WorkerQuitReason::fatal(
+                        StreamableHttpError::TransportChannelClosed,
+                        msg,
+                    ));
+                }
+            };
+            let _ = responder.send(Ok(()));
+            response.expect_initialized::<C::Error>().await.map_err(
+                WorkerQuitReason::fatal_context("process initialize response"),
             )
-            .await
-        {
-            Ok(res) => {
-                let _ = responder.send(Ok(()));
-                res.expect_initialized::<C::Error>().await.map_err(
-                    WorkerQuitReason::fatal_context("process initialize response"),
-                )?
-            }
-            Err(err) => {
-                let msg = format!("{:?}", err);
-                let _ = responder.send(Err(err));
-                return Err(WorkerQuitReason::fatal(
-                    StreamableHttpError::TransportChannelClosed,
-                    msg,
-                ));
-            }
+        };
+        let (message, session_id) = tokio::select! {
+            _ = transport_task_ct.cancelled(), if is_discover => return Err(WorkerQuitReason::Cancelled),
+            response = startup => response?,
         };
         let mut uses_modern_http = !is_legacy_startup;
         let mut session_id: Option<Arc<str>> = if uses_modern_http {
