@@ -13,11 +13,15 @@ use http::{HeaderName, HeaderValue};
 use hyper_util::rt::TokioIo;
 use rmcp::{
     ServiceExt,
-    model::{ClientJsonRpcMessage, ClientRequest, PingRequest, RequestId},
+    model::{
+        ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializedNotification,
+        PingRequest, RequestId,
+    },
     transport::{
         StreamableHttpClientTransport, UnixSocketHttpClient,
         streamable_http_client::{
             StreamableHttpClient, StreamableHttpClientTransportConfig, StreamableHttpError,
+            StreamableHttpPostResponse,
         },
     },
 };
@@ -349,6 +353,142 @@ async fn test_unix_socket_request_malformed_json_is_unexpected() -> anyhow::Resu
             );
         }
         other => panic!("expected UnexpectedServerResponse, got: {other:?}"),
+    }
+    Ok(())
+}
+
+/// A notification POST answered 200 + `text/plain` must be `Accepted`: a
+/// notification awaits no reply, so the response body is not load-bearing.
+/// This exercises the unix-socket transport's copy of the fallback, which the
+/// 202-answering handler in `mcp_handler` never reaches. The whole file is
+/// `cfg(unix)`, so this case runs on Linux CI and is compiled out on Windows.
+#[tokio::test]
+async fn test_unix_socket_notification_text_plain_success_is_accepted() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-unix-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn text_plain_handler() -> impl IntoResponse {
+        (StatusCode::OK, "this is not a JSON-RPC message")
+    }
+
+    let app = Router::new().route("/mcp", post(text_plain_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                InitializedNotification::default(),
+            )),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Ok(StreamableHttpPostResponse::Accepted) => {}
+        other => panic!("expected Accepted, got: {other:?}"),
+    }
+    Ok(())
+}
+
+/// A notification POST answered 200 with neither `Content-Type` nor
+/// `Content-Length` (chunked empty body) must also be `Accepted`; this is the
+/// shape the `Content-Length == 0` shortcut cannot detect. Runs on Linux CI.
+#[tokio::test]
+async fn test_unix_socket_notification_without_content_type_is_accepted() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-unix-chunked-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn chunked_empty_handler() -> impl IntoResponse {
+        axum::body::Body::from_stream(futures::stream::empty::<Result<Bytes, std::io::Error>>())
+    }
+
+    let app = Router::new().route("/mcp", post(chunked_empty_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                InitializedNotification::default(),
+            )),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Ok(StreamableHttpPostResponse::Accepted) => {}
+        other => panic!("expected Accepted, got: {other:?}"),
+    }
+    Ok(())
+}
+
+/// A non-2xx reply to a notification must stay an error: the 2xx fallback is
+/// safe only while it sits below the transport's status check. Runs on Linux
+/// CI; the whole file is `cfg(unix)`.
+#[tokio::test]
+async fn test_unix_socket_notification_server_error_is_rejected() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-unix-error-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn error_handler() -> impl IntoResponse {
+        (StatusCode::INTERNAL_SERVER_ERROR, "server error")
+    }
+
+    let app = Router::new().route("/mcp", post(error_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::notification(ClientNotification::InitializedNotification(
+                InitializedNotification::default(),
+            )),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Err(StreamableHttpError::UnexpectedServerResponse(msg)) => {
+            assert!(msg.contains("500"), "expected 500 in error, got: {msg}");
+        }
+        other => panic!("expected UnexpectedServerResponse(500), got: {other:?}"),
     }
     Ok(())
 }
