@@ -3,11 +3,11 @@
     feature = "transport-streamable-http-client-reqwest",
     not(feature = "local")
 ))]
-//! The reqwest backend reads non-SSE POST bodies only up to a fixed size: JSON
-//! success bodies up to 16 MiB, error bodies up to 64 KiB. An oversized body
-//! fails closed: no prefix is parsed and a notification is not reported as
-//! accepted. The client must also stop reading a body that is still open
-//! once the limit is exceeded.
+//! The reqwest backend enforces `StreamableHttpResponseLimits` on non-SSE POST
+//! responses: complete JSON bodies default to 16 MiB and fail closed when
+//! exceeded, while non-JSON and unchallenged 401/403 error diagnostics default
+//! to 64 KiB and stop reading once that prefix is full so large legacy 4xx
+//! pages still reach `server/discover` fallback.
 //!
 //! A raw TCP fixture controls the framing exactly, including `Content-Length`
 //! values that do not match the bytes sent, chunked bodies without a final
@@ -15,6 +15,7 @@
 
 use std::{collections::HashMap, fmt::Debug, io, sync::Arc, time::Duration};
 
+use futures::StreamExt;
 use rmcp::{
     model::{
         ClientJsonRpcMessage, ClientNotification, ClientRequest, DiscoverRequest,
@@ -22,6 +23,7 @@ use rmcp::{
     },
     transport::streamable_http_client::{
         StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
+        StreamableHttpResponseLimits,
     },
 };
 use tokio::{
@@ -30,13 +32,14 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
-/// Must match the private limits in the reqwest backend.
+/// Default limits enforced by the reqwest backend.
 const MAX_JSON_BODY: usize = 16 * 1024 * 1024;
 const MAX_ERROR_BODY: usize = 64 * 1024;
+/// Smaller custom JSON bound for parameterized framing matrices.
+const CUSTOM_JSON_BODY: usize = 128 * 1024;
 /// Far above any limit; never sent, only declared.
 const HUGE_DECLARED: u64 = 1 << 40;
 const JSON_OVER: u64 = MAX_JSON_BODY as u64 + 1;
-const ERROR_OVER: u64 = MAX_ERROR_BODY as u64 + 1;
 /// Generous; a bounded read finishes in well under a second.
 const DEADLINE: Duration = Duration::from_secs(10);
 const WRITE_CHUNK: usize = 64 * 1024;
@@ -77,6 +80,8 @@ enum Payload {
     Error,
     /// Plain text.
     Text,
+    /// Raw SSE event stream.
+    Sse,
 }
 
 impl Payload {
@@ -90,6 +95,7 @@ impl Payload {
             Payload::Result => (RESULT_JSON, b' '),
             Payload::Error => (ERROR_JSON, b' '),
             Payload::Text => (TEXT, b'x'),
+            Payload::Sse => ("data: example\n\n", b' '),
         };
         assert!(prefix.len() <= len);
         let mut body = Vec::with_capacity(len);
@@ -254,6 +260,14 @@ async fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
     stream.flush().await
 }
 
+fn custom_limits(json: usize, error: usize, sse: usize) -> StreamableHttpResponseLimits {
+    let mut limits = StreamableHttpResponseLimits::default();
+    limits.max_json_response_size = json;
+    limits.max_error_response_size = error;
+    limits.max_sse_event_size = sse;
+    limits
+}
+
 async fn post(server: &RawServer, message: Message, session: Option<&str>) -> PostResult {
     tokio::time::timeout(
         DEADLINE,
@@ -263,6 +277,27 @@ async fn post(server: &RawServer, message: Message, session: Option<&str>) -> Po
             session.map(Arc::from),
             None,
             HashMap::new(),
+        ),
+    )
+    .await
+    .expect("the POST must finish without reading past the body limit")
+}
+
+async fn post_with_limits(
+    server: &RawServer,
+    message: Message,
+    session: Option<&str>,
+    limits: StreamableHttpResponseLimits,
+) -> PostResult {
+    tokio::time::timeout(
+        DEADLINE,
+        reqwest::Client::new().post_message_with_response_limits(
+            server.uri.clone(),
+            message.build(),
+            session.map(Arc::from),
+            None,
+            HashMap::new(),
+            limits,
         ),
     )
     .await
@@ -293,6 +328,7 @@ enum Outcome {
     Accepted,
     SessionExpired,
     AuthRequired,
+    InsufficientScope,
 }
 
 fn assert_outcome(result: PostResult, expected: Outcome) {
@@ -323,9 +359,48 @@ fn assert_outcome(result: PostResult, expected: Outcome) {
         (Outcome::Unexpected, Err(StreamableHttpError::UnexpectedServerResponse(_)))
         | (Outcome::Accepted, Ok(StreamableHttpPostResponse::Accepted))
         | (Outcome::SessionExpired, Err(StreamableHttpError::SessionExpired))
-        | (Outcome::AuthRequired, Err(StreamableHttpError::AuthRequired(_))) => {}
+        | (Outcome::AuthRequired, Err(StreamableHttpError::AuthRequired(_)))
+        | (Outcome::InsufficientScope, Err(StreamableHttpError::InsufficientScope(_))) => {}
         (expected, _) => panic!("expected {expected:?}, got {rendered}"),
     }
+}
+
+#[test]
+fn defaults_match_sse_and_diagnostic_bounds() {
+    let limits = StreamableHttpResponseLimits::default();
+    assert_eq!(limits.max_json_response_size, MAX_JSON_BODY);
+    assert_eq!(limits.max_sse_event_size, 16 * 1024 * 1024);
+    assert_eq!(limits.max_error_response_size, MAX_ERROR_BODY);
+}
+
+#[tokio::test]
+async fn base64_tool_results_above_sixteen_mib_require_opt_in_limit() {
+    let data = "A".repeat(17 * 1024 * 1024);
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "result": {"content": [{"type": "image", "data": data, "mimeType": "image/png"}]}
+    })
+    .to_string();
+    let server = serve(Reply::new(
+        200,
+        "application/json",
+        body.into_bytes().into(),
+    ))
+    .await;
+    assert_outcome(
+        post(&server, Message::Request, None).await,
+        Outcome::TooLarge(MAX_JSON_BODY),
+    );
+    assert_outcome(
+        post_with_limits(
+            &server,
+            Message::Request,
+            None,
+            custom_limits(64 * 1024 * 1024, MAX_ERROR_BODY, 16 * 1024 * 1024),
+        )
+        .await,
+        Outcome::JsonResult,
+    );
 }
 
 /// Valid JSON followed by whitespace past the limit is rejected, so the
@@ -366,21 +441,30 @@ async fn oversized_json_success_fails_closed(
     #[case] framing: Framing,
     #[case] end: End,
 ) {
-    let body = payload.bytes(MAX_JSON_BODY + 1);
+    let body = payload.bytes(CUSTOM_JSON_BODY + 1);
     let server = serve(Reply::new(200, "application/json", body).framed(framing, end)).await;
     assert_outcome(
-        post(&server, message, None).await,
-        Outcome::TooLarge(MAX_JSON_BODY),
+        post_with_limits(
+            &server,
+            message,
+            None,
+            custom_limits(CUSTOM_JSON_BODY, MAX_ERROR_BODY, 1024),
+        )
+        .await,
+        Outcome::TooLarge(CUSTOM_JSON_BODY),
     );
 }
 
 #[tokio::test]
 async fn raising_the_sse_limit_does_not_disable_the_json_body_limit() {
-    let server = serve(Reply::new(
-        200,
-        "application/json",
-        Payload::Result.bytes(MAX_JSON_BODY + 1),
-    ))
+    let server = serve(
+        Reply::new(
+            200,
+            "application/json",
+            Payload::Result.bytes(MAX_JSON_BODY + 1),
+        )
+        .framed(Framing::Chunked, End::Hold),
+    )
     .await;
     let result = tokio::time::timeout(
         DEADLINE,
@@ -399,10 +483,10 @@ async fn raising_the_sse_limit_does_not_disable_the_json_body_limit() {
 }
 
 #[rstest::rstest]
-#[case::exact_content_length(Message::Request, MAX_JSON_BODY, Framing::Length)]
-#[case::exact_chunked(Message::Request, MAX_JSON_BODY, Framing::Chunked)]
-#[case::under_content_length(Message::Request, MAX_JSON_BODY - 1, Framing::Length)]
-#[case::notification_exact(Message::Notification, MAX_JSON_BODY, Framing::Chunked)]
+#[case::exact_content_length(Message::Request, CUSTOM_JSON_BODY, Framing::Length)]
+#[case::exact_chunked(Message::Request, CUSTOM_JSON_BODY, Framing::Chunked)]
+#[case::under_content_length(Message::Request, CUSTOM_JSON_BODY - 1, Framing::Length)]
+#[case::notification_exact(Message::Notification, CUSTOM_JSON_BODY, Framing::Chunked)]
 #[tokio::test]
 async fn json_success_at_or_under_the_limit_is_parsed(
     #[case] message: Message,
@@ -411,73 +495,221 @@ async fn json_success_at_or_under_the_limit_is_parsed(
 ) {
     let body = Payload::Result.bytes(len);
     let server = serve(Reply::new(200, "application/json", body).framed(framing, End::Close)).await;
-    assert_outcome(post(&server, message, None).await, Outcome::JsonResult);
+    assert_outcome(
+        post_with_limits(
+            &server,
+            message,
+            None,
+            custom_limits(CUSTOM_JSON_BODY, 0, 0),
+        )
+        .await,
+        Outcome::JsonResult,
+    );
 }
 
 #[rstest::rstest]
-#[case::json_rpc_error(
-    Message::Request,
-    "application/json",
-    Payload::Error,
-    Framing::Length,
-    End::Close
-)]
-#[case::json_rpc_error_chunked_held_open(
-    Message::Request,
-    "application/json",
-    Payload::Error,
-    Framing::Chunked,
-    End::Hold
-)]
-#[case::plain_text(
-    Message::Request,
-    "text/plain",
-    Payload::Text,
-    Framing::Length,
-    End::Close
-)]
-#[case::plain_text_chunked_held_open(
-    Message::Request,
-    "text/plain",
-    Payload::Text,
-    Framing::Chunked,
-    End::Hold
-)]
-#[case::discover_json_rpc_error(
-    Message::Discover,
-    "application/json",
-    Payload::Error,
-    Framing::Length,
-    End::Close
-)]
-#[case::discover_plain_text(
-    Message::Discover,
-    "text/plain",
-    Payload::Text,
-    Framing::Chunked,
-    End::Hold
-)]
-#[case::notification_json_rpc_error(
-    Message::Notification,
-    "application/json",
-    Payload::Error,
-    Framing::Length,
-    End::Close
-)]
+#[case::json_rpc_error(Message::Request, Framing::Length, End::Close)]
+#[case::json_rpc_error_chunked_held_open(Message::Request, Framing::Chunked, End::Hold)]
+#[case::discover_json_rpc_error(Message::Discover, Framing::Length, End::Close)]
+#[case::notification_json_rpc_error(Message::Notification, Framing::Length, End::Close)]
 #[tokio::test]
-async fn oversized_client_error_bodies_fail_closed(
+async fn oversized_json_client_error_bodies_fail_closed(
     #[case] message: Message,
-    #[case] content_type: &'static str,
-    #[case] payload: Payload,
     #[case] framing: Framing,
     #[case] end: End,
 ) {
-    let body = payload.bytes(MAX_ERROR_BODY + 1);
-    let server = serve(Reply::new(400, content_type, body).framed(framing, end)).await;
+    let body = Payload::Error.bytes(CUSTOM_JSON_BODY + 1);
+    let server = serve(Reply::new(400, "application/json", body).framed(framing, end)).await;
     assert_outcome(
-        post(&server, message, None).await,
-        Outcome::TooLarge(MAX_ERROR_BODY),
+        post_with_limits(
+            &server,
+            message,
+            None,
+            custom_limits(CUSTOM_JSON_BODY, MAX_ERROR_BODY, 0),
+        )
+        .await,
+        Outcome::TooLarge(CUSTOM_JSON_BODY),
     );
+}
+
+#[rstest::rstest]
+#[case::below_limit(1, Framing::Length)]
+#[case::exact_limit(0, Framing::Length)]
+#[case::over_limit(-1, Framing::Length)]
+#[case::chunked_below_limit(1, Framing::Chunked)]
+#[case::chunked_exact_limit(0, Framing::Chunked)]
+#[case::chunked_over_limit(-1, Framing::Chunked)]
+#[tokio::test]
+async fn json_rpc_error_uses_json_limit_for_every_status(
+    #[case] margin: isize,
+    #[case] framing: Framing,
+    #[values(200, 400)] status: u16,
+) {
+    let body: Arc<[u8]> = Arc::from(ERROR_JSON.as_bytes());
+    let limit = ERROR_JSON.len().checked_add_signed(margin).unwrap();
+    let server =
+        serve(Reply::new(status, "application/json", body).framed(framing, End::Close)).await;
+    let result =
+        post_with_limits(&server, Message::Request, None, custom_limits(limit, 0, 0)).await;
+    if margin < 0 {
+        assert_outcome(result, Outcome::TooLarge(limit));
+    } else {
+        assert_outcome(result, Outcome::JsonError(SERVER_ERROR));
+    }
+}
+
+#[rstest::rstest]
+#[case::request_length(Message::Request, Framing::Length, End::Close, Outcome::Unexpected)]
+#[case::request_chunked_held_open(
+    Message::Request,
+    Framing::Chunked,
+    End::Hold,
+    Outcome::Unexpected
+)]
+#[case::request_huge_declared(
+    Message::Request,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold,
+    Outcome::Unexpected
+)]
+#[case::discover_length(
+    Message::Discover,
+    Framing::Length,
+    End::Close,
+    Outcome::JsonError(INVALID_REQUEST)
+)]
+#[case::discover_chunked_held_open(
+    Message::Discover,
+    Framing::Chunked,
+    End::Hold,
+    Outcome::JsonError(INVALID_REQUEST)
+)]
+#[case::discover_huge_declared(
+    Message::Discover,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold,
+    Outcome::JsonError(INVALID_REQUEST)
+)]
+#[tokio::test]
+async fn oversized_non_json_error_truncates_diagnostic_and_preserves_legacy_discover(
+    #[case] message: Message,
+    #[case] framing: Framing,
+    #[case] end: End,
+    #[case] expected: Outcome,
+) {
+    let mut bytes = vec![b'x'; MAX_ERROR_BODY];
+    bytes.extend_from_slice(b"DISCARDED_TAIL");
+    let server = serve(Reply::new(400, "text/plain", bytes.into()).framed(framing, end)).await;
+    let result = post(&server, message, None).await;
+    match (&result, expected) {
+        (Err(StreamableHttpError::UnexpectedServerResponse(actual)), Outcome::Unexpected) => {
+            assert!(actual.ends_with(&"x".repeat(MAX_ERROR_BODY)));
+            assert!(!actual.contains("DISCARDED_TAIL"));
+        }
+        (
+            Ok(StreamableHttpPostResponse::Json(JsonRpcMessage::Error(error), _)),
+            Outcome::JsonError(code),
+        ) => {
+            assert_eq!(error.error.code.0, code);
+            assert_eq!(error.id, Some(RequestId::Number(1)));
+            assert!(error.error.message.ends_with(&"x".repeat(MAX_ERROR_BODY)));
+            assert!(!error.error.message.contains("DISCARDED_TAIL"));
+        }
+        _ => panic!("expected {expected:?}, got {}", summary(&result)),
+    }
+}
+
+#[rstest::rstest]
+#[case::fixed(Framing::Length)]
+#[case::chunked(Framing::Chunked)]
+#[tokio::test]
+async fn truncated_diagnostics_cannot_be_parsed_as_json_rpc(#[case] framing: Framing) {
+    let body: Arc<[u8]> = format!("{ERROR_JSON}not-json").into_bytes().into();
+    for content_type in ["text/plain", "application/json"] {
+        let server =
+            serve(Reply::new(400, content_type, body.clone()).framed(framing, End::Close)).await;
+        assert_outcome(
+            post_with_limits(
+                &server,
+                Message::Request,
+                None,
+                custom_limits(body.len(), ERROR_JSON.len(), 0),
+            )
+            .await,
+            Outcome::Unexpected,
+        );
+        if content_type == "application/json" {
+            assert_outcome(
+                post_with_limits(
+                    &server,
+                    Message::Discover,
+                    None,
+                    custom_limits(ERROR_JSON.len(), body.len(), 0),
+                )
+                .await,
+                Outcome::TooLarge(ERROR_JSON.len()),
+            );
+        }
+    }
+}
+
+#[rstest::rstest]
+#[case::unauthorized(401, Outcome::Unexpected)]
+#[case::forbidden(403, Outcome::Unexpected)]
+#[case::server_error(500, Outcome::Status(500))]
+#[tokio::test]
+async fn truncated_diagnostics_do_not_expand_discovery_fallback(
+    #[case] status: u16,
+    #[case] expected: Outcome,
+) {
+    let server = serve(
+        Reply::new(status, "text/html", Arc::from(&b"large error page"[..]))
+            .framed(Framing::Chunked, End::Close),
+    )
+    .await;
+    assert_outcome(
+        post_with_limits(&server, Message::Discover, None, custom_limits(0, 2, 0)).await,
+        expected,
+    );
+}
+
+#[rstest::rstest]
+#[case::unauthorized_declared_held_open(
+    401,
+    Message::Request,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold
+)]
+#[case::unauthorized_chunked_held_open(401, Message::Discover, Framing::Chunked, End::Hold)]
+#[case::forbidden_declared_held_open(
+    403,
+    Message::Request,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold
+)]
+#[case::forbidden_chunked_held_open(403, Message::Discover, Framing::Chunked, End::Hold)]
+#[tokio::test]
+async fn unchallenged_auth_failure_json_truncates_without_buffering_json_limit(
+    #[case] status: u16,
+    #[case] message: Message,
+    #[case] framing: Framing,
+    #[case] end: End,
+) {
+    let mut bytes = vec![b'x'; MAX_ERROR_BODY];
+    bytes.extend_from_slice(b"DISCARDED_TAIL");
+    let server =
+        serve(Reply::new(status, "application/json", bytes.into()).framed(framing, end)).await;
+    let result =
+        post_with_limits(&server, message, None, custom_limits(0, MAX_ERROR_BODY, 0)).await;
+    let Err(StreamableHttpError::UnexpectedServerResponse(actual)) = result else {
+        panic!(
+            "expected UnexpectedServerResponse, got {}",
+            summary(&result)
+        );
+    };
+    assert!(actual.starts_with(&format!("HTTP {status}")), "{actual}");
+    assert!(actual.ends_with(&"x".repeat(MAX_ERROR_BODY)));
+    assert!(!actual.contains("DISCARDED_TAIL"));
 }
 
 /// An oversized JSON 5xx body drops the JSON-RPC error but keeps the
@@ -491,10 +723,16 @@ async fn oversized_json_server_error_keeps_status_metadata(
     #[case] framing: Framing,
     #[case] end: End,
 ) {
-    let body = Payload::Error.bytes(MAX_ERROR_BODY + 1);
+    let body = Payload::Error.bytes(CUSTOM_JSON_BODY + 1);
     let server = serve(Reply::new(status, "application/json", body).framed(framing, end)).await;
     assert_outcome(
-        post(&server, Message::Request, None).await,
+        post_with_limits(
+            &server,
+            Message::Request,
+            None,
+            custom_limits(CUSTOM_JSON_BODY, MAX_ERROR_BODY, 0),
+        )
+        .await,
         Outcome::Status(status),
     );
 }
@@ -527,15 +765,8 @@ async fn oversized_json_server_error_keeps_status_metadata(
     400,
     "application/json",
     Message::Request,
-    ERROR_OVER,
-    Outcome::TooLarge(MAX_ERROR_BODY)
-)]
-#[case::client_error_text(
-    400,
-    "text/plain",
-    Message::Request,
-    HUGE_DECLARED,
-    Outcome::TooLarge(MAX_ERROR_BODY)
+    JSON_OVER,
+    Outcome::TooLarge(MAX_JSON_BODY)
 )]
 #[case::server_error_json(
     500,
@@ -629,6 +860,7 @@ async fn error_bodies_at_the_limit_keep_their_meaning(
 /// so a huge declared body that never arrives does not matter.
 #[rstest::rstest]
 #[case::accepted(202, "application/json", None, None, Outcome::Accepted)]
+#[case::no_content(204, "application/json", None, None, Outcome::Accepted)]
 #[case::session_not_found(
     404,
     "application/json",
@@ -637,6 +869,13 @@ async fn error_bodies_at_the_limit_keep_their_meaning(
     Outcome::SessionExpired
 )]
 #[case::auth_challenge(401, "application/json", Some(CHALLENGE), None, Outcome::AuthRequired)]
+#[case::insufficient_scope(
+    403,
+    "application/json",
+    Some(CHALLENGE),
+    None,
+    Outcome::InsufficientScope
+)]
 #[case::rate_limited_json(429, "application/json", None, None, Outcome::Status(429))]
 #[case::server_error_text(503, "text/plain", None, None, Outcome::Status(503))]
 #[tokio::test]
@@ -652,6 +891,32 @@ async fn body_free_responses_ignore_the_declared_size(
     reply.challenge = challenge;
     let server = serve(reply).await;
     assert_outcome(post(&server, Message::Request, session).await, expected);
+}
+
+#[tokio::test]
+async fn sse_responses_keep_their_independent_event_limit() {
+    let server = serve(
+        Reply::new(200, "text/event-stream", Payload::Sse.bytes(16))
+            .framed(Framing::Chunked, End::Close),
+    )
+    .await;
+    let StreamableHttpPostResponse::Sse(mut stream, _) =
+        post_with_limits(&server, Message::Request, None, custom_limits(0, 0, 64))
+            .await
+            .unwrap()
+    else {
+        panic!("expected SSE stream");
+    };
+    assert!(stream.next().await.unwrap().is_ok());
+
+    let StreamableHttpPostResponse::Sse(mut stream, _) =
+        post_with_limits(&server, Message::Request, None, custom_limits(100, 100, 4))
+            .await
+            .unwrap()
+    else {
+        panic!("expected bounded SSE stream");
+    };
+    assert!(stream.next().await.unwrap().is_err());
 }
 
 // Run this suite with and without `reqwest/charset`: Cargo can enable the
@@ -715,17 +980,47 @@ async fn error_body_decoding_matches_reqwest_text(
 #[case::length(Framing::Length, End::Close)]
 #[case::chunked(Framing::Chunked, End::Hold)]
 #[tokio::test]
-async fn oversized_charset_body_is_rejected_before_decoding(
+async fn oversized_charset_diagnostic_truncates_input_bytes_without_waiting_for_eof(
     #[case] framing: Framing,
     #[case] end: End,
 ) {
-    let body: Arc<[u8]> = vec![0x80; MAX_ERROR_BODY + 1].into();
-    let server =
-        serve(Reply::new(400, "text/plain; charset=windows-1252", body).framed(framing, end)).await;
-    assert_outcome(
-        post(&server, Message::Request, None).await,
-        Outcome::TooLarge(MAX_ERROR_BODY),
-    );
+    let mut prefix_plus_tail = vec![0x80; MAX_ERROR_BODY];
+    prefix_plus_tail.extend_from_slice(b"TAIL_MARKER");
+    let expected_prefix = serve(Reply::new(
+        400,
+        "text/plain; charset=windows-1252",
+        vec![0x80; MAX_ERROR_BODY].into(),
+    ))
+    .await;
+    let expected = reqwest::Client::new()
+        .post(expected_prefix.uri.as_ref())
+        .json(&Message::Request.build())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let server = serve(
+        Reply::new(
+            400,
+            "text/plain; charset=windows-1252",
+            prefix_plus_tail.into(),
+        )
+        .framed(framing, end),
+    )
+    .await;
+    match post(&server, Message::Request, None).await {
+        Err(StreamableHttpError::UnexpectedServerResponse(actual)) => {
+            assert_eq!(actual, format!("HTTP 400 Bad Request: {expected}"));
+            assert!(!actual.contains("TAIL_MARKER"));
+        }
+        other => panic!(
+            "expected truncated decoded HTTP error, got {}",
+            summary(&other)
+        ),
+    }
 }
 
 #[tokio::test]

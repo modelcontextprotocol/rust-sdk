@@ -5,9 +5,6 @@ use futures::{Stream, TryStreamExt};
 
 use crate::transport::streamable_http_client::StreamableHttpError;
 
-pub(super) const MAX_JSON_RESPONSE_SIZE: usize = 16 * 1024 * 1024;
-pub(super) const MAX_ERROR_RESPONSE_SIZE: usize = 64 * 1024;
-
 /// Count bytes before retaining them; a length hint can reject a body early,
 /// but never replaces the streamed check or determines allocation size.
 pub(super) async fn read_bounded_body<S, E>(
@@ -38,9 +35,45 @@ where
     Ok(body)
 }
 
+/// Read at most `max_size` bytes for a diagnostic, dropping the rest of the stream.
+///
+/// Unlike a protocol message, a diagnostic need not be complete. Stop as soon as
+/// the prefix is full, without polling for another chunk or EOF. `Content-Length`
+/// is not consulted: an oversized declaration must not discard a useful prefix.
+/// The returned bytes must never be parsed as a complete JSON-RPC message.
+pub(super) async fn read_truncated_body<S, E>(
+    stream: S,
+    max_size: usize,
+) -> Result<Vec<u8>, StreamableHttpError<E>>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let mut body = Vec::new();
+    futures::pin_mut!(stream);
+    while body.len() < max_size {
+        let Some(chunk) = stream
+            .try_next()
+            .await
+            .map_err(StreamableHttpError::Client)?
+        else {
+            break;
+        };
+        let count = chunk.len().min(max_size - body.len());
+        body.extend_from_slice(&chunk[..count]);
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::{
+        io,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use futures::stream;
     use rstest::rstest;
@@ -119,5 +152,72 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        let stream = stream::iter([Ok::<_, io::Error>(Bytes::from_static(b"x"))]);
+        assert!(matches!(
+            read_bounded_body(stream, None, 0).await,
+            Err(StreamableHttpError::ResponseBodyTooLarge { max_size: 0 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn truncated_body_keeps_short_bodies_complete() {
+        let stream = stream::iter([
+            Ok::<_, io::Error>(Bytes::from_static(b"ab")),
+            Ok(Bytes::from_static(b"c")),
+        ]);
+        assert_eq!(read_truncated_body(stream, 4).await.unwrap(), b"abc");
+    }
+
+    #[tokio::test]
+    async fn truncated_body_stops_at_exact_limit_without_polling_for_eof() {
+        let stream = futures::StreamExt::chain(
+            stream::iter([
+                Ok::<_, io::Error>(Bytes::from_static(b"ab")),
+                Ok(Bytes::from_static(b"cd")),
+            ]),
+            stream::poll_fn(|_| panic!("a full diagnostic prefix must not poll for EOF")),
+        );
+        assert_eq!(read_truncated_body(stream, 4).await.unwrap(), b"abcd");
+    }
+
+    #[tokio::test]
+    async fn truncated_body_stops_in_the_middle_of_an_oversized_chunk() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let count = polls.clone();
+        let stream = stream::poll_fn(move |_| {
+            assert!(
+                count.fetch_add(1, Ordering::SeqCst) < 2,
+                "must not drain the body"
+            );
+            std::task::Poll::Ready(Some(Ok::<_, io::Error>(Bytes::from_static(b"abc"))))
+        });
+        assert_eq!(read_truncated_body(stream, 4).await.unwrap(), b"abca");
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn truncated_body_zero_limit_does_not_poll() {
+        let stream = stream::poll_fn(|_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+            panic!("zero diagnostic limit must not read the body")
+        });
+        assert!(read_truncated_body(stream, 0).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn truncated_body_preserves_io_errors_before_the_limit() {
+        let stream = stream::iter([
+            Ok(Bytes::from_static(b"a")),
+            Err(io::Error::other("read failed")),
+        ]);
+        assert!(matches!(
+            read_truncated_body(stream, 4).await,
+            Err(StreamableHttpError::Client(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn truncated_body_counts_bytes_not_utf8_characters() {
+        let stream = stream::iter([Ok::<_, io::Error>(Bytes::from_static("é".as_bytes()))]);
+        assert_eq!(read_truncated_body(stream, 1).await.unwrap(), [0xc3]);
     }
 }
