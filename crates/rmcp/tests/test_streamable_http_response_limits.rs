@@ -4,10 +4,10 @@
     not(feature = "local")
 ))]
 //! The reqwest backend enforces `StreamableHttpResponseLimits` on non-SSE POST
-//! responses: complete JSON bodies (regardless of HTTP status) default to
-//! 64 MiB and fail closed when exceeded, while non-JSON error diagnostics
-//! default to 64 KiB and stop reading once that prefix is full so large legacy
-//! 4xx pages still reach `server/discover` fallback.
+//! responses: complete JSON bodies default to 16 MiB and fail closed when
+//! exceeded, while non-JSON and unchallenged 401/403 error diagnostics default
+//! to 64 KiB and stop reading once that prefix is full so large legacy 4xx
+//! pages still reach `server/discover` fallback.
 //!
 //! A raw TCP fixture controls the framing exactly, including `Content-Length`
 //! values that do not match the bytes sent, chunked bodies without a final
@@ -33,7 +33,7 @@ use tokio::{
 };
 
 /// Default limits enforced by the reqwest backend.
-const MAX_JSON_BODY: usize = 64 * 1024 * 1024;
+const MAX_JSON_BODY: usize = 16 * 1024 * 1024;
 const MAX_ERROR_BODY: usize = 64 * 1024;
 /// Smaller custom JSON bound for parameterized framing matrices.
 const CUSTOM_JSON_BODY: usize = 128 * 1024;
@@ -366,7 +366,7 @@ fn assert_outcome(result: PostResult, expected: Outcome) {
 }
 
 #[test]
-fn defaults_allow_larger_json_without_changing_sse_or_diagnostics() {
+fn defaults_match_sse_and_diagnostic_bounds() {
     let limits = StreamableHttpResponseLimits::default();
     assert_eq!(limits.max_json_response_size, MAX_JSON_BODY);
     assert_eq!(limits.max_sse_event_size, 16 * 1024 * 1024);
@@ -374,7 +374,7 @@ fn defaults_allow_larger_json_without_changing_sse_or_diagnostics() {
 }
 
 #[tokio::test]
-async fn default_json_limit_accepts_base64_tool_results_above_sixteen_mib() {
+async fn base64_tool_results_above_sixteen_mib_require_opt_in_limit() {
     let data = "A".repeat(17 * 1024 * 1024);
     let body = serde_json::json!({
         "jsonrpc": "2.0", "id": 1,
@@ -389,6 +389,16 @@ async fn default_json_limit_accepts_base64_tool_results_above_sixteen_mib() {
     .await;
     assert_outcome(
         post(&server, Message::Request, None).await,
+        Outcome::TooLarge(MAX_JSON_BODY),
+    );
+    assert_outcome(
+        post_with_limits(
+            &server,
+            Message::Request,
+            None,
+            custom_limits(64 * 1024 * 1024, MAX_ERROR_BODY, 16 * 1024 * 1024),
+        )
+        .await,
         Outcome::JsonResult,
     );
 }
@@ -661,6 +671,45 @@ async fn truncated_diagnostics_do_not_expand_discovery_fallback(
         post_with_limits(&server, Message::Discover, None, custom_limits(0, 2, 0)).await,
         expected,
     );
+}
+
+#[rstest::rstest]
+#[case::unauthorized_declared_held_open(
+    401,
+    Message::Request,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold
+)]
+#[case::unauthorized_chunked_held_open(401, Message::Discover, Framing::Chunked, End::Hold)]
+#[case::forbidden_declared_held_open(
+    403,
+    Message::Request,
+    Framing::Declared(HUGE_DECLARED),
+    End::Hold
+)]
+#[case::forbidden_chunked_held_open(403, Message::Discover, Framing::Chunked, End::Hold)]
+#[tokio::test]
+async fn unchallenged_auth_failure_json_truncates_without_buffering_json_limit(
+    #[case] status: u16,
+    #[case] message: Message,
+    #[case] framing: Framing,
+    #[case] end: End,
+) {
+    let mut bytes = vec![b'x'; MAX_ERROR_BODY];
+    bytes.extend_from_slice(b"DISCARDED_TAIL");
+    let server =
+        serve(Reply::new(status, "application/json", bytes.into()).framed(framing, end)).await;
+    let result =
+        post_with_limits(&server, message, None, custom_limits(0, MAX_ERROR_BODY, 0)).await;
+    let Err(StreamableHttpError::UnexpectedServerResponse(actual)) = result else {
+        panic!(
+            "expected UnexpectedServerResponse, got {}",
+            summary(&result)
+        );
+    };
+    assert!(actual.starts_with(&format!("HTTP {status}")), "{actual}");
+    assert!(actual.ends_with(&"x".repeat(MAX_ERROR_BODY)));
+    assert!(!actual.contains("DISCARDED_TAIL"));
 }
 
 /// An oversized JSON 5xx body drops the JSON-RPC error but keeps the

@@ -390,9 +390,9 @@ impl StreamableHttpClient for reqwest::Client {
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
             );
             // JSON-RPC errors need the same complete-body limit as success
-            // messages. Non-JSON error bodies are diagnostics: retain only a
-            // prefix so large legacy error pages still reach discovery fallback.
-            let body = if is_json_response {
+            // messages. Non-JSON error bodies and unchallenged 401/403 responses
+            // are diagnostics: retain only a prefix without buffering a full body.
+            let body = if is_json_response && !is_auth_failure {
                 match read_bounded_body(
                     response.bytes_stream(),
                     content_length,
@@ -400,15 +400,6 @@ impl StreamableHttpClient for reqwest::Client {
                 )
                 .await
                 {
-                    Ok(mut raw_body) if is_auth_failure => {
-                        raw_body.truncate(limits.max_error_response_size);
-                        decode_error_body(
-                            raw_body,
-                            content_type_header,
-                            limits.max_error_response_size,
-                        )
-                        .await
-                    }
                     Ok(raw_body) => {
                         let prefix_bytes = (raw_body.len() > limits.max_error_response_size)
                             .then(|| raw_body[..limits.max_error_response_size].to_vec());

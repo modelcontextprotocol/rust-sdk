@@ -455,24 +455,26 @@ pub(super) fn legacy_discover_response(
 
 /// Byte limits enforced by the built-in Streamable HTTP clients before parsing.
 ///
-/// The defaults are 16 MiB per SSE event, 64 MiB per JSON response (regardless of
-/// HTTP status), and 64 KiB per HTTP diagnostic prefix. JSON bodies above their
-/// limit are rejected; non-JSON error bodies are truncated, preserving legacy
-/// discovery fallback. A zero JSON limit accepts only empty bodies, while a zero
-/// diagnostic limit skips the body. For compressed responses, body limits count
-/// the decompressed bytes yielded by the HTTP backend, not total memory usage.
+/// The defaults are 16 MiB per SSE event, 16 MiB per JSON response, and 64 KiB
+/// per HTTP diagnostic prefix. JSON bodies above their limit are rejected;
+/// non-JSON and unchallenged 401/403 error bodies are truncated, preserving
+/// legacy discovery fallback where applicable. A zero JSON limit accepts only
+/// empty bodies, while a zero diagnostic limit skips the body. For compressed
+/// responses, body limits count the decompressed bytes yielded by the HTTP
+/// backend, not total memory usage.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct StreamableHttpResponseLimits {
     /// Maximum raw size of an individual SSE event.
     pub max_sse_event_size: usize,
-    /// Maximum complete JSON response body, including HTTP error responses.
+    /// Maximum complete JSON response body, including JSON-RPC error responses.
     pub max_json_response_size: usize,
     /// Maximum diagnostic prefix of a non-success HTTP response body.
     ///
-    /// Non-JSON bodies are read only up to this limit. JSON bodies are first
-    /// bounded by `max_json_response_size` and parsed in full; only when they are
-    /// not JSON-RPC errors is their diagnostic text truncated to this limit.
+    /// Non-JSON bodies and unchallenged 401/403 error bodies are read only up to
+    /// this limit. Other JSON error bodies are first bounded by
+    /// `max_json_response_size` and parsed in full; only when they are not
+    /// JSON-RPC errors is their diagnostic text truncated to this limit.
     pub max_error_response_size: usize,
 }
 
@@ -480,7 +482,7 @@ impl Default for StreamableHttpResponseLimits {
     fn default() -> Self {
         Self {
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
-            max_json_response_size: 64 * 1024 * 1024,
+            max_json_response_size: 16 * 1024 * 1024,
             max_error_response_size: 64 * 1024,
         }
     }
@@ -489,9 +491,9 @@ impl Default for StreamableHttpResponseLimits {
 /// HTTP backend used by [`StreamableHttpClientTransport`].
 ///
 /// The built-in reqwest and Unix socket clients enforce [`StreamableHttpResponseLimits`]
-/// (defaulting to 64 MiB per complete JSON response regardless of HTTP status,
-/// 64 KiB per HTTP diagnostic prefix, and 16 MiB per SSE event). Limits count
-/// bytes before parsing (after decompression, when enabled in reqwest). Oversized
+/// (defaulting to 16 MiB per complete JSON response, 64 KiB per HTTP diagnostic
+/// prefix, and 16 MiB per SSE event). Limits count bytes before parsing (after
+/// decompression, when enabled in reqwest). Oversized
 /// JSON bodies are rejected rather than truncated and parsed (reqwest JSON 5xx
 /// failures retain HTTP status metadata), while non-JSON error bodies retain at
 /// most the diagnostic prefix so legacy discovery fallback still succeeds.
@@ -2194,7 +2196,7 @@ pub struct StreamableHttpClientTransportConfig {
     /// [`StreamableHttpClient`] implementations must override the corresponding
     /// `*_with_max_sse_event_size` methods to enforce it.
     pub max_sse_event_size: usize,
-    /// Maximum complete JSON response body, regardless of HTTP status (default: 64 MiB).
+    /// Maximum complete JSON response body (default: 16 MiB).
     ///
     /// Built-in clients enforce this before decoding, including initialization,
     /// discovery, control requests and session recovery. Custom clients must
@@ -2203,10 +2205,11 @@ pub struct StreamableHttpClientTransportConfig {
     pub max_json_response_size: usize,
     /// Maximum HTTP error diagnostic prefix (default: 64 KiB).
     ///
-    /// Non-JSON error bodies are truncated, without draining the stream, so a
-    /// large diagnostic page does not prevent legacy discovery fallback. JSON
-    /// errors instead use `max_json_response_size` before parsing; only malformed
-    /// or non-error JSON is truncated for diagnostics. Zero skips diagnostic text.
+    /// Non-JSON and unchallenged 401/403 error bodies are truncated, without
+    /// draining the stream, so a large diagnostic page does not prevent legacy
+    /// discovery fallback. Other JSON errors instead use `max_json_response_size`
+    /// before parsing; only malformed or non-error JSON is truncated for
+    /// diagnostics. Zero skips diagnostic text.
     /// Authentication challenges and session-expired responses are returned
     /// without buffering their bodies. Custom clients must override
     /// [`StreamableHttpClient::post_message_with_response_limits`].

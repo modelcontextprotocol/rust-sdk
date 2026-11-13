@@ -313,11 +313,16 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             let is_json = content_type
                 .as_ref()
                 .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+            // Match reqwest: preserve 401/403 status without buffering a full
+            // JSON body, and re-correlate discover rejections before returning
+            // a complete JSON-RPC error.
+            let is_auth_failure =
+                matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN);
             let stream = response
                 .into_body()
                 .into_data_stream()
                 .map_err(UnixSocketError::Hyper);
-            let body = if is_json {
+            let body = if is_json && !is_auth_failure {
                 read_bounded_body(stream, content_length, limits.max_json_response_size).await
             } else {
                 read_truncated_body(stream, limits.max_error_response_size).await
@@ -329,10 +334,6 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 }
                 Err(error) => return Err(error),
             };
-            // Match reqwest: preserve 401/403 status and re-correlate discover
-            // rejections before returning a complete JSON-RPC error.
-            let is_auth_failure =
-                matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN);
             if !is_auth_failure && is_json {
                 let full_body = String::from_utf8_lossy(&body);
                 match serde_json::from_str::<ServerJsonRpcMessage>(&full_body) {

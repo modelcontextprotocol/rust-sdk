@@ -99,10 +99,12 @@ async fn oversized_response(
 }
 
 #[rstest]
-#[case::json_declared(200, "application/json", 64 * 1024 * 1024, true, true)]
-#[case::json_streamed(200, "application/json", 64 * 1024 * 1024, false, true)]
-#[case::json_error_declared(400, "application/json", 64 * 1024 * 1024, true, true)]
-#[case::json_error_streamed(400, "application/json", 64 * 1024 * 1024, false, true)]
+#[case::json_declared(200, "application/json", 16 * 1024 * 1024, true, true)]
+#[case::json_streamed(200, "application/json", 16 * 1024 * 1024, false, true)]
+#[case::json_error_declared(400, "application/json", 16 * 1024 * 1024, true, true)]
+#[case::json_error_streamed(400, "application/json", 16 * 1024 * 1024, false, true)]
+#[case::unauthorized_json_streamed(401, "application/json", 64 * 1024, false, false)]
+#[case::forbidden_json_streamed(403, "application/json", 64 * 1024, false, false)]
 #[case::text_error_streamed(400, "text/plain", 64 * 1024, false, false)]
 #[case::server_error_streamed(500, "text/plain", 64 * 1024, false, false)]
 #[tokio::test]
@@ -368,8 +370,8 @@ async fn oversized_invalid_json_is_not_accepted() {
 #[tokio::test]
 async fn legacy_post_methods_apply_default_json_limit_on_every_status() {
     for (status, content_type, limit) in [
-        ("200 OK", "application/json", 64 * 1024 * 1024),
-        ("400 Bad Request", "application/json", 64 * 1024 * 1024),
+        ("200 OK", "application/json", 16 * 1024 * 1024),
+        ("400 Bad Request", "application/json", 16 * 1024 * 1024),
     ] {
         let header = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
@@ -467,6 +469,27 @@ async fn legacy_post_methods_truncate_diagnostics_and_keep_auth_session_preceden
                 Err(StreamableHttpError::UnexpectedServerResponse(_))
             ));
         }
+    }
+    for status in ["401 Unauthorized", "403 Forbidden"] {
+        let json_error = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"ignored"}}"#;
+        let server = TestServer::new(vec![response(
+            status,
+            "application/json",
+            json_error,
+            false,
+        )]);
+        let result = within_deadline(server.client().post_message_with_response_limits(
+            URI.into(),
+            message("server/discover"),
+            None,
+            None,
+            HashMap::new(),
+            limits(0, 8),
+        ))
+        .await;
+        assert!(
+            matches!(result, Err(StreamableHttpError::UnexpectedServerResponse(body)) if body == format!("HTTP {status}: {{\"jsonrp"))
+        );
     }
     for status in ["401 Unauthorized", "403 Forbidden"] {
         let wire = format!("HTTP/1.1 {status}\r\nWWW-Authenticate: Bearer scope=\"read\"\r\nContent-Length: 999999\r\n\r\n").into_bytes();
