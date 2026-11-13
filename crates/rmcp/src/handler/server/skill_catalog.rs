@@ -125,9 +125,9 @@ const MARKDOWN_MIME_TYPE: &str = "text/markdown";
 /// [`reload`](Self::reload) to pick up changes.
 ///
 /// File and directory paths are opened beneath the root without following
-/// symlinks. If an entry disappears or changes to an unsupported type when
-/// it is opened, the catalog skips the skills that include it and refreshes
-/// the others. A hard link inside the root is an ordinary file entry and can
+/// symlinks. If an entry below the root cannot be read, disappears, or
+/// changes to an unsupported type when it is opened, the catalog skips the
+/// skills that include it and refreshes the others. A hard link inside the root is an ordinary file entry and can
 /// share its contents with a name outside the root.
 /// Entries whose name starts with `.` are ignored, and a skill over
 /// [`SKILL_FILE_LIMIT`] files or [`SKILL_BYTE_LIMIT`] bytes is skipped. Skipped
@@ -293,11 +293,14 @@ impl Snapshot {
                 source,
             }
         })?;
-        let tree = walk(root, &handle)?;
-        Self::from_walk(root, &handle, &tree)
+        let tree = walk(&handle).map_err(|source| SkillCatalogError::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        Ok(Self::from_walk(&handle, &tree))
     }
 
-    fn from_walk(root: &Path, handle: &Dir, tree: &[Entry]) -> Result<Self, SkillCatalogError> {
+    fn from_walk(handle: &Dir, tree: &[Entry]) -> Self {
         let skill_dirs: BTreeSet<&str> = tree
             .iter()
             .filter(|entry| is_manifest(entry))
@@ -337,10 +340,10 @@ impl Snapshot {
         let mut cache = FileCache::default();
         let mut within_limit: Vec<(&str, &[&Entry])> = Vec::new();
         for (dir, entries) in kept {
-            match read_within_limit(handle, root, entries, &mut cache)? {
+            match read_within_limit(handle, entries, &mut cache) {
                 SkillRead::Ready => within_limit.push((dir, entries)),
-                SkillRead::Changed(path) => tracing::warn!(
-                    skill = %dir, %path, "skipping skill: entry changed after the walk"
+                SkillRead::Unreadable(path) => tracing::warn!(
+                    skill = %dir, %path, "skipping skill: entry changed or unreadable after the walk"
                 ),
                 SkillRead::OverLimit => tracing::warn!(
                     skill = %dir,
@@ -397,7 +400,7 @@ impl Snapshot {
                 .collect();
             snapshot.directories.insert(uri_of(dir), listing);
         }
-        Ok(snapshot)
+        snapshot
     }
 }
 
@@ -441,44 +444,40 @@ fn check_walked(entries: &[&Entry]) -> Result<(), String> {
 #[derive(Default)]
 struct FileCache<'a> {
     bytes: HashMap<&'a str, Arc<[u8]>>,
-    /// All enclosing skills must agree when the same walked file became unavailable.
-    changed: HashSet<&'a str>,
+    /// All enclosing skills must agree when the same walked file became unreadable.
+    unreadable: HashSet<&'a str>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum SkillRead<'a> {
     Ready,
     OverLimit,
-    Changed(&'a str),
+    Unreadable(&'a str),
 }
 
 /// Share complete file reads between nested skills, charging each skill its own byte budget.
 fn read_within_limit<'a>(
     handle: &Dir,
-    root: &Path,
     entries: &[&'a Entry],
     cache: &mut FileCache<'a>,
-) -> Result<SkillRead<'a>, SkillCatalogError> {
+) -> SkillRead<'a> {
     let mut budget = SKILL_BYTE_LIMIT + 1;
     for entry in entries.iter().filter(|entry| entry.kind == Kind::File) {
         let path = entry.path.as_str();
-        if cache.changed.contains(path) {
-            return Ok(SkillRead::Changed(path));
+        if cache.unreadable.contains(path) {
+            return SkillRead::Unreadable(path);
         }
         let len = match cache.bytes.get(path) {
             Some(bytes) => bytes.len() as u64,
             None => {
                 let bytes = match read_regular_file(handle, path, budget) {
                     Ok(bytes) => bytes,
-                    Err(error) if entry_changed(&error) => {
-                        cache.changed.insert(path);
-                        return Ok(SkillRead::Changed(path));
-                    }
-                    Err(source) => {
-                        return Err(SkillCatalogError::Io {
-                            path: root.join(path),
-                            source,
-                        });
+                    Err(error) => {
+                        if !entry_changed(&error) {
+                            tracing::warn!(%path, %error, "cannot read a walked file");
+                        }
+                        cache.unreadable.insert(path);
+                        return SkillRead::Unreadable(path);
                     }
                 };
                 let len = bytes.len() as u64;
@@ -490,10 +489,10 @@ fn read_within_limit<'a>(
         };
         budget = budget.saturating_sub(len);
         if budget == 0 {
-            return Ok(SkillRead::OverLimit);
+            return SkillRead::OverLimit;
         }
     }
-    Ok(SkillRead::Ready)
+    SkillRead::Ready
 }
 
 /// Errors a no-follow open can report when a walked component disappears or changes type.
@@ -623,23 +622,13 @@ fn parse_frontmatter(bytes: &[u8]) -> Result<SkillFrontmatter, String> {
     Err("SKILL.md frontmatter has no closing ---".into())
 }
 
-/// Every entry below `root` except hidden ones, depth first, by name.
-fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
-    fn visit(
-        root: &Path,
-        handle: &Dir,
-        dir: &str,
-        tree: &mut Vec<Entry>,
-    ) -> Result<(), SkillCatalogError> {
-        let io_error = |source| SkillCatalogError::Io {
-            path: root.join(dir),
-            source,
-        };
-        let mut entries = handle
-            .entries()
-            .map_err(io_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(io_error)?;
+/// Every entry below the root except hidden ones, depth first, by name.
+///
+/// Only a failure to list the root itself is an error. Anything unreadable
+/// below it becomes [`Kind::Unsupported`], which skips the enclosing skills.
+fn walk(root: &Dir) -> io::Result<Vec<Entry>> {
+    fn visit(handle: &Dir, dir: &str, tree: &mut Vec<Entry>) -> io::Result<()> {
+        let mut entries = handle.entries()?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let name = entry.file_name();
@@ -660,12 +649,11 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
                 Ok(m) if utf8 && m.is_file() => (Kind::File, m.len()),
                 Ok(m) if utf8 && m.is_dir() => (Kind::Directory, 0),
                 Ok(_) => (Kind::Unsupported, 0),
-                Err(error) if entry_changed(&error) => (Kind::Unsupported, 0),
-                Err(source) => {
-                    return Err(SkillCatalogError::Io {
-                        path: root.join(&path),
-                        source,
-                    });
+                Err(error) => {
+                    if !entry_changed(&error) {
+                        tracing::warn!(%path, %error, "cannot inspect a walked entry");
+                    }
+                    (Kind::Unsupported, 0)
                 }
             };
             if kind == Kind::Directory {
@@ -677,18 +665,14 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
                 });
                 let result = handle
                     .open_dir_nofollow(entry.file_name())
-                    .map_err(|source| SkillCatalogError::Io {
-                        path: root.join(&path),
-                        source,
-                    })
-                    .and_then(|child| visit(root, &child, &path, tree));
-                match result {
-                    Err(SkillCatalogError::Io { source, .. }) if entry_changed(&source) => {
-                        // An incomplete subtree invalidates every enclosing skill.
-                        tree.truncate(index + 1);
-                        tree[index].kind = Kind::Unsupported;
+                    .and_then(|child| visit(&child, &path, tree));
+                if let Err(error) = result {
+                    if !entry_changed(&error) {
+                        tracing::warn!(%path, %error, "cannot read a walked directory");
                     }
-                    other => other?,
+                    // An incomplete subtree invalidates every enclosing skill.
+                    tree.truncate(index + 1);
+                    tree[index].kind = Kind::Unsupported;
                 }
             } else {
                 tree.push(Entry { path, kind, size });
@@ -698,7 +682,7 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
     }
 
     let mut tree = Vec::new();
-    visit(root, handle, "", &mut tree)?;
+    visit(root, "", &mut tree)?;
     Ok(tree)
 }
 
@@ -798,7 +782,7 @@ mod tests {
         let handle = Dir::open_ambient_dir(dir.path(), ambient_authority()).unwrap();
         let mut cache = FileCache::default();
 
-        let outcome = read_within_limit(&handle, dir.path(), &[&a, &b], &mut cache).unwrap();
+        let outcome = read_within_limit(&handle, &[&a, &b], &mut cache);
 
         assert_eq!(outcome, SkillRead::OverLimit);
         assert_eq!(cache.bytes.keys().collect::<Vec<_>>(), vec![&"a"]);
@@ -819,7 +803,7 @@ mod tests {
         fs::write(public.join("assets/notes.txt"), "public").unwrap();
 
         let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        let tree = walk(root.path(), &handle).unwrap();
+        let tree = walk(&handle).unwrap();
         fs::remove_file(public.join("notes.txt")).unwrap();
         symlink("../.private/notes.txt", public.join("notes.txt")).unwrap();
         fs::rename(public.join("assets"), public.join("old-assets")).unwrap();
@@ -830,8 +814,8 @@ mod tests {
             assert_eq!(entry.kind, Kind::File);
             let mut cache = FileCache::default();
             assert_eq!(
-                read_within_limit(&handle, root.path(), &[entry], &mut cache).unwrap(),
-                SkillRead::Changed(path),
+                read_within_limit(&handle, &[entry], &mut cache),
+                SkillRead::Unreadable(path),
             );
             assert!(cache.bytes.is_empty());
         }
@@ -861,12 +845,12 @@ mod tests {
         assert_eq!(before.skills.len(), 3);
 
         let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        let tree = walk(root.path(), &handle).unwrap();
+        let tree = walk(&handle).unwrap();
         fs::write(outside.path().join("asset.txt"), "outside").unwrap();
         fs::remove_file(&asset).unwrap();
         symlink(outside.path().join("asset.txt"), &asset).unwrap();
         fs::write(sibling, "updated news").unwrap();
-        let after = Snapshot::from_walk(root.path(), &handle, &tree).unwrap();
+        let after = Snapshot::from_walk(&handle, &tree);
 
         assert_eq!(
             after.skills.iter().map(Skill::name).collect::<Vec<_>>(),
@@ -888,7 +872,7 @@ mod tests {
         let path = root.path().join("asset.txt");
         fs::write(&path, "original").unwrap();
         let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
-        let tree = walk(root.path(), &handle).unwrap();
+        let tree = walk(&handle).unwrap();
         assert_eq!(tree[0].kind, Kind::File);
         fs::remove_file(&path).unwrap();
         assert!(Command::new("mkfifo").arg(path).status().unwrap().success());
@@ -916,11 +900,65 @@ mod tests {
             size: 1,
         };
         let mut cache = FileCache::default();
-        let mut read = || read_within_limit(&handle, root.path(), &[&file], &mut cache).unwrap();
-        assert_eq!(read(), SkillRead::Changed("shared.txt"));
+        let mut read = || read_within_limit(&handle, &[&file], &mut cache);
+        assert_eq!(read(), SkillRead::Unreadable("shared.txt"));
         std::fs::write(root.path().join(&file.path), "restored").unwrap();
-        assert_eq!(read(), SkillRead::Changed("shared.txt"));
+        assert_eq!(read(), SkillRead::Unreadable("shared.txt"));
         assert!(cache.bytes.is_empty());
+    }
+
+    #[test]
+    fn read_within_limit_should_skip_a_file_it_cannot_read() {
+        let root = tempfile::tempdir().unwrap();
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let file = Entry {
+            path: "sub/../file".into(),
+            kind: Kind::File,
+            size: 1,
+        };
+        let mut cache = FileCache::default();
+
+        let outcome = read_within_limit(&handle, &[&file], &mut cache);
+
+        assert_eq!(outcome, SkillRead::Unreadable("sub/../file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_skips_a_skill_with_an_unreadable_directory_and_keeps_the_others() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let root = tempfile::tempdir().unwrap();
+        for dir in ["locked", "healthy"] {
+            let path = root.path().join(dir);
+            fs::create_dir(&path).unwrap();
+            fs::write(
+                path.join(SKILL_MD),
+                format!("---\nname: {dir}\ndescription: Example\n---\n"),
+            )
+            .unwrap();
+        }
+        let refs = root.path().join("locked/refs");
+        fs::create_dir(&refs).unwrap();
+        fs::set_permissions(&refs, fs::Permissions::from_mode(0o000)).unwrap();
+        // Privileged users read through the permission bits.
+        let readable = fs::read_dir(&refs).is_ok();
+
+        let snapshot = Snapshot::load(root.path());
+
+        fs::set_permissions(&refs, fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return;
+        }
+        assert_eq!(
+            snapshot
+                .unwrap()
+                .skills
+                .iter()
+                .map(Skill::name)
+                .collect::<Vec<_>>(),
+            ["healthy"]
+        );
     }
 
     #[test]
