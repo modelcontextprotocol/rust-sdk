@@ -87,14 +87,18 @@
 //! ```
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError, RwLock},
 };
 
 use base64::{Engine, prelude::BASE64_STANDARD};
-use cap_std::{ambient_authority, fs::Dir};
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions},
+};
 
 use crate::{
     error::ErrorData as McpError,
@@ -120,10 +124,11 @@ const MARKDOWN_MIME_TYPE: &str = "text/markdown";
 /// the bytes the manifest describes even if the files change on disk. Call
 /// [`reload`](Self::reload) to pick up changes.
 ///
-/// A skill that contains a symlink or another special file is skipped with a
-/// warning. Every listing and read goes through a handle on the root that
-/// cannot resolve outside it, so no file outside the root is served, even if
-/// the tree changes while it loads.
+/// File and directory paths are opened beneath the root without following
+/// symlinks. If an entry disappears or changes to an unsupported type when
+/// it is opened, the catalog skips the skills that include it and refreshes
+/// the others. A hard link inside the root is an ordinary file entry and can
+/// share its contents with a name outside the root.
 /// Entries whose name starts with `.` are ignored, and a skill over
 /// [`SKILL_FILE_LIMIT`] files or [`SKILL_BYTE_LIMIT`] bytes is skipped. Skipped
 /// skills are reported through `tracing`.
@@ -267,7 +272,7 @@ struct CatalogFile {
 enum Kind {
     File,
     Directory,
-    /// A symlink, another special file, or a name that is not UTF-8.
+    /// An entry that disappeared, changed type, or cannot be served.
     Unsupported,
 }
 
@@ -289,6 +294,10 @@ impl Snapshot {
             }
         })?;
         let tree = walk(root, &handle)?;
+        Self::from_walk(root, &handle, &tree)
+    }
+
+    fn from_walk(root: &Path, handle: &Dir, tree: &[Entry]) -> Result<Self, SkillCatalogError> {
         let skill_dirs: BTreeSet<&str> = tree
             .iter()
             .filter(|entry| is_manifest(entry))
@@ -296,7 +305,7 @@ impl Snapshot {
             .collect();
 
         let mut inside: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
-        for entry in &tree {
+        for entry in tree {
             let mut in_skill = false;
             let mut dir = parent(&entry.path);
             while !dir.is_empty() {
@@ -307,7 +316,7 @@ impl Snapshot {
                 dir = parent(dir);
             }
             if !in_skill && entry.kind == Kind::Unsupported && !is_manifest(entry) {
-                tracing::warn!(path = %entry.path, "skipping a symlink or special file");
+                tracing::warn!(path = %entry.path, "skipping an unsupported or unavailable entry");
             }
         }
 
@@ -325,19 +334,22 @@ impl Snapshot {
             }
         }
 
-        let mut bytes_of: HashMap<&str, Arc<[u8]>> = HashMap::new();
+        let mut cache = FileCache::default();
         let mut within_limit: Vec<(&str, &[&Entry])> = Vec::new();
         for (dir, entries) in kept {
-            if read_within_limit(&handle, root, entries, &mut bytes_of)? {
-                within_limit.push((dir, entries));
-            } else {
-                tracing::warn!(
+            match read_within_limit(handle, root, entries, &mut cache)? {
+                SkillRead::Ready => within_limit.push((dir, entries)),
+                SkillRead::Changed(path) => tracing::warn!(
+                    skill = %dir, %path, "skipping skill: entry changed after the walk"
+                ),
+                SkillRead::OverLimit => tracing::warn!(
                     skill = %dir,
                     "skipping skill: grew past {SKILL_BYTE_LIMIT} bytes after the walk"
-                );
+                ),
             }
         }
 
+        let bytes_of = cache.bytes;
         let mut snapshot = Snapshot::default();
         let mut directories: BTreeSet<&str> = BTreeSet::new();
         for (dir, entries) in within_limit {
@@ -373,7 +385,7 @@ impl Snapshot {
         snapshot.listed.sort_by(|a, b| a.uri.cmp(&b.uri));
 
         let mut children: HashMap<&str, Vec<&Entry>> = HashMap::new();
-        for entry in &tree {
+        for entry in tree {
             children.entry(parent(&entry.path)).or_default().push(entry);
         }
         for dir in directories {
@@ -408,7 +420,7 @@ fn directory_child(entry: &Entry, files: &HashMap<String, CatalogFile>) -> Optio
 fn check_walked(entries: &[&Entry]) -> Result<(), String> {
     if let Some(entry) = entries.iter().find(|entry| entry.kind == Kind::Unsupported) {
         return Err(format!(
-            "{} is a symlink, a special file, or not UTF-8; copy the file instead",
+            "{} is unavailable, is a symlink or special file, or has a non-UTF-8 name",
             entry.path
         ));
     }
@@ -426,41 +438,142 @@ fn check_walked(entries: &[&Entry]) -> Result<(), String> {
     Ok(())
 }
 
-/// Read the files of one skill into `bytes_of` under one running budget, so a
-/// file that grew after the walk cannot exhaust memory. `false` when the skill
-/// passed the limit; a truncated read is never cached.
+#[derive(Default)]
+struct FileCache<'a> {
+    bytes: HashMap<&'a str, Arc<[u8]>>,
+    /// All enclosing skills must agree when the same walked file became unavailable.
+    changed: HashSet<&'a str>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SkillRead<'a> {
+    Ready,
+    OverLimit,
+    Changed(&'a str),
+}
+
+/// Share complete file reads between nested skills, charging each skill its own byte budget.
 fn read_within_limit<'a>(
     handle: &Dir,
     root: &Path,
     entries: &[&'a Entry],
-    bytes_of: &mut HashMap<&'a str, Arc<[u8]>>,
-) -> Result<bool, SkillCatalogError> {
+    cache: &mut FileCache<'a>,
+) -> Result<SkillRead<'a>, SkillCatalogError> {
     let mut budget = SKILL_BYTE_LIMIT + 1;
     for entry in entries.iter().filter(|entry| entry.kind == Kind::File) {
-        let len = match bytes_of.get(entry.path.as_str()) {
+        let path = entry.path.as_str();
+        if cache.changed.contains(path) {
+            return Ok(SkillRead::Changed(path));
+        }
+        let len = match cache.bytes.get(path) {
             Some(bytes) => bytes.len() as u64,
             None => {
-                let mut bytes = Vec::new();
-                handle
-                    .open(&entry.path)
-                    .and_then(|file| file.take(budget).read_to_end(&mut bytes))
-                    .map_err(|source| SkillCatalogError::Io {
-                        path: root.join(&entry.path),
-                        source,
-                    })?;
+                let bytes = match read_regular_file(handle, path, budget) {
+                    Ok(bytes) => bytes,
+                    Err(error) if entry_changed(&error) => {
+                        cache.changed.insert(path);
+                        return Ok(SkillRead::Changed(path));
+                    }
+                    Err(source) => {
+                        return Err(SkillCatalogError::Io {
+                            path: root.join(path),
+                            source,
+                        });
+                    }
+                };
                 let len = bytes.len() as u64;
                 if len < budget {
-                    bytes_of.insert(&entry.path, bytes.into());
+                    cache.bytes.insert(path, bytes.into());
                 }
                 len
             }
         };
         budget = budget.saturating_sub(len);
         if budget == 0 {
-            return Ok(false);
+            return Ok(SkillRead::OverLimit);
         }
     }
-    Ok(true)
+    Ok(SkillRead::Ready)
+}
+
+/// Errors a no-follow open can report when a walked component disappears or changes type.
+/// cap-std passes through platform-specific errors for a refused symlink.
+fn entry_changed(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory | io::ErrorKind::IsADirectory
+    ) {
+        return true;
+    }
+    match error.raw_os_error() {
+        #[cfg(unix)]
+        Some(libc::ELOOP) => true,
+        #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+        Some(libc::EMLINK) => true,
+        #[cfg(target_os = "netbsd")]
+        Some(libc::EFTYPE) => true,
+        #[cfg(windows)]
+        Some(code) if code as u32 == windows_sys::Win32::Foundation::ERROR_STOPPED_ON_SYMLINK => {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn read_regular_file(root: &Dir, path: &str, budget: u64) -> io::Result<Vec<u8>> {
+    if !path
+        .split('/')
+        .all(|part| Path::new(part).file_name() == Some(part.as_ref()))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected normal relative path components",
+        ));
+    }
+    // No-follow applies to the last component of an open. Open each directory
+    // separately so an ancestor replaced since the walk cannot redirect the read.
+    let mut dir = root;
+    let mut child;
+    for component in parent(path).split_terminator('/') {
+        child = dir.open_dir_nofollow(component)?;
+        dir = &child;
+    }
+    let mut options = OpenOptions::new();
+    // Open nonblocking so we can reject a substituted FIFO before reading it.
+    options.read(true).follow(FollowSymlinks::No).nonblock(true);
+    let name = file_name(path);
+    let file = dir.open_with(name, &options).map_err(|error| {
+        // Some systems reject a special file at open time. Inspect only the
+        // entry type to classify that error; all reads use the opened handle.
+        let check_type = match error.raw_os_error() {
+            #[cfg(unix)]
+            Some(libc::ENXIO | libc::ENODEV) => true,
+            #[cfg(windows)]
+            Some(code)
+                if code as u32 == windows_sys::Win32::Foundation::ERROR_DIRECTORY_NOT_SUPPORTED =>
+            {
+                true
+            }
+            _ => matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
+            ),
+        };
+        if check_type && dir.symlink_metadata(name).is_ok_and(|m| !m.is_file()) {
+            io::Error::new(io::ErrorKind::NotFound, "walked regular file was replaced")
+        } else {
+            error
+        }
+    })?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "walked regular file was replaced",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(budget).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn build_skill(
@@ -523,7 +636,7 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
             source,
         };
         let mut entries = handle
-            .read_dir(if dir.is_empty() { "." } else { dir })
+            .entries()
             .map_err(io_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(io_error)?;
@@ -537,30 +650,47 @@ fn walk(root: &Path, handle: &Dir) -> Result<Vec<Entry>, SkillCatalogError> {
             if name.starts_with('.') {
                 continue;
             }
-            // `DirEntry::file_type` does not follow symlinks.
-            let file_type = entry.file_type().map_err(io_error)?;
-            let kind = match (utf8, file_type.is_file(), file_type.is_dir()) {
-                (true, true, _) => Kind::File,
-                (true, _, true) => Kind::Directory,
-                _ => Kind::Unsupported,
-            };
             let path = if dir.is_empty() {
                 name
             } else {
                 format!("{dir}/{name}")
             };
+            // DirEntry metadata describes the entry itself, including a symlink.
+            let (kind, size) = match entry.metadata() {
+                Ok(m) if utf8 && m.is_file() => (Kind::File, m.len()),
+                Ok(m) if utf8 && m.is_dir() => (Kind::Directory, 0),
+                Ok(_) => (Kind::Unsupported, 0),
+                Err(error) if entry_changed(&error) => (Kind::Unsupported, 0),
+                Err(source) => {
+                    return Err(SkillCatalogError::Io {
+                        path: root.join(&path),
+                        source,
+                    });
+                }
+            };
             if kind == Kind::Directory {
+                let index = tree.len();
                 tree.push(Entry {
                     path: path.clone(),
                     kind,
                     size: 0,
                 });
-                visit(root, handle, &path, tree)?;
+                let result = handle
+                    .open_dir_nofollow(entry.file_name())
+                    .map_err(|source| SkillCatalogError::Io {
+                        path: root.join(&path),
+                        source,
+                    })
+                    .and_then(|child| visit(root, &child, &path, tree));
+                match result {
+                    Err(SkillCatalogError::Io { source, .. }) if entry_changed(&source) => {
+                        // An incomplete subtree invalidates every enclosing skill.
+                        tree.truncate(index + 1);
+                        tree[index].kind = Kind::Unsupported;
+                    }
+                    other => other?,
+                }
             } else {
-                let size = match kind {
-                    Kind::File => entry.metadata().map_err(io_error)?.len(),
-                    _ => 0,
-                };
                 tree.push(Entry { path, kind, size });
             }
         }
@@ -666,11 +796,149 @@ mod tests {
         };
         let (a, b) = (stale("a"), stale("b"));
         let handle = Dir::open_ambient_dir(dir.path(), ambient_authority()).unwrap();
-        let mut bytes_of = HashMap::new();
+        let mut cache = FileCache::default();
 
-        let within = read_within_limit(&handle, dir.path(), &[&a, &b], &mut bytes_of).unwrap();
+        let outcome = read_within_limit(&handle, dir.path(), &[&a, &b], &mut cache).unwrap();
 
-        assert!(!within);
-        assert_eq!(bytes_of.keys().collect::<Vec<_>>(), vec![&"a"]);
+        assert_eq!(outcome, SkillRead::OverLimit);
+        assert_eq!(cache.bytes.keys().collect::<Vec<_>>(), vec![&"a"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_reject_file_and_directory_symlinks_installed_after_the_walk() {
+        use std::{fs, os::unix::fs::symlink};
+
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join(".private");
+        let public = root.path().join("public");
+        fs::create_dir(&private).unwrap();
+        fs::create_dir_all(public.join("assets")).unwrap();
+        fs::write(private.join("notes.txt"), "private").unwrap();
+        fs::write(public.join("notes.txt"), "public").unwrap();
+        fs::write(public.join("assets/notes.txt"), "public").unwrap();
+
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let tree = walk(root.path(), &handle).unwrap();
+        fs::remove_file(public.join("notes.txt")).unwrap();
+        symlink("../.private/notes.txt", public.join("notes.txt")).unwrap();
+        fs::rename(public.join("assets"), public.join("old-assets")).unwrap();
+        symlink("../.private", public.join("assets")).unwrap();
+
+        for path in ["public/notes.txt", "public/assets/notes.txt"] {
+            let entry = tree.iter().find(|entry| entry.path == path).unwrap();
+            assert_eq!(entry.kind, Kind::File);
+            let mut cache = FileCache::default();
+            assert_eq!(
+                read_within_limit(&handle, root.path(), &[entry], &mut cache).unwrap(),
+                SkillRead::Changed(path),
+            );
+            assert!(cache.bytes.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuilt_snapshot_skips_affected_skills_and_refreshes_healthy_siblings() {
+        use std::{fs, os::unix::fs::symlink};
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        for dir in ["parent", "parent/child", "healthy"] {
+            let path = root.path().join(dir);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(
+                path.join(SKILL_MD),
+                format!("---\nname: {}\ndescription: Example\n---\n", file_name(dir)),
+            )
+            .unwrap();
+        }
+        let asset = root.path().join("parent/child/asset.txt");
+        let sibling = root.path().join("healthy/news.txt");
+        fs::write(&asset, "old asset").unwrap();
+        fs::write(&sibling, "old news").unwrap();
+        let before = Snapshot::load(root.path()).unwrap();
+        assert_eq!(before.skills.len(), 3);
+
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let tree = walk(root.path(), &handle).unwrap();
+        fs::write(outside.path().join("asset.txt"), "outside").unwrap();
+        fs::remove_file(&asset).unwrap();
+        symlink(outside.path().join("asset.txt"), &asset).unwrap();
+        fs::write(sibling, "updated news").unwrap();
+        let after = Snapshot::from_walk(root.path(), &handle, &tree).unwrap();
+
+        assert_eq!(
+            after.skills.iter().map(Skill::name).collect::<Vec<_>>(),
+            ["healthy"]
+        );
+        assert!(!after.files.contains_key("skill://parent/child/asset.txt"));
+        assert_eq!(
+            after.files["skill://healthy/news.txt"].bytes.as_ref(),
+            b"updated news"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_substituted_fifo_without_waiting_for_a_writer() {
+        use std::{fs, process::Command, sync::mpsc, thread, time::Duration};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("asset.txt");
+        fs::write(&path, "original").unwrap();
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let tree = walk(root.path(), &handle).unwrap();
+        assert_eq!(tree[0].kind, Kind::File);
+        fs::remove_file(&path).unwrap();
+        assert!(Command::new("mkfifo").arg(path).status().unwrap().success());
+
+        let (done, result) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let error = read_regular_file(&handle, &tree[0].path, SKILL_BYTE_LIMIT).unwrap_err();
+            let _ = done.send(entry_changed(&error));
+        });
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(5))
+                .expect("opening a FIFO waited for a writer")
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn a_missing_file_stays_unavailable_to_overlapping_skills_in_one_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        let file = Entry {
+            path: "shared.txt".into(),
+            kind: Kind::File,
+            size: 1,
+        };
+        let mut cache = FileCache::default();
+        let mut read = || read_within_limit(&handle, root.path(), &[&file], &mut cache).unwrap();
+        assert_eq!(read(), SkillRead::Changed("shared.txt"));
+        std::fs::write(root.path().join(&file.path), "restored").unwrap();
+        assert_eq!(read(), SkillRead::Changed("shared.txt"));
+        assert!(cache.bytes.is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_walked_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let handle = Dir::open_ambient_dir(root.path(), ambient_authority()).unwrap();
+        for path in [
+            "",
+            ".",
+            "..",
+            "/absolute",
+            "sub//file",
+            "sub/../file",
+            "sub/./file",
+            "sub/",
+        ] {
+            let error = read_regular_file(&handle, path, SKILL_BYTE_LIMIT).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{path:?}");
+        }
     }
 }
