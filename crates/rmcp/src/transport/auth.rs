@@ -2491,7 +2491,11 @@ impl AuthorizationManager {
             let elapsed = Self::now_epoch_secs().saturating_sub(received_at);
             let remaining = expires_in.as_secs().saturating_sub(elapsed);
 
-            if remaining < Self::REFRESH_BUFFER_SECS {
+            // Cap the buffer at half the lifetime so short-lived tokens are not
+            // refreshed on every call; `remaining == 0` keeps expired tokens from
+            // being returned when the buffer itself is 0.
+            let buffer = Self::REFRESH_BUFFER_SECS.min(expires_in.as_secs() / 2);
+            if remaining < buffer || remaining == 0 {
                 tracing::info!(
                     remaining_secs = remaining,
                     "Access token expired or nearly expired, refreshing."
@@ -9244,6 +9248,46 @@ mod tests {
         assert!(
             matches!(err, AuthError::AuthorizationRequired),
             "expected AuthorizationRequired when token is within refresh buffer, got: {err:?}"
+        );
+    }
+
+    async fn short_lived_token_manager(expires_in: u64, age_secs: u64) -> AuthorizationManager {
+        let mut manager = manager_with_metadata(None).await;
+        manager.configure_client(test_client_config()).unwrap();
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("short-lived", Some(expires_in))),
+            granted_scopes: vec![],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs() - age_secs),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+        manager
+    }
+
+    #[tokio::test]
+    async fn get_access_token_returns_short_lived_token_without_refreshing() {
+        let manager = short_lived_token_manager(20, 0).await;
+        assert_eq!(manager.get_access_token().await.unwrap(), "short-lived");
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_expired_short_lived_token() {
+        let manager = short_lived_token_manager(20, 25).await;
+        let err = manager.get_access_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_expired_one_second_token() {
+        let manager = short_lived_token_manager(1, 5).await;
+        let err = manager.get_access_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
         );
     }
 
