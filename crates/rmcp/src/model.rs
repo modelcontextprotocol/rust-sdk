@@ -5082,6 +5082,62 @@ impl ServerResult {
         result_type.take_if(|result_type| result_type.is_complete());
     }
 
+    /// Drop a non-object tool `outputSchema` or `structuredContent` so the
+    /// result keeps the wire shape that predates protocol version `2026-07-28`.
+    ///
+    /// SEP-2106 lets tools on `2026-07-28` declare any JSON Schema as their
+    /// output and return any JSON value as structured content. Older versions
+    /// require both to be objects, so the server handler calls this before
+    /// responding to a peer that negotiated one of them.
+    ///
+    /// A tool's `outputSchema` is dropped when its root `type` is not the
+    /// string `"object"`, including `oneOf`/`anyOf`/`$ref` roots.
+    /// `structuredContent` is dropped when it is not a JSON object. Unless the
+    /// first content block is text holding the same JSON value, the dropped
+    /// value is added as the first block, where [`CallToolResult::into_typed`]
+    /// reads it, so the peer still gets the result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CallToolResult, ServerResult};
+    /// use serde_json::json;
+    ///
+    /// let names = CallToolResult::structured(json!(["a", "b"]));
+    /// let mut result = ServerResult::CallToolResult(names);
+    /// result.strip_non_object_output_for_legacy_peer();
+    ///
+    /// let json = serde_json::to_value(&result).unwrap();
+    /// assert!(json.get("structuredContent").is_none());
+    /// assert_eq!(json["content"][0]["text"], r#"["a","b"]"#);
+    /// ```
+    pub fn strip_non_object_output_for_legacy_peer(&mut self) {
+        match self {
+            ServerResult::ListToolsResult(r) => {
+                for tool in &mut r.tools {
+                    tool.output_schema.take_if(|schema| {
+                        schema.get("type").and_then(Value::as_str) != Some("object")
+                    });
+                }
+            }
+            ServerResult::CallToolResult(r) => {
+                if let Some(value) = r.structured_content.take_if(|value| !value.is_object()) {
+                    let in_content = r
+                        .content
+                        .first()
+                        .and_then(ContentBlock::as_text)
+                        .is_some_and(|text| {
+                            serde_json::from_str::<Value>(&text.text).is_ok_and(|v| v == value)
+                        });
+                    if !in_content {
+                        r.content.insert(0, ContentBlock::text(value.to_string()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Fill in the SEP-2549 caching hints a cacheable result is missing.
     ///
     /// Protocol version `2026-07-28` requires `ttlMs` and `cacheScope` on every
@@ -6280,6 +6336,165 @@ mod tests {
             matches!(result, Ok(JsonRpcMessage::Notification(_))),
             "Expected Ok(Notification), got: {:?}",
             result
+        );
+    }
+
+    fn tool_with_output_schema(name: &'static str, schema: Value) -> Tool {
+        let Value::Object(schema) = schema else {
+            panic!("output schema should be a JSON object");
+        };
+        Tool::new(name, "", JsonObject::new()).with_raw_output_schema(Arc::new(schema))
+    }
+
+    #[test]
+    fn strip_non_object_output_drops_schemas_without_an_object_root() {
+        let object = json!({
+            "type": "object",
+            "properties": { "sum": { "type": "integer" } },
+            "required": ["sum"]
+        });
+        // `oneOf` and `anyOf` + `$ref` roots are what schemars emits for an
+        // internally tagged enum and for `Option<S>`.
+        let mut result = ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![
+            tool_with_output_schema("array", json!({ "type": "array", "items": {} })),
+            tool_with_output_schema(
+                "tagged_enum",
+                json!({
+                    "oneOf": [
+                        { "type": "object", "properties": { "kind": { "const": "A" } } },
+                        { "type": "object", "properties": { "kind": { "const": "B" } } }
+                    ]
+                }),
+            ),
+            tool_with_output_schema(
+                "optional",
+                json!({
+                    "$defs": { "S": object.clone() },
+                    "anyOf": [{ "$ref": "#/$defs/S" }, { "type": "null" }]
+                }),
+            ),
+            tool_with_output_schema("object", object.clone()),
+        ]));
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::ListToolsResult(result) = result else {
+            unreachable!()
+        };
+        let schemas: Vec<_> = result
+            .tools
+            .iter()
+            .map(|tool| {
+                let schema = tool.output_schema.as_deref().cloned().map(Value::Object);
+                (tool.name.as_ref(), schema)
+            })
+            .collect();
+        assert_eq!(
+            schemas,
+            vec![
+                ("array", None),
+                ("tagged_enum", None),
+                ("optional", None),
+                ("object", Some(object)),
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_non_object_output_moves_value_into_empty_content() {
+        let mut result = ServerResult::CallToolResult(CallToolResult {
+            structured_content: Some(json!(["a", "b"])),
+            ..Default::default()
+        });
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(
+            serde_json::to_value(&result.content).expect("serialize content"),
+            json!([{ "type": "text", "text": r#"["a","b"]"# }])
+        );
+    }
+
+    #[test]
+    fn strip_non_object_output_puts_the_value_first_when_no_block_holds_it() {
+        let mut result = ServerResult::CallToolResult(CallToolResult {
+            content: vec![ContentBlock::text("Found 2 names")],
+            structured_content: Some(json!(["a", "b"])),
+            ..Default::default()
+        });
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(
+            serde_json::to_value(&result.content).expect("serialize content"),
+            json!([
+                { "type": "text", "text": r#"["a","b"]"# },
+                { "type": "text", "text": "Found 2 names" }
+            ])
+        );
+        assert_eq!(
+            result.into_typed::<Vec<String>>().expect("decode"),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn strip_non_object_output_keeps_a_first_block_with_the_same_value() {
+        let content = vec![
+            ContentBlock::text("[\n  1,\n  2\n]"),
+            ContentBlock::text("Found 2 numbers"),
+        ];
+        let mut result = ServerResult::CallToolResult(CallToolResult {
+            content: content.clone(),
+            structured_content: Some(json!([1, 2])),
+            ..Default::default()
+        });
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn strip_non_object_output_adds_the_value_when_only_a_later_block_holds_it() {
+        let mut result = ServerResult::CallToolResult(CallToolResult {
+            content: vec![
+                ContentBlock::text("Found 2 numbers"),
+                ContentBlock::text("[1,2]"),
+            ],
+            structured_content: Some(json!([1, 2])),
+            ..Default::default()
+        });
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(result.content.len(), 3);
+        assert_eq!(result.into_typed::<Vec<u32>>().expect("decode"), [1, 2]);
+    }
+
+    #[test]
+    fn strip_non_object_output_keeps_an_existing_text_block() {
+        let mut result = ServerResult::CallToolResult(CallToolResult::structured(json!([1, 2])));
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(
+            serde_json::to_value(&result.content).expect("serialize content"),
+            json!([{ "type": "text", "text": "[1,2]" }])
         );
     }
 }
