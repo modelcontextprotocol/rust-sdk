@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.10.0...rmcp-v3.10.1) - 2026-11-13
+
+### Fixed
+
+- *(transport)* bound buffered Streamable HTTP responses ([#1246](https://github.com/modelcontextprotocol/rust-sdk/pull/1246))
+- *(transport)* accept any 2xx reply for notification-only POSTs ([#1424](https://github.com/modelcontextprotocol/rust-sdk/pull/1424))
+- *(skills)* validate percent-encoded skill names ([#1431](https://github.com/modelcontextprotocol/rust-sdk/pull/1431))
+- *(skills)* prevent symlink swaps during catalog loads ([#1438](https://github.com/modelcontextprotocol/rust-sdk/pull/1438))
+- *(transport)* match reqwest response media types exactly ([#1390](https://github.com/modelcontextprotocol/rust-sdk/pull/1390))
+
 ## [3.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.9.0...rmcp-v3.10.0) - 2026-11-12
 
 ### Added
