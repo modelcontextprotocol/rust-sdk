@@ -336,11 +336,31 @@ async fn discover_startup_ignores_server_ping() {
     server_task.await.expect("server task");
 }
 
-#[tokio::test]
-async fn auto_startup_falls_back_after_discover_method_not_found() {
+#[rstest::rstest]
+#[case::prompt_rejection(false, false)]
+#[case::late_rejection(true, false)]
+#[case::late_success(true, true)]
+#[tokio::test(start_paused = true)]
+async fn auto_fallback_uses_initialize_reply(
+    #[case] late: bool,
+    #[case] success: bool,
+    #[values(false, true)] retry: bool,
+) {
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
     let server_task = tokio::spawn(async move {
+        if retry {
+            let (request, id) = server.receive().await.unwrap().into_request().unwrap();
+            assert!(matches!(request, ClientRequest::DiscoverRequest(_)));
+            let error = ErrorData::unsupported_protocol_version(
+                ProtocolVersion::V_2026_07_28,
+                &[ProtocolVersion::V_2026_07_28],
+            );
+            server
+                .send(ServerJsonRpcMessage::error(error, Some(id)))
+                .await
+                .unwrap();
+        }
         let ClientJsonRpcMessage::Request(discover) =
             server.receive().await.expect("expected discover request")
         else {
@@ -350,13 +370,24 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
             discover.request,
             ClientRequest::DiscoverRequest(_)
         ));
-        server
-            .send(ServerJsonRpcMessage::error(
+        if late {
+            tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+        }
+        let reply = if success {
+            ServerJsonRpcMessage::response(
+                ServerResult::DiscoverResult(DiscoverResult::new(
+                    vec![ProtocolVersion::V_2026_07_28],
+                    Default::default(),
+                )),
+                RequestId::String(discover.id.to_string().into()),
+            )
+        } else {
+            ServerJsonRpcMessage::error(
                 ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
                 Some(discover.id),
-            ))
-            .await
-            .expect("send method-not-found");
+            )
+        };
+        server.send(reply).await.expect("send discovery reply");
 
         let ClientJsonRpcMessage::Request(initialize) =
             server.receive().await.expect("expected initialize request")
@@ -380,6 +411,15 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
             server.receive().await,
             Some(ClientJsonRpcMessage::Notification(_))
         ));
+        let (request, id) = server.receive().await.unwrap().into_request().unwrap();
+        assert!(matches!(request, ClientRequest::ListToolsRequest(_)));
+        server
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(Default::default()),
+                id,
+            ))
+            .await
+            .unwrap();
     });
 
     let client = DiscoverClient
@@ -392,6 +432,10 @@ async fn auto_startup_falls_back_after_discover_method_not_found() {
         )
         .await
         .expect("auto client should fall back");
+    client
+        .list_tools(None)
+        .await
+        .expect("list tools after fallback");
     client.cancel().await.expect("cancel client");
     server_task.await.expect("server task");
 }
@@ -588,8 +632,16 @@ async fn auto_startup_preserves_both_errors_when_fallback_also_fails() {
     server_task.await.expect("server task");
 }
 
-#[tokio::test]
-async fn auto_startup_surfaces_uncorrelated_error_id() {
+#[rstest::rstest]
+#[case::discovery(false)]
+#[case::timeout_fallback(true)]
+#[tokio::test(start_paused = true)]
+async fn auto_startup_rejects_unrelated_responses(
+    #[case] after_timeout: bool,
+    #[values(false, true)] success: bool,
+) {
+    use rmcp::service::ClientInitializeError;
+
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mut server = IntoTransport::<rmcp::RoleServer, _, _>::into_transport(server_transport);
     let server_task = tokio::spawn(async move {
@@ -598,14 +650,20 @@ async fn auto_startup_surfaces_uncorrelated_error_id() {
         else {
             panic!("expected request");
         };
-        // Respond with an error carrying a different id.
-        server
-            .send(ServerJsonRpcMessage::error(
-                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "not found", None),
-                Some(RequestId::Number(999)),
-            ))
-            .await
-            .expect("send mismatched-id error");
+        if after_timeout {
+            let (request, _) = server.receive().await.unwrap().into_request().unwrap();
+            assert!(matches!(request, ClientRequest::InitializeRequest(_)));
+        }
+        let id = RequestId::Number(999);
+        let reply = if success {
+            ServerJsonRpcMessage::response(ServerResult::empty(()), id)
+        } else {
+            ServerJsonRpcMessage::error(
+                ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None),
+                Some(id),
+            )
+        };
+        server.send(reply).await.expect("send mismatched ID");
     });
 
     let result = DiscoverClient
@@ -618,14 +676,17 @@ async fn auto_startup_surfaces_uncorrelated_error_id() {
         )
         .await;
 
-    assert!(
-        matches!(
-            result,
-            Err(rmcp::service::ClientInitializeError::UncorrelatedErrorResponse { .. })
-        ),
-        "mismatched id should surface as UncorrelatedErrorResponse, got {:?}",
-        result.as_ref().err()
-    );
+    let error = result
+        .err()
+        .expect("an unrelated response ID must fail startup");
+    assert!(matches!(
+        (success, error),
+        (true, ClientInitializeError::ConflictInitResponseId(..))
+            | (
+                false,
+                ClientInitializeError::UncorrelatedErrorResponse { .. }
+            )
+    ));
     server_task.await.expect("server task");
 }
 
