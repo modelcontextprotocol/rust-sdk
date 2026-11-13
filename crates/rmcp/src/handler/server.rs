@@ -681,6 +681,10 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
+        /// Return the server configuration used for initialization and
+        /// default-method capability checks. Default handlers may call this
+        /// repeatedly, so it should be inexpensive and its capabilities should
+        /// remain consistent with those advertised for the current session.
         fn get_info(&self) -> ServerConfig {
             ServerConfig::default()
         }
