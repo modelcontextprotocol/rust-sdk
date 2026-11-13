@@ -2465,8 +2465,10 @@ impl AuthorizationManager {
         self.metadata.as_ref().and_then(|m| m.issuer.clone())
     }
 
-    /// Proactive refresh buffer: refresh tokens this many seconds before they expire
-    /// to avoid races between token retrieval and the actual HTTP request.
+    /// Upper bound on the proactive refresh buffer. A token is refreshed once less
+    /// than `min(REFRESH_BUFFER_SECS, expires_in / 2)` seconds remain, so a
+    /// short-lived token is not refreshed on every call, and an expired token is
+    /// always refreshed.
     const REFRESH_BUFFER_SECS: u64 = 30;
 
     /// Get access token from local credential store.
@@ -2477,6 +2479,10 @@ impl AuthorizationManager {
     /// Transient refresh failures return [`AuthError::TokenRefreshFailed`] so the
     /// caller can retry; other errors are propagated as-is.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
+        self.get_access_token_at(Self::now_epoch_secs()).await
+    }
+
+    async fn get_access_token_at(&self, now_epoch_secs: u64) -> Result<String, AuthError> {
         let stored = self.credential_store.load().await?;
         let Some(stored_creds) = stored else {
             return Err(AuthError::AuthorizationRequired);
@@ -2488,10 +2494,11 @@ impl AuthorizationManager {
         if let (Some(expires_in), Some(received_at)) =
             (creds.expires_in(), stored_creds.token_received_at)
         {
-            let elapsed = Self::now_epoch_secs().saturating_sub(received_at);
+            let elapsed = now_epoch_secs.saturating_sub(received_at);
             let remaining = expires_in.as_secs().saturating_sub(elapsed);
 
-            if remaining < Self::REFRESH_BUFFER_SECS {
+            let buffer = Self::REFRESH_BUFFER_SECS.min(expires_in.as_secs() / 2);
+            if remaining < buffer.max(1) {
                 tracing::info!(
                     remaining_secs = remaining,
                     "Access token expired or nearly expired, refreshing."
@@ -9245,6 +9252,184 @@ mod tests {
             matches!(err, AuthError::AuthorizationRequired),
             "expected AuthorizationRequired when token is within refresh buffer, got: {err:?}"
         );
+    }
+
+    const SHORT_LIVED_NOW: u64 = 1_000_000;
+
+    async fn short_lived_token_manager(expires_in: u64, age_secs: u64) -> AuthorizationManager {
+        let mut manager = manager_with_metadata(None).await;
+        manager.configure_client(test_client_config()).unwrap();
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response("short-lived", Some(expires_in))),
+            granted_scopes: vec![],
+            token_received_at: Some(SHORT_LIVED_NOW - age_secs),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+        manager
+    }
+
+    #[tokio::test]
+    async fn get_access_token_returns_short_lived_token_without_refreshing() {
+        let manager = short_lived_token_manager(20, 0).await;
+        assert_eq!(
+            manager.get_access_token_at(SHORT_LIVED_NOW).await.unwrap(),
+            "short-lived"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_short_lived_token_expired() {
+        let manager = short_lived_token_manager(20, 25).await;
+        let err = manager
+            .get_access_token_at(SHORT_LIVED_NOW)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_one_second_token_expired() {
+        let manager = short_lived_token_manager(1, 5).await;
+        let err = manager
+            .get_access_token_at(SHORT_LIVED_NOW)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_short_lived_token_inside_half_lifetime_buffer() {
+        let manager = short_lived_token_manager(20, 11).await;
+        let err = manager
+            .get_access_token_at(SHORT_LIVED_NOW)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_returns_short_lived_token_at_half_lifetime_boundary() {
+        let manager = short_lived_token_manager(20, 10).await;
+        assert_eq!(
+            manager.get_access_token_at(SHORT_LIVED_NOW).await.unwrap(),
+            "short-lived"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_two_second_token_valid_until_lifetime_elapses() {
+        for age in [0, 1] {
+            let manager = short_lived_token_manager(2, age).await;
+            assert_eq!(
+                manager.get_access_token_at(SHORT_LIVED_NOW).await.unwrap(),
+                "short-lived"
+            );
+        }
+        let manager = short_lived_token_manager(2, 2).await;
+        let err = manager
+            .get_access_token_at(SHORT_LIVED_NOW)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    async fn manager_with_counting_refresh_endpoint(
+        issued_expires_in: u64,
+        stored_expires_in: u64,
+        stored_age_secs: u64,
+    ) -> (
+        AuthorizationManager,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let handler_hits = Arc::clone(&hits);
+        let app = Router::new().route(
+            "/token",
+            post(move || {
+                let hits = Arc::clone(&handler_hits);
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "access_token": "new-token",
+                                "token_type": "Bearer",
+                                "expires_in": issued_expires_in,
+                                "refresh_token": "new-refresh-token",
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        let mut stored_token = make_token_response("old-token", Some(stored_expires_in));
+        stored_token.set_refresh_token(Some(oauth2::RefreshToken::new(
+            "my-refresh-token".to_string(),
+        )));
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(stored_token),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs() - stored_age_secs),
+                issuer: None,
+            })
+            .await
+            .unwrap();
+        (manager, hits)
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_once_for_short_lived_tokens() {
+        let (manager, hits) = manager_with_counting_refresh_endpoint(20, 20, 25).await;
+
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_expired_one_second_token() {
+        let (manager, hits) = manager_with_counting_refresh_endpoint(1, 1, 5).await;
+
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
