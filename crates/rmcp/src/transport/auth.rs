@@ -9272,7 +9272,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_access_token_refreshes_expired_short_lived_token() {
+    async fn get_access_token_requires_reauth_when_short_lived_token_expired() {
         let manager = short_lived_token_manager(20, 25).await;
         let err = manager.get_access_token().await.unwrap_err();
         assert!(
@@ -9282,13 +9282,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_access_token_refreshes_expired_one_second_token() {
+    async fn get_access_token_requires_reauth_when_one_second_token_expired() {
         let manager = short_lived_token_manager(1, 5).await;
         let err = manager.get_access_token().await.unwrap_err();
         assert!(
             matches!(err, AuthError::AuthorizationRequired),
             "got: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn get_access_token_requires_reauth_when_short_lived_token_inside_half_lifetime_buffer() {
+        let manager = short_lived_token_manager(20, 11).await;
+        let err = manager.get_access_token().await.unwrap_err();
+        assert!(
+            matches!(err, AuthError::AuthorizationRequired),
+            "got: {err:?}"
+        );
+    }
+
+    async fn manager_with_counting_refresh_endpoint(
+        issued_expires_in: u64,
+        stored_expires_in: u64,
+        stored_age_secs: u64,
+    ) -> (
+        AuthorizationManager,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use axum::{Router, body::Body, http::Response, routing::post};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let handler_hits = Arc::clone(&hits);
+        let app = Router::new().route(
+            "/token",
+            post(move || {
+                let hits = Arc::clone(&handler_hits);
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "access_token": "new-token",
+                                "token_type": "Bearer",
+                                "expires_in": issued_expires_in,
+                                "refresh_token": "new-refresh-token",
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("http://{addr}/authorize"),
+            token_endpoint: format!("http://{addr}/token"),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+        let mut stored_token = make_token_response("old-token", Some(stored_expires_in));
+        stored_token.set_refresh_token(Some(oauth2::RefreshToken::new(
+            "my-refresh-token".to_string(),
+        )));
+        manager
+            .credential_store
+            .save(StoredCredentials {
+                client_id: "my-client".to_string(),
+                token_response: Some(stored_token),
+                granted_scopes: vec![],
+                token_received_at: Some(AuthorizationManager::now_epoch_secs() - stored_age_secs),
+                issuer: None,
+            })
+            .await
+            .unwrap();
+        (manager, hits)
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_once_for_short_lived_tokens() {
+        let (manager, hits) = manager_with_counting_refresh_endpoint(20, 20, 25).await;
+
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn get_access_token_refreshes_expired_one_second_token() {
+        let (manager, hits) = manager_with_counting_refresh_endpoint(1, 1, 5).await;
+
+        assert_eq!(manager.get_access_token().await.unwrap(), "new-token");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
