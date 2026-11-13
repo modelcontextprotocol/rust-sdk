@@ -51,8 +51,15 @@ impl ServiceRole for RoleServer {
         }
     }
 
-    fn enforce_outbound_request(peer_info: Option<&Self::PeerInfo>) -> Result<(), ServiceError> {
-        if peer_info.is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28) {
+    fn enforce_outbound_request(peer: &Peer<Self>) -> Result<(), ServiceError> {
+        // Same order as `RequestContext::protocol_version`: the version the
+        // current request names wins. Outside a handler, fall back to the version
+        // an inline session (e.g. discover on stdio) opened on, since it never
+        // stores peer info, then to peer info.
+        let version = originating_protocol_version()
+            .or_else(|| peer.inline_protocol_version().cloned())
+            .or_else(|| peer.peer_info().map(|info| info.protocol_version.clone()));
+        if version.is_some_and(|version| version >= ProtocolVersion::V_2026_07_28) {
             return Err(ServiceError::McpError(ErrorData::invalid_request(
                 "server-to-client requests are not allowed on protocol 2026-07-28 or later; return InputRequiredResult instead",
                 None,
@@ -650,7 +657,7 @@ where
                         })?;
                     continue;
                 }
-                peer.require_request_metadata();
+                peer.set_inline_protocol_version(requested_version);
                 // Dispatch the request from inside the service loop rather than
                 // inline: its handler may send notifications through `peer`, which
                 // only complete once the loop drains `peer_rx`.
@@ -1237,6 +1244,10 @@ impl Peer<RoleServer> {
     where
         T: ElicitationSafe + for<'de> serde::Deserialize<'de>,
     {
+        // Reject on 2026-07-28 before the capability check, which would
+        // otherwise answer `CapabilityNotSupported` first.
+        RoleServer::enforce_outbound_request(self)?;
+
         // Check if client supports form elicitation capability
         if !self
             .supported_elicitation_modes()
@@ -1388,6 +1399,10 @@ impl Peer<RoleServer> {
         elicitation_id: impl Into<String>,
         timeout: Option<std::time::Duration>,
     ) -> Result<ElicitationAction, ElicitationError> {
+        // Reject on 2026-07-28 before the capability check, which would
+        // otherwise answer `CapabilityNotSupported` first.
+        RoleServer::enforce_outbound_request(self)?;
+
         // Check if client supports url elicitation
         if !self
             .supported_elicitation_modes()

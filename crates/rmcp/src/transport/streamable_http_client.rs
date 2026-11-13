@@ -228,6 +228,9 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     UnexpectedEndOfStream,
     #[error("unexpected server response: {0}")]
     UnexpectedServerResponse(Cow<'static, str>),
+    /// A non-streaming HTTP response exceeded the client's byte limit.
+    #[error("HTTP response body exceeded the maximum size of {max_size} bytes")]
+    ResponseBodyTooLarge { max_size: usize },
     #[error("Unexpected content type: {0:?}")]
     UnexpectedContentType(Option<String>),
     #[error("Server does not support SSE")]
@@ -451,6 +454,14 @@ pub(super) fn legacy_discover_response(
 }
 
 /// HTTP backend used by [`StreamableHttpClientTransport`].
+///
+/// The built-in reqwest and Unix socket clients limit successful JSON response
+/// bodies to 16 MiB and non-success response bodies to 64 KiB. These fixed limits
+/// count bytes before parsing (after decompression, when enabled in reqwest),
+/// independently of the SSE event-size setting. Oversized bodies are rejected,
+/// not truncated and parsed; reqwest JSON 5xx failures retain HTTP status metadata.
+/// Custom clients must enforce their own limits on non-streaming response bodies.
+/// These are size limits, not timeouts for servers that stop sending data.
 ///
 /// Custom implementations that parse SSE responses must override
 /// [`Self::post_message_with_max_sse_event_size`] and
@@ -2601,6 +2612,48 @@ mod tests {
             ),
             (vec!["valid"], vec!["valid"])
         );
+    }
+
+    #[test]
+    fn cache_tools_keeps_property_names_in_dependency_maps() {
+        for keyword in ["dependentRequired", "dependencies"] {
+            let valid = tool(
+                "valid",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "x-mcp-header": { "type": "string" },
+                        "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                    },
+                    (keyword): { "x-mcp-header": ["tenant"] }
+                }),
+            );
+            let mut message = ServerJsonRpcMessage::response(
+                ServerResult::ListToolsResult(ListToolsResult::with_all_items(vec![valid])),
+                NumberOrString::Number(1),
+            );
+            let mut cache = HashMap::new();
+
+            cache_tools_from_response(&mut cache, &mut message, &ProtocolVersion::V_2026_07_28);
+
+            let ServerJsonRpcMessage::Response(response) = message else {
+                panic!("expected tools/list response");
+            };
+            let ServerResult::ListToolsResult(result) = response.result else {
+                panic!("expected tools/list result");
+            };
+            assert_eq!(
+                (
+                    result
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name.as_ref())
+                        .collect::<Vec<_>>(),
+                    cache.keys().map(String::as_str).collect::<Vec<_>>(),
+                ),
+                (vec!["valid"], vec!["valid"])
+            );
+        }
     }
 
     #[test]

@@ -57,6 +57,9 @@ indexmap = { version = "2", features = ["serde"] }
 tracing = { version = "0.1" }
 tokio-util = { version = "0.7" }
 pin-project-lite = "0.2"
+percent-encoding = { version = "2", default-features = false, features = ["alloc"] }
+unicode-general-category = "1"
+unicode-normalization = { version = "0.1", default-features = false }
 pastey = { version = "0.2.0", optional = true }
 # oauth2 support
 oauth2 = { version = "5.0", optional = true, default-features = false }
@@ -71,6 +74,12 @@ base64 = { version = "0.23", optional = true }
 
 # SHA-256 for SEP-2640 skill digests and SEP-2322 requestState sealing
 sha2 = "0.11"
+
+# SKILL.md frontmatter for the `skills-fs` catalog
+yaml_serde = { version = "0.10", optional = true }
+# reads the `skills-fs` catalog through a root handle that cannot escape it
+cap-std = { version = "4", optional = true }
+cap-fs-ext = { version = "4", optional = true }
 
 # for SEP-2322 requestState integrity sealing (opt-in via the `request-state` feature)
 hmac = { version = "0.13", optional = true }
@@ -124,9 +133,13 @@ chrono = { version = "0.4.38", default-features = false, features = [
   "oldtime",
 ] }
 
-# the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`
-[target.'cfg(target_os = "linux")'.dependencies]
+# the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`;
+# the child process transport sends `SIGTERM` during graceful shutdown
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = true }
 
 [features]
 default = ["base64", "macros", "server"]
@@ -138,6 +151,7 @@ elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
 request-state = ["dep:hmac", "dep:zeroize", "base64"]
+skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde", "dep:windows-sys"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -222,7 +236,8 @@ tracing-subscriber = { version = "0.3", features = [
   "fmt",
 ] }
 async-trait = "0.1"
-rstest = "0.27.0"
+rstest = "0.28.0"
+tempfile = "3"
 # Cargo unifies this feature into rmcp whenever any crate in a build enables it,
 # so the tests run with it on (see tests/test_deserialization.rs).
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
@@ -508,3 +523,13 @@ path = "tests/test_sep_2260_stream_routing.rs"
 name = "test_streamable_http_status_metadata"
 path = "tests/test_streamable_http_status_metadata.rs"
 required-features = ["transport-streamable-http-client", "transport-streamable-http-client-reqwest"]
+
+[[test]]
+name = "test_streamable_http_response_limits"
+path = "tests/test_streamable_http_response_limits.rs"
+required-features = ["transport-streamable-http-client-reqwest"]
+
+[[test]]
+name = "test_unix_socket_response_limits"
+path = "tests/test_unix_socket_response_limits.rs"
+required-features = ["transport-streamable-http-client-unix-socket"]

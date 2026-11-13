@@ -4169,7 +4169,8 @@ pub struct CallToolResult {
 // 1. Defaults `content` to `[]` when the field is missing (lenient per Postel's law)
 // 2. Requires at least one known field to be present, so that `CallToolResult` doesn't
 //    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
-//    (e.g. `ServerResult`), which would shadow `CustomResult`.
+//    (e.g. `ServerResult`), which would shadow `CustomResult`. `_meta` doesn't count,
+//    since any result type may carry it.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
 // 4. Keeps a present `"structuredContent": null` as `Some(Value::Null)`, distinct
 //    from an absent field, since structured content can be any JSON value.
@@ -4206,11 +4207,10 @@ impl<'de> Deserialize<'de> for CallToolResult {
         if helper.content.is_none()
             && helper.structured_content.is_none()
             && helper.is_error.is_none()
-            && helper.meta.is_none()
         {
             return Err(serde::de::Error::custom(
                 "expected at least one known CallToolResult field \
-                 (content, structuredContent, isError, or _meta)",
+                 (content, structuredContent, or isError)",
             ));
         }
 

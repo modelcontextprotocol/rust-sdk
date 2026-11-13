@@ -19,7 +19,7 @@ use rmcp::{
     },
     service::{RequestContext, RunningService, ServiceError, serve_directly},
 };
-use tokio::task::JoinHandle;
+use tokio::{io::AsyncReadExt, task::JoinHandle};
 
 const SKILL_MD: &str = "---\nname: pdf-processing\ndescription: Extract, fill, and assemble PDF documents\n---\n\n# PDF processing\n\nChoose the matching template from `templates/`.\n";
 const PDF_SKILL_URI: &str = "skill://pdf-processing/SKILL.md";
@@ -28,7 +28,7 @@ const TEMPLATES_DIR_URI: &str = "skill://pdf-processing/templates";
 const REGIONAL_DIR_URI: &str = "skill://pdf-processing/templates/regional";
 const DYNAMIC_SKILL_URI: &str = "skill://live-metrics/SKILL.md";
 
-fn pdf_skill() -> Skill {
+fn pdf_skill(invoice_uri: &str) -> Skill {
     Skill::new(
         PDF_SKILL_URI,
         SkillFrontmatter::new(
@@ -37,7 +37,7 @@ fn pdf_skill() -> Skill {
         ),
         SkillResources::Files(vec![
             SkillResource::from_bytes(PDF_SKILL_URI, SKILL_MD.as_bytes()),
-            SkillResource::from_bytes(INVOICE_URI, b"# Invoice\n"),
+            SkillResource::from_bytes(invoice_uri, b"# Invoice\n"),
         ]),
     )
 }
@@ -57,6 +57,7 @@ struct SkillServer {
     declare_skills: bool,
     declare_directory_read: bool,
     omit_resources: bool,
+    invoice_uri: Option<&'static str>,
     answer_get_with_other_uri: bool,
     directory_calls: Arc<AtomicUsize>,
 }
@@ -75,6 +76,10 @@ impl SkillServer {
             declare_skills: true,
             ..Default::default()
         }
+    }
+
+    fn pdf_skill(&self) -> Skill {
+        pdf_skill(self.invoice_uri.unwrap_or(INVOICE_URI))
     }
 }
 
@@ -99,7 +104,7 @@ impl ServerHandler for SkillServer {
     ) -> Result<ListSkillsResult, ErrorData> {
         let cursor = request.and_then(|params| params.cursor);
         let mut result = match cursor.as_deref() {
-            None => ListSkillsResult::with_all_items(vec![pdf_skill()]),
+            None => ListSkillsResult::with_all_items(vec![self.pdf_skill()]),
             Some("page-2") => ListSkillsResult::with_all_items(vec![dynamic_skill()]),
             Some(other) => {
                 return Err(ErrorData::invalid_params(
@@ -123,7 +128,7 @@ impl ServerHandler for SkillServer {
             return Ok(GetSkillResult::new(dynamic_skill()));
         }
         match request.uri.as_str() {
-            PDF_SKILL_URI => Ok(GetSkillResult::new(pdf_skill())),
+            PDF_SKILL_URI => Ok(GetSkillResult::new(self.pdf_skill())),
             DYNAMIC_SKILL_URI => Ok(GetSkillResult::new(dynamic_skill())),
             uri => Err(ErrorData::invalid_params(
                 format!("no skill at {uri}"),
@@ -283,7 +288,7 @@ async fn get_skill_should_return_the_entry_for_a_served_uri() {
         .expect("skills/get");
     disconnect(client, server_task).await;
 
-    assert_eq!(result.skill, pdf_skill());
+    assert_eq!(result.skill, pdf_skill(INVOICE_URI));
 }
 
 #[tokio::test]
@@ -336,13 +341,51 @@ async fn get_skill_should_fail_with_internal_error_when_the_handler_answers_anot
 }
 
 #[tokio::test]
-async fn skills_methods_should_be_method_not_found_when_the_extension_is_undeclared() {
-    let (client, server_task) = connect(SkillServer::default(), ProtocolVersion::V_2026_07_28);
+async fn skills_methods_should_not_send_without_a_declared_extension() {
+    let capabilities = ServerCapabilities::builder().enable_resources().build();
+    for peer_info in [None, Some(InitializeResult::new(capabilities).into())] {
+        let (transport, mut wire) = tokio::io::duplex(1024);
+        // Drop the peer on the first byte so an unexpected request fails immediately.
+        let first_read = tokio::spawn(async move { wire.read(&mut [0]).await });
+        let client = serve_directly::<RoleClient, _, _, _, _>((), transport, peer_info);
 
-    let error = client.list_skills(None).await.expect_err("undeclared");
-    disconnect(client, server_task).await;
+        for error in [
+            client.list_skills(None).await.unwrap_err(),
+            client
+                .get_skill(GetSkillRequestParams::new(PDF_SKILL_URI))
+                .await
+                .unwrap_err(),
+            client.list_all_skills().await.unwrap_err(),
+        ] {
+            assert_eq!(error_code(error), ErrorCode::METHOD_NOT_FOUND);
+        }
+        client.cancel().await.unwrap();
+        assert_eq!(first_read.await.unwrap().unwrap(), 0, "unexpected request");
+    }
+}
 
-    assert_eq!(error_code(error), ErrorCode::METHOD_NOT_FOUND);
+#[tokio::test]
+async fn skills_methods_should_reject_invalid_manifest_files() {
+    for uri in [
+        "skill://other-skill/private.md",
+        "skill://pdf-processing/templates/.",
+    ] {
+        let server = SkillServer {
+            invoice_uri: Some(uri),
+            ..SkillServer::with_directory_read()
+        };
+        let (client, server_task) = connect(server, ProtocolVersion::V_2026_07_28);
+        for error in [
+            client.list_skills(None).await.unwrap_err(),
+            client
+                .get_skill(GetSkillRequestParams::new(PDF_SKILL_URI))
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(error_code(error), ErrorCode::INTERNAL_ERROR, "{uri}");
+        }
+        disconnect(client, server_task).await;
+    }
 }
 
 #[tokio::test]

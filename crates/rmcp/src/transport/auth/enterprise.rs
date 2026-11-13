@@ -593,6 +593,14 @@ impl Resource {
             Self::Multiple(values) => values.as_slice() == [expected],
         }
     }
+
+    /// Distinguishes an omitted claim (`None` via `serde(default)`) from an explicit `null`,
+    /// which is rejected.
+    fn deserialize_present<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Self>, D::Error> {
+        Self::deserialize(deserializer).map(Some)
+    }
 }
 
 #[derive(Deserialize)]
@@ -610,7 +618,10 @@ struct IdJagClaims {
     jti: String,
     exp: u64,
     iat: u64,
-    resource: Resource,
+    /// OPTIONAL per draft-ietf-oauth-identity-assertion-authz-grant; when present, the
+    /// MCP EMA profile requires it to be the MCP server's resource identifier.
+    #[serde(default, deserialize_with = "Resource::deserialize_present")]
+    resource: Option<Resource>,
     scope: Option<String>,
     authorization_details: Option<Vec<serde_json::Value>>,
 }
@@ -684,11 +695,14 @@ impl IdJagResponse {
         if claims.exp <= now || claims.iat > now.saturating_add(60) {
             return Err(invalid("expired or future-issued ID-JAG"));
         }
-        if !claims.resource.is_exact(request.resource)
-            || self
-                .resource
-                .as_ref()
-                .is_some_and(|r| !r.is_exact(request.resource))
+        // Without a resource claim, the ID-JAG is bound to the resource AS by `aud` alone.
+        if [&claims.resource, &self.resource]
+            .into_iter()
+            .any(|resource| {
+                resource
+                    .as_ref()
+                    .is_some_and(|r| !r.is_exact(request.resource))
+            })
         {
             return Err(invalid("ID-JAG resource mismatch"));
         }

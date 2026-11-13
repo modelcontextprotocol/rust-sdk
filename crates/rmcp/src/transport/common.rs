@@ -6,6 +6,12 @@ pub mod http_header;
 #[cfg(any(feature = "client-side-sse", feature = "server-side-http"))]
 pub mod mcp_headers;
 
+#[cfg(any(
+    feature = "transport-streamable-http-client-reqwest",
+    all(unix, feature = "transport-streamable-http-client-unix-socket")
+))]
+mod client_side_http;
+
 #[cfg(feature = "__reqwest")]
 mod reqwest;
 

@@ -5,10 +5,12 @@
 //! `resources/read` serves the file bytes. The request and result wiring
 //! lives in the parent module next to the other methods.
 
-#[cfg(feature = "schemars")]
 use std::borrow::Cow;
 
+use percent_encoding::{CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
+use unicode_general_category::{GeneralCategory, get_general_category};
+use unicode_normalization::UnicodeNormalization;
 
 use super::{
     CacheScope, JsonObject, MetaObject, Resource, ResultType, deserialize_cache_scope,
@@ -267,11 +269,23 @@ impl Skill {
 
     /// Check the rules the spec puts on a skill entry that can be checked
     /// without reading any file.
+    ///
+    /// The 1–64 character limit counts Unicode scalar values after NFKC
+    /// normalization. This same form is used to compare the frontmatter name
+    /// with the decoded URI segment. Use the advertised URI for reads and
+    /// pair it with the originating server for cache and approval keys.
     pub fn validate(&self) -> Result<(), SkillValidationError> {
-        let Some(name) = skill_name_from_uri(&self.uri) else {
+        let Some(encoded_name) = skill_name_from_uri(&self.uri) else {
             return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
         };
-        if name != self.frontmatter.name {
+        let name = self.name();
+        if !is_valid_skill_name(name) {
+            return Err(SkillValidationError::InvalidName(name.to_owned()));
+        }
+        if !percent_decode_str(encoded_name)
+            .decode_utf8()
+            .is_ok_and(|segment| segment.nfkc().eq(name.nfkc()))
+        {
             return Err(SkillValidationError::NameMismatch {
                 uri: self.uri.clone(),
                 name: self.frontmatter.name.clone(),
@@ -285,7 +299,13 @@ impl Skill {
         }
         let mut seen = std::collections::HashSet::with_capacity(files.len());
         for file in files {
-            if !seen.insert(file.uri.as_str()) {
+            let Some(key) = manifest_resource_key(&self.uri, &file.uri) else {
+                return Err(SkillValidationError::ResourceOutsideSkill {
+                    uri: file.uri.clone(),
+                    skill_uri: self.uri.clone(),
+                });
+            };
+            if !seen.insert(key) {
                 return Err(SkillValidationError::DuplicateResource(file.uri.clone()));
             }
             if !is_sha256_digest(&file.digest) {
@@ -304,9 +324,93 @@ pub const SKILL_MD: &str = "SKILL.md";
 
 /// The skill name encoded in a `SKILL.md` URI: the path segment before `SKILL.md`.
 pub fn skill_name_from_uri(uri: &str) -> Option<&str> {
+    if uri.contains(['?', '#']) {
+        return None;
+    }
     let path = uri.strip_suffix(SKILL_MD)?.strip_suffix('/')?;
     let name = path.rsplit('/').next()?;
     (!name.is_empty()).then_some(name)
+}
+
+/// Validate the NFKC form, as in the Agent Skills reference validator.
+/// Letters from scripts without case are valid in a skill name.
+fn is_valid_skill_name(name: &str) -> bool {
+    let mut needs_alphanumeric = true;
+    for (index, ch) in name.nfkc().enumerate() {
+        if index >= 64 {
+            return false;
+        }
+        match get_general_category(ch) {
+            GeneralCategory::LowercaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::DecimalNumber
+            | GeneralCategory::LetterNumber
+            | GeneralCategory::OtherNumber => needs_alphanumeric = false,
+            _ if ch == '-' && !needs_alphanumeric => needs_alphanumeric = true,
+            _ => return false,
+        }
+    }
+    !needs_alphanumeric
+}
+
+/// Comparison key for a file under this skill's root. Reads use the advertised URI.
+fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> {
+    // Keep the trailing slash to distinguish a child from a sibling whose
+    // directory name merely starts with the skill's name, under any scheme.
+    let root = skill_uri.strip_suffix(SKILL_MD)?;
+    let relative = resource_uri.strip_prefix(root)?;
+    let (path, suffix) = relative.split_at(relative.find(['?', '#']).unwrap_or(relative.len()));
+    let path = normalize_percent_encoding(path);
+    let mut segments = path.split('/');
+    // An empty or dot-segment leaf resolves to a directory.
+    let file = segments.next_back()?;
+    if matches!(file, "" | "." | "..") {
+        return None;
+    }
+    let mut resolved = Vec::new();
+    for segment in segments {
+        match segment {
+            "." => {}
+            ".." => {
+                resolved.pop()?;
+            }
+            _ => resolved.push(segment),
+        }
+    }
+    resolved.push(file);
+    let mut key = resolved.join("/");
+    key.push_str(suffix);
+    Some(key)
+}
+
+// First percent-encode literal Unicode and ASCII control characters. Then apply
+// RFC 3986 §6.2.2: decode unreserved bytes and uppercase the other escapes,
+// keeping reserved delimiters encoded in the comparison key.
+fn normalize_percent_encoding(value: &str) -> Cow<'_, str> {
+    let encoded: Cow<'_, str> = utf8_percent_encode(value, CONTROLS).into();
+    let Some((prefix, escaped)) = encoded.split_once('%') else {
+        return encoded;
+    };
+    let mut normalized = prefix.to_owned();
+    for part in escaped.split('%') {
+        if let Some((hex, rest)) = part.split_at_checked(2)
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            let byte = u8::from_str_radix(hex, 16).expect("two hex digits");
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                normalized.push(char::from(byte));
+            } else {
+                normalized.push('%');
+                normalized.push_str(&hex.to_ascii_uppercase());
+            }
+            normalized.push_str(rest);
+        } else {
+            normalized.push('%');
+            normalized.push_str(part);
+        }
+    }
+    Cow::Owned(normalized)
 }
 
 /// Whether `digest` is `sha256:` followed by 64 lowercase hex characters.
@@ -321,7 +425,7 @@ pub fn validate_skills(skills: &[Skill]) -> Result<(), SkillValidationError> {
     let mut seen = std::collections::HashSet::with_capacity(skills.len());
     for skill in skills {
         skill.validate()?;
-        if !seen.insert(skill.uri.as_str()) {
+        if !seen.insert(normalize_percent_encoding(&skill.uri)) {
             return Err(SkillValidationError::DuplicateSkill(skill.uri.clone()));
         }
     }
@@ -334,12 +438,18 @@ pub fn validate_skills(skills: &[Skill]) -> Result<(), SkillValidationError> {
 pub enum SkillValidationError {
     #[error("skill uri {0} does not end in /SKILL.md")]
     UriNotSkillMd(String),
+    #[error(
+        "invalid skill name {0:?}: after NFKC normalization, use 1–64 characters with lowercase letters, numbers, and single internal hyphens"
+    )]
+    InvalidName(String),
     #[error("skill uri {uri} does not end in the frontmatter name {name}")]
     NameMismatch { uri: String, name: String },
     #[error("skill manifest {0} does not list its own SKILL.md")]
     MissingSkillMd(String),
     #[error("skill manifest lists {0} twice")]
     DuplicateResource(String),
+    #[error("resource {uri} does not identify a file within the directory of {skill_uri}")]
+    ResourceOutsideSkill { uri: String, skill_uri: String },
     #[error("skill file {uri} has a malformed digest {digest}")]
     MalformedDigest { uri: String, digest: String },
     #[error("skill {0} is listed twice")]
@@ -567,6 +677,16 @@ mod tests {
         }
 
         #[test]
+        fn ignores_skill_md_in_a_query_or_fragment() {
+            for uri in [
+                "skill://acme/billing?reference=/billing/SKILL.md",
+                "skill://acme/billing#reference/billing/SKILL.md",
+            ] {
+                assert_eq!(skill_name_from_uri(uri), None, "{uri}");
+            }
+        }
+
+        #[test]
         fn returns_none_for_skill_md_at_the_root() {
             assert_eq!(skill_name_from_uri("skill:///SKILL.md"), None);
         }
@@ -596,6 +716,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manifest_paths_must_resolve_to_files_within_the_skill_directory() {
+        let skill_uri = "custom:skills/billing/SKILL.md";
+        for (path, key) in [
+            ("refunds/SKILL.md", Some("refunds/SKILL.md")),
+            ("refs/./guide.md", Some("refs/guide.md")),
+            ("refs/../invoice.md", Some("invoice.md")),
+            ("refs/%2e%2E/invoice.md", Some("invoice.md")),
+            ("refs//invoice.md", Some("refs//invoice.md")),
+            (
+                "refs%2fguide.md?ref=/../../other",
+                Some("refs%2Fguide.md?ref=/../../other"),
+            ),
+            (
+                "invoice.md#ref/../../other",
+                Some("invoice.md#ref/../../other"),
+            ),
+            ("refs/../../invoice.md", None),
+            (".%2E/invoice.md", None),
+            ("refs/", None),
+            ("refs/.", None),
+            ("refs/sub/..", None),
+            ("refs/%2E?file=invoice.md", None),
+            ("refs/sub/.%2e#invoice.md", None),
+        ] {
+            let uri = format!("custom:skills/billing/{path}");
+            assert_eq!(
+                manifest_resource_key(skill_uri, &uri).as_deref(),
+                key,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_resources_with_a_different_root() {
+        for uri in [
+            "skill://acme/billing-other/invoice.md",
+            "skill://other/billing/invoice.md",
+            "github://acme/billing/invoice.md",
+        ] {
+            assert_eq!(
+                manifest_resource_key("skill://acme/billing/SKILL.md", uri),
+                None,
+                "{uri}"
+            );
+        }
+    }
+
     mod skill_validate {
         use super::*;
 
@@ -615,6 +784,73 @@ mod tests {
         }
 
         #[test]
+        fn accepts_a_percent_encoded_unicode_name() {
+            for uri in [
+                "skill://r%C3%A9sum%C3%A9/SKILL.md",
+                "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
+            ] {
+                let skill = Skill::new(
+                    uri,
+                    SkillFrontmatter::new("résumé", "Résumé templates"),
+                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                );
+                assert_eq!(skill.validate(), Ok(()), "{uri}");
+            }
+        }
+
+        #[test]
+        fn enforces_the_agent_skills_name_rules() {
+            let longest = "界".repeat(64);
+            let too_long = "界".repeat(65);
+            let decomposed_accents = "e\u{301}".repeat(64); // 128 scalars normalize to 64.
+            let ffi_ligatures = "\u{fb03}".repeat(22); // 22 scalars normalize to 66.
+            for (name, valid) in [
+                ("a", true),
+                ("東京-٢", true),
+                (longest.as_str(), true),
+                (too_long.as_str(), false),
+                (decomposed_accents.as_str(), true),
+                (ffi_ligatures.as_str(), false),
+                ("", false),
+                ("PDF", false),
+                ("École", false),
+                ("two_words", false),
+                ("two.words", false),
+                ("two words", false),
+                ("coffee/tea", false),
+                ("-two", false),
+                ("two-", false),
+                ("two--words", false),
+                ("☕", false),
+            ] {
+                let skill = Skill::new(
+                    format!(
+                        "skill://team/{}/SKILL.md",
+                        utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
+                    ),
+                    SkillFrontmatter::new(name, "Example skill"),
+                    SkillResources::Dynamic,
+                );
+                assert_eq!(skill.validate().is_ok(), valid, "{name:?}");
+            }
+        }
+
+        #[test]
+        fn compares_unicode_names_in_normalized_form() {
+            for (segment, name) in [
+                ("re%CC%81sume%CC%81", "résumé"),
+                ("r%C3%A9sum%C3%A9", "re\u{301}sume\u{301}"),
+            ] {
+                let skill = Skill::new(
+                    format!("skill://team/{segment}/SKILL.md"),
+                    SkillFrontmatter::new(name, "Résumé templates"),
+                    SkillResources::Dynamic,
+                );
+                assert_eq!(skill.validate(), Ok(()), "{segment}");
+            }
+        }
+
+        #[test]
         fn rejects_a_name_that_differs_from_the_uri() {
             let mut skill = billing_skill();
             skill.frontmatter.name = "invoices".into();
@@ -622,6 +858,27 @@ mod tests {
                 skill.validate(),
                 Err(SkillValidationError::NameMismatch { .. })
             ));
+        }
+
+        #[test]
+        fn rejects_invalid_encoded_name_matches() {
+            for (segment, name) in [
+                ("r%FFsum%C3%A9", "résumé"),
+                ("r%25C3%25A9sum%25C3%25A9", "résumé"),
+            ] {
+                let skill = Skill::new(
+                    format!("skill://team/{segment}/SKILL.md"),
+                    SkillFrontmatter::new(name, "Drinks"),
+                    SkillResources::Dynamic,
+                );
+                assert!(
+                    matches!(
+                        skill.validate(),
+                        Err(SkillValidationError::NameMismatch { .. })
+                    ),
+                    "{segment}"
+                );
+            }
         }
 
         #[test]
@@ -648,6 +905,21 @@ mod tests {
         }
 
         #[test]
+        fn rejects_two_spellings_of_the_same_manifest_file() {
+            let file =
+                |path: &str| SkillResource::from_bytes(format!("skill://acme/billing/{path}"), b"");
+            let mut skill = billing_skill();
+            let entry = file("SKILL.md");
+            let alias = file("refs/../%69nvoice.md");
+            skill.resources = SkillResources::Files(vec![entry.clone(), alias.clone()]);
+            assert_eq!(skill.validate(), Ok(()));
+
+            let duplicate = SkillValidationError::DuplicateResource(alias.uri.clone());
+            skill.resources = SkillResources::Files(vec![entry, file("invoice.md"), alias]);
+            assert_eq!(skill.validate(), Err(duplicate));
+        }
+
+        #[test]
         fn rejects_a_malformed_digest() {
             let mut skill = billing_skill();
             let SkillResources::Files(files) = &mut skill.resources else {
@@ -665,12 +937,46 @@ mod tests {
         use super::*;
 
         #[test]
+        fn compatibility_equivalent_names_can_identify_distinct_resources() {
+            let skills = ["skill://ｃａｆｅ/SKILL.md", "skill://cafe/SKILL.md"].map(|uri| {
+                Skill::new(
+                    uri,
+                    SkillFrontmatter::new("cafe", "Coffee recipes"),
+                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                )
+            });
+            assert_eq!(validate_skills(&skills), Ok(()));
+        }
+
+        #[test]
         fn rejects_the_same_skill_listed_twice() {
             let skills = [billing_skill(), billing_skill()];
             assert!(matches!(
                 validate_skills(&skills),
                 Err(SkillValidationError::DuplicateSkill(_))
             ));
+        }
+
+        #[test]
+        fn rejects_equivalent_percent_encodings_of_a_skill_uri() {
+            let skill = |uri| {
+                Skill::new(
+                    uri,
+                    SkillFrontmatter::new("résumé", "Résumé templates"),
+                    SkillResources::Dynamic,
+                )
+            };
+            let uri = "skill://team/r%C3%A9sum%C3%A9/SKILL.md";
+            for alias in [
+                "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
+                "skill://team/%72%C3%A9sum%C3%A9/SKILL.md",
+                "skill://team/résumé/SKILL.md",
+            ] {
+                assert_eq!(
+                    validate_skills(&[skill(uri), skill(alias)]),
+                    Err(SkillValidationError::DuplicateSkill(alias.into()))
+                );
+            }
         }
     }
 

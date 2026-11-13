@@ -636,6 +636,31 @@ pub enum AuthError {
     #[error("Metadata error: {0}")]
     MetadataError(String),
 
+    /// An OAuth discovery request failed before usable metadata could be read.
+    #[error("OAuth metadata discovery failed for {url}")]
+    DiscoveryRequestFailed {
+        url: Url,
+        #[source]
+        source: OAuthHttpClientError,
+    },
+
+    /// A protected resource metadata document was invalid or did not describe this resource.
+    #[error("Protected resource metadata at {url} is unusable: {reason}")]
+    ProtectedResourceMetadataInvalid {
+        url: Url,
+        reason: Box<ProtectedResourceMetadataInvalidReason>,
+    },
+
+    /// Every authorization server advertised by protected resource metadata was unusable.
+    #[error(
+        "Protected resource metadata at {resource_metadata_url} names authorization servers {authorization_servers}, but none published usable metadata",
+        authorization_servers = .authorization_servers.join(", ")
+    )]
+    AuthorizationServersUnavailable {
+        resource_metadata_url: Url,
+        authorization_servers: Vec<String>,
+    },
+
     #[error("Authorization server does not support the required PKCE code challenge method (S256)")]
     PkceUnsupported,
 
@@ -683,6 +708,35 @@ pub enum AuthError {
     #[cfg(feature = "auth-client-credentials-jwt")]
     #[error("JWT signing error: {0}")]
     JwtSigningError(String),
+}
+
+/// The reason a protected resource metadata document is unusable.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum ProtectedResourceMetadataInvalidReason {
+    /// The required `resource` member is absent.
+    #[error("Protected resource metadata missing required resource field")]
+    MissingResource,
+
+    /// The `resource` member cannot be parsed as a URL.
+    #[error("Protected resource metadata resource field is not a valid URL: {resource}")]
+    ResourceNotAUrl { resource: String },
+
+    /// The `resource` URL contains a fragment, which RFC 8707 does not permit.
+    #[error(
+        "Protected resource metadata resource does not permit fragment in URL as specified by RFC 8707"
+    )]
+    ResourceHasFragment { resource: Url },
+
+    /// The `resource` member does not identify this resource.
+    #[error(
+        "Protected resource metadata resource mismatch: reference '{reference}', permitted '{permitted}'"
+    )]
+    ResourceMismatch { reference: Url, permitted: Url },
+
+    /// The server advertised a document that contains no protected resource metadata fields.
+    #[error("the document carries neither `resource` nor an authorization server reference")]
+    NotAMetadataDocument,
 }
 
 /// oauth2 metadata
@@ -2507,10 +2561,8 @@ impl AuthorizationManager {
             .exchange_refresh_token(&refresh_token_value)
             // RFC 8707: the resource indicator is required on token requests, including refreshes
             .add_extra_param("resource", self.oauth_resource().await);
-        let mut refresh_scopes = stored_credentials.granted_scopes.clone();
-        self.add_offline_access_if_supported(&mut refresh_scopes);
-        let requested_scopes = refresh_scopes.clone();
-        for scope in refresh_scopes {
+        let requested_scopes = stored_credentials.granted_scopes.clone();
+        for scope in requested_scopes.iter().cloned() {
             refresh_request = refresh_request.add_scope(Scope::new(scope));
         }
         let mut token_result = match refresh_request
@@ -2899,39 +2951,45 @@ impl AuthorizationManager {
 
         // Falling back to the base url would send the user somewhere the resource
         // never named.
-        Err(AuthError::MetadataError(format!(
-            "protected resource metadata at {resource_metadata_url} names authorization servers {}, but none published usable metadata",
-            candidates.join(", ")
-        )))
+        Err(AuthError::AuthorizationServersUnavailable {
+            resource_metadata_url: resource_metadata_url.clone(),
+            authorization_servers: candidates,
+        })
     }
 
     fn validate_resource_metadata_resource(
         &self,
         metadata: &ResourceServerMetadata,
-    ) -> Result<(), AuthError> {
+    ) -> Result<(), Box<ProtectedResourceMetadataInvalidReason>> {
         let Some(resource) = metadata.resource.as_deref() else {
-            return Err(AuthError::MetadataError(
-                "Protected resource metadata missing required resource field".to_string(),
+            return Err(Box::new(
+                ProtectedResourceMetadataInvalidReason::MissingResource,
             ));
         };
 
         let Ok(resource_url) = Url::parse(resource) else {
-            return Err(AuthError::MetadataError(
-                "Protected resource metadata resource field is not a valid URL".to_string(),
+            return Err(Box::new(
+                ProtectedResourceMetadataInvalidReason::ResourceNotAUrl {
+                    resource: resource.to_owned(),
+                },
             ));
         };
 
         if resource_url.fragment().is_some() {
-            return Err(AuthError::MetadataError(
-                "Protected resource metadata resource does not permit fragment in URL as specified by RFC 8707".to_string()
+            return Err(Box::new(
+                ProtectedResourceMetadataInvalidReason::ResourceHasFragment {
+                    resource: resource_url,
+                },
             ));
         }
 
         if !Self::is_resource_identifier_valid(&self.base_url, &resource_url) {
-            return Err(AuthError::MetadataError(format!(
-                "Protected resource metadata resource mismatch: reference '{}', permitted '{}'",
-                self.base_url, resource
-            )));
+            return Err(Box::new(
+                ProtectedResourceMetadataInvalidReason::ResourceMismatch {
+                    reference: self.base_url.clone(),
+                    permitted: resource_url,
+                },
+            ));
         }
 
         Ok(())
@@ -3160,9 +3218,14 @@ impl AuthorizationManager {
                 // The server named this url, so there is nothing better to move on
                 // to: the alternatives all drop the resource binding the document
                 // was supposed to carry. Report it instead.
-                ResourceMetadataUrlOrigin::Advertised => Err(AuthError::MetadataError(format!(
-                    "the server advertised {resource_metadata_url} as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
-                ))),
+                ResourceMetadataUrlOrigin::Advertised => {
+                    Err(AuthError::ProtectedResourceMetadataInvalid {
+                        url: resource_metadata_url.clone(),
+                        reason: Box::new(
+                            ProtectedResourceMetadataInvalidReason::NotAMetadataDocument,
+                        ),
+                    })
+                }
                 // Nothing advertised this url, so its answer only rules out this
                 // candidate.
                 ResourceMetadataUrlOrigin::WellKnownGuess => {
@@ -3177,12 +3240,17 @@ impl AuthorizationManager {
         // Carrying those fields only makes the body a metadata document; validation
         // is what makes it this resource's. Both answers rule out the url the same
         // way, so both are read the same way.
-        if let Err(error) = self.validate_resource_metadata_resource(&metadata) {
+        if let Err(reason) = self.validate_resource_metadata_resource(&metadata) {
             return match origin {
-                ResourceMetadataUrlOrigin::Advertised => Err(error),
+                ResourceMetadataUrlOrigin::Advertised => {
+                    Err(AuthError::ProtectedResourceMetadataInvalid {
+                        url: resource_metadata_url.clone(),
+                        reason,
+                    })
+                }
                 ResourceMetadataUrlOrigin::WellKnownGuess => {
                     debug!(
-                        "document at {resource_metadata_url} is not this resource's metadata: {error}"
+                        "document at {resource_metadata_url} is not this resource's metadata: {reason}"
                     );
                     Ok(None)
                 }
@@ -3193,10 +3261,10 @@ impl AuthorizationManager {
     }
 
     fn discovery_failed(url: &Url, error: OAuthHttpClientError) -> AuthError {
-        AuthError::MetadataError(format!(
-            "OAuth metadata discovery failed for {url}\n  Caused by: {}",
-            crate::error::ErrorChain(error.as_ref())
-        ))
+        AuthError::DiscoveryRequestFailed {
+            url: url.clone(),
+            source: error,
+        }
     }
 
     async fn discovery_request(
@@ -4399,6 +4467,7 @@ impl OAuthState {
 mod tests {
     use std::{
         collections::{HashMap, VecDeque},
+        error::Error,
         sync::{Arc, Mutex as StdMutex},
     };
 
@@ -4413,7 +4482,8 @@ mod tests {
         AuthorizationMetadataSource, AuthorizationRequest, AuthorizationSession,
         CredentialRefreshGuard, CredentialStore, InMemoryCredentialStore, InMemoryStateStore,
         InitialScopeState, OAuthClientConfig, OAuthHttpClient, OAuthHttpClientError,
-        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest, ScopeUpgradeConfig,
+        OAuthHttpClientFuture, OAuthHttpRedirectPolicy, OAuthHttpRequest,
+        ProtectedResourceMetadataInvalidReason, ResourceMetadataUrlOrigin, ScopeUpgradeConfig,
         StateStore, StoredAuthorizationState, is_https_url,
     };
     use crate::transport::auth::VendorExtraTokenFields;
@@ -4504,7 +4574,18 @@ mod tests {
         let error = AuthorizationManager::discovery_failed(&url, error);
         assert_eq!(
             error.to_string(),
-            "Metadata error: OAuth metadata discovery failed for https://mcp.example.com/mcp\n  Caused by: request failed\n  Caused by: certificate signed by unknown authority"
+            "OAuth metadata discovery failed for https://mcp.example.com/mcp"
+        );
+        assert!(matches!(
+            &error,
+            AuthError::DiscoveryRequestFailed { url: actual, .. } if actual == &url
+        ));
+        let source = error.source().expect("request error should be preserved");
+        assert!(source.downcast_ref::<RequestError>().is_some());
+        let nested_source = source.source().expect("nested source should be preserved");
+        assert_eq!(
+            nested_source.to_string(),
+            "certificate signed by unknown authority"
         );
     }
 
@@ -4571,14 +4652,23 @@ mod tests {
 
         assert!(
             matches!(
-                error,
-                AuthError::MetadataError(ref reason)
-                    if reason.contains(&url)
-                        && reason.contains("\n  Caused by: error sending request for url")
-                        && reason.matches("error sending request for url").count() == 1
-                        && reason.to_ascii_lowercase().contains("connection refused")
+                &error,
+                AuthError::DiscoveryRequestFailed { url: failed_url, .. }
+                    if failed_url.as_str() == url
             ),
             "unexpected discovery error: {error}"
+        );
+        let mut sources = Vec::new();
+        let mut source = error.source();
+        while let Some(cause) = source {
+            sources.push(cause.to_string());
+            source = cause.source();
+        }
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.to_ascii_lowercase().contains("connection refused")),
+            "connection failure source should remain available: {sources:?}"
         );
     }
 
@@ -4600,12 +4690,16 @@ mod tests {
 
         assert!(
             matches!(
-                error,
-                AuthError::MetadataError(ref reason)
-                    if reason.contains("https://auth.example.com/.well-known/oauth-authorization-server")
-                        && reason.contains("missing fake response")
+                &error,
+                AuthError::DiscoveryRequestFailed { url, .. }
+                    if url.as_str() == "https://auth.example.com/.well-known/oauth-authorization-server"
             ),
             "unexpected discovery error: {error}"
+        );
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.to_string().contains("missing fake response"))
         );
         assert_eq!(client.requests().len(), 3);
     }
@@ -4625,11 +4719,16 @@ mod tests {
 
         assert!(
             matches!(
-                error,
-                AuthError::MetadataError(ref reason)
-                    if reason.contains("https://mcp.example.com/mcp") && reason.contains("503")
+                &error,
+                AuthError::DiscoveryRequestFailed { url, .. }
+                    if url.as_str() == "https://mcp.example.com/mcp"
             ),
             "unexpected discovery error: {error}"
+        );
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.to_string().contains("503"))
         );
     }
 
@@ -4692,11 +4791,16 @@ mod tests {
 
         assert!(
             matches!(
-                error,
-                AuthError::MetadataError(ref reason)
-                    if reason.contains(expected_url) && reason.contains(status.as_str())
+                &error,
+                AuthError::DiscoveryRequestFailed { url, .. }
+                    if url.as_str() == expected_url
             ),
             "unexpected discovery error for {status}: {error}"
+        );
+        assert!(
+            error
+                .source()
+                .is_some_and(|source| source.to_string().contains(status.as_str()))
         );
         assert_eq!(client.requests().len(), successful_response_count + 1);
     }
@@ -5678,8 +5782,16 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "Metadata error: the server advertised https://mcp.example.com/.well-known/oauth-protected-resource as protected resource metadata, but the document carries neither `resource` nor an authorization server reference"
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource is unusable: the document carries neither `resource` nor an authorization server reference"
         );
+        assert!(matches!(
+            &error,
+            AuthError::ProtectedResourceMetadataInvalid {
+                url,
+                reason
+            } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                && matches!(reason.as_ref(), ProtectedResourceMetadataInvalidReason::NotAMetadataDocument)
+        ));
     }
 
     #[tokio::test]
@@ -5941,8 +6053,18 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "Metadata error: protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource names authorization servers https://auth.example.com, https://sso.example.com, but none published usable metadata"
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource names authorization servers https://auth.example.com, https://sso.example.com, but none published usable metadata"
         );
+        assert!(matches!(
+            error,
+            AuthError::AuthorizationServersUnavailable {
+                resource_metadata_url,
+                authorization_servers
+            } if resource_metadata_url.as_str()
+                    == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                && authorization_servers
+                    == ["https://auth.example.com", "https://sso.example.com"]
+        ));
         let requests = recorder.requests();
         let requested: Vec<_> = requests
             .iter()
@@ -6877,9 +6999,27 @@ mod tests {
 
         let error = manager.resolve_metadata().await.unwrap_err();
 
+        assert_eq!(
+            error.to_string(),
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource is unusable: Protected resource metadata resource mismatch: reference 'https://mcp.example.com/mcp', permitted 'https://real.example.com/mcp'"
+        );
         assert!(
-            matches!(error, AuthError::MetadataError(ref message) if message.contains("resource mismatch")),
-            "expected resource mismatch metadata error, got: {error:?}"
+            matches!(
+                &error,
+                AuthError::ProtectedResourceMetadataInvalid {
+                    url,
+                    reason
+                } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                    && matches!(
+                        reason.as_ref(),
+                        ProtectedResourceMetadataInvalidReason::ResourceMismatch {
+                            reference,
+                            permitted
+                        } if reference.as_str() == "https://mcp.example.com/mcp"
+                            && permitted.as_str() == "https://real.example.com/mcp"
+                    )
+            ),
+            "expected structured resource mismatch metadata error, got: {error:?}"
         );
         assert_eq!(client.requests().len(), 2);
     }
@@ -6912,11 +7052,97 @@ mod tests {
 
         let error = manager.resolve_metadata().await.unwrap_err();
 
+        assert_eq!(
+            error.to_string(),
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource is unusable: Protected resource metadata missing required resource field"
+        );
         assert!(
-            matches!(error, AuthError::MetadataError(ref message) if message.contains("missing required resource")),
-            "expected missing resource metadata error, got: {error:?}"
+            matches!(
+                &error,
+                AuthError::ProtectedResourceMetadataInvalid {
+                    url,
+                    reason
+                } if url.as_str() == "https://mcp.example.com/.well-known/oauth-protected-resource"
+                    && matches!(reason.as_ref(), ProtectedResourceMetadataInvalidReason::MissingResource)
+            ),
+            "expected structured missing resource metadata error, got: {error:?}"
         );
         assert_eq!(client.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn protected_resource_discovery_rejects_resource_that_is_not_a_url() {
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::default()),
+        )
+        .await
+        .unwrap();
+        let metadata_url =
+            Url::parse("https://mcp.example.com/.well-known/oauth-protected-resource").unwrap();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "resource": "not a URL",
+            "authorization_servers": ["https://auth.example.com"]
+        }))
+        .unwrap();
+
+        let error = manager
+            .read_resource_metadata(&metadata_url, &body, ResourceMetadataUrlOrigin::Advertised)
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource is unusable: Protected resource metadata resource field is not a valid URL: not a URL"
+        );
+        assert!(matches!(
+            &error,
+            AuthError::ProtectedResourceMetadataInvalid {
+                url,
+                reason
+            } if url == &metadata_url && matches!(
+                reason.as_ref(),
+                ProtectedResourceMetadataInvalidReason::ResourceNotAUrl { resource }
+                    if resource == "not a URL"
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn protected_resource_discovery_rejects_resource_with_fragment() {
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(RecordingOAuthHttpClient::default()),
+        )
+        .await
+        .unwrap();
+        let metadata_url =
+            Url::parse("https://mcp.example.com/.well-known/oauth-protected-resource").unwrap();
+        let resource = "https://mcp.example.com/mcp#fragment";
+        let body = serde_json::to_vec(&serde_json::json!({
+            "resource": resource,
+            "authorization_servers": ["https://auth.example.com"]
+        }))
+        .unwrap();
+
+        let error = manager
+            .read_resource_metadata(&metadata_url, &body, ResourceMetadataUrlOrigin::Advertised)
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Protected resource metadata at https://mcp.example.com/.well-known/oauth-protected-resource is unusable: Protected resource metadata resource does not permit fragment in URL as specified by RFC 8707"
+        );
+        assert!(matches!(
+            &error,
+            AuthError::ProtectedResourceMetadataInvalid {
+                url,
+                reason
+            } if url == &metadata_url && matches!(
+                reason.as_ref(),
+                ProtectedResourceMetadataInvalidReason::ResourceHasFragment { resource: actual }
+                    if actual.as_str() == resource
+            )
+        ));
     }
 
     #[test]
@@ -9854,7 +10080,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_token_adds_offline_access_when_as_supports_it() {
+    async fn refresh_token_does_not_add_ungranted_offline_access() {
         let (base_url, captured) = start_token_server().await;
 
         let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
@@ -9873,6 +10099,45 @@ mod tests {
                 "my-refresh-token",
             )),
             granted_scopes: vec!["read".to_string()],
+            token_received_at: Some(AuthorizationManager::now_epoch_secs()),
+            issuer: None,
+        };
+        manager.credential_store.save(stored).await.unwrap();
+
+        manager.refresh_token().await.unwrap();
+
+        let body = captured.lock().unwrap().take().unwrap();
+        let params: std::collections::HashMap<_, _> = url::form_urlencoded::parse(body.as_bytes())
+            .into_owned()
+            .collect();
+        let scope = params
+            .get("scope")
+            .expect("scope should be present in refresh request");
+        let mut scope_parts: Vec<&str> = scope.split_whitespace().collect();
+        scope_parts.sort_unstable();
+        assert_eq!(scope_parts, vec!["read"]);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_keeps_offline_access_when_it_was_granted() {
+        let (base_url, captured) = start_token_server().await;
+
+        let mut manager = manager_with_metadata(Some(AuthorizationMetadata {
+            authorization_endpoint: format!("{}/authorize", base_url),
+            token_endpoint: format!("{}/token", base_url),
+            scopes_supported: Some(vec!["read".to_string(), "offline_access".to_string()]),
+            ..Default::default()
+        }))
+        .await;
+        manager.configure_client(test_client_config()).unwrap();
+
+        let stored = StoredCredentials {
+            client_id: "my-client".to_string(),
+            token_response: Some(make_token_response_with_refresh(
+                "old-token",
+                "my-refresh-token",
+            )),
+            granted_scopes: vec!["read".to_string(), "offline_access".to_string()],
             token_received_at: Some(AuthorizationManager::now_epoch_secs()),
             issuer: None,
         };

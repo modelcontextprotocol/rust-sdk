@@ -155,8 +155,28 @@ let service = common::counter::Counter::new();
 <summary>Start the server</summary>
 
 ```rust, ignore
-// this call will finish the initialization process
+// Await protocol startup, then receive a handle to the running service.
 let server = service.serve(transport).await?;
+```
+
+For a server, `serve()` waits for peer input that establishes the protocol
+lifecycle, such as `initialize` from a legacy client. A stdio MCP server is
+normally launched by an MCP client as a child process. Running the executable
+alone in a terminal can leave this await pending because no client has sent
+protocol messages yet.
+
+After `serve()` returns, the service handles messages in the background. You can
+run other asynchronous work, then use `waiting()` to wait for shutdown. To cancel
+during startup, use `serve_with_ct()` with a `CancellationToken`. Tokio's stdin
+uses a blocking read that cannot be cancelled, so runtime shutdown may still wait
+for input or EOF; see [Tokio's stdin documentation](https://docs.rs/tokio/latest/tokio/io/fn.stdin.html).
+
+For example, build the counter server from the repository root, then let the
+MCP Inspector CLI launch it and list its tools:
+
+```sh
+cargo build -p mcp-server-examples --example servers_counter_stdio
+npx @modelcontextprotocol/inspector --cli ./target/debug/examples/servers_counter_stdio --method tools/list
 ```
 </details>
 

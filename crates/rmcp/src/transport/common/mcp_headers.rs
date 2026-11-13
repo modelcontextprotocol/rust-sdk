@@ -208,11 +208,11 @@ fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
     schema.iter().any(|(key, value)| match key.as_str() {
         "x-mcp-header" => !on_chain,
         "properties" => schema_map_has_off_chain_annotation(value, on_chain),
-        "$defs" | "definitions" | "dependentSchemas" | "patternProperties" => {
+        "$defs" | "definitions" | "dependencies" | "dependentSchemas" | "patternProperties" => {
             schema_map_has_off_chain_annotation(value, false)
         }
-        // Instance data, not subschemas.
-        "default" | "const" | "enum" | "examples" => false,
+        // These contain instance data or property names, not subschemas.
+        "default" | "const" | "enum" | "examples" | "dependentRequired" => false,
         _ => subschema_has_off_chain_annotation(value, false),
     })
 }
@@ -391,11 +391,12 @@ pub(crate) fn validate_request_headers(
     Ok(())
 }
 
-/// The sole value for `name` as `&str`, if present and valid UTF-8.
+/// The sole value for `name` as `&str`, if present.
 ///
 /// Errors when `name` appears more than once: these headers are singletons, and
 /// letting one through would let an intermediary that resolves duplicates
-/// differently route on a value this request never dispatches.
+/// differently route on a value this request never dispatches. Also errors when
+/// the value contains characters not allowed by the Value Encoding rules.
 #[cfg(feature = "server-side-http")]
 fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Result<Option<&'a str>, String> {
     let mut values = headers.get_all(name).iter();
@@ -405,7 +406,10 @@ fn header_str<'a>(headers: &'a http::HeaderMap, name: &str) -> Result<Option<&'a
     if values.next().is_some() {
         return Err(format!("duplicate {name} header"));
     }
-    Ok(value.to_str().ok())
+    value
+        .to_str()
+        .map(Some)
+        .map_err(|_| format!("{name} header contains invalid characters"))
 }
 
 #[cfg(all(test, feature = "client-side-sse", feature = "server-side-http"))]
@@ -434,6 +438,22 @@ mod tests {
             );
         }
         map
+    }
+
+    #[test]
+    fn rejects_param_header_with_invalid_characters() {
+        let schema =
+            schema_with(json!({ "region": { "type": "string", "x-mcp-header": "Region" } }));
+        let mut headers = header_map(&[("Mcp-Method", "tools/call"), ("Mcp-Name", "t")]);
+        headers.append(
+            HeaderName::from_bytes(b"Mcp-Param-Region").unwrap(),
+            HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        let request = json!({
+            "method": "tools/call",
+            "params": { "name": "t", "arguments": {} }
+        });
+        assert!(validate_request_headers(&headers, &request, Some(&schema)).is_err());
     }
 
     fn assert_wrapped(value: &str) {
@@ -713,6 +733,77 @@ mod tests {
                 .unwrap()
                 .clone();
             assert!(validate_param_header_annotations(&schema).is_err());
+        }
+
+        #[test]
+        fn accepts_property_name_in_dependent_required() {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "x-mcp-header": { "type": "string" },
+                    "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                },
+                "dependentRequired": { "x-mcp-header": ["tenant"] }
+            });
+            assert_eq!(
+                validate_param_header_annotations(schema.as_object().unwrap()),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn accepts_property_names_in_legacy_dependencies() {
+            for dependency in [
+                json!(["tenant"]),
+                json!({ "required": ["tenant"] }),
+                json!(true),
+                json!(false),
+            ] {
+                let schema = json!({
+                    "type": "object",
+                    "properties": {
+                        "x-mcp-header": { "type": "string" },
+                        "tenant": { "type": "string", "x-mcp-header": "Tenant" }
+                    },
+                    "dependencies": { "x-mcp-header": dependency }
+                });
+                assert_eq!(
+                    validate_param_header_annotations(schema.as_object().unwrap()),
+                    Ok(()),
+                    "dependency must not turn its property name into an annotation: {schema}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_annotations_in_legacy_dependency_schemas() {
+            for name in ["tenant", "default", "properties", "x-mcp-header"] {
+                let schema = json!({
+                    "type": "object",
+                    "dependencies": {
+                        (name): {
+                            "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                        }
+                    }
+                });
+                assert!(
+                    validate_param_header_annotations(schema.as_object().unwrap()).is_err(),
+                    "annotation must be rejected regardless of the dependency name: {schema}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_header_annotation_inside_dependent_schema() {
+            let schema = json!({
+                "type": "object",
+                "dependentSchemas": {
+                    "tenant": {
+                        "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                    }
+                }
+            });
+            assert!(validate_param_header_annotations(schema.as_object().unwrap()).is_err());
         }
 
         #[test]

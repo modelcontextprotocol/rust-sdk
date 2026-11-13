@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use futures::stream::BoxStream;
+use futures::{TryStreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue, Method, Request, StatusCode, header::WWW_AUTHENTICATE};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -13,6 +13,9 @@ use crate::{
     model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
+            client_side_http::{
+                MAX_ERROR_RESPONSE_SIZE, MAX_JSON_RESPONSE_SIZE, read_bounded_body,
+            },
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -267,13 +270,26 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::SessionExpired);
         }
 
+        let content_length = response
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
         if !status.is_success() {
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .map(|c| String::from_utf8_lossy(&c.to_bytes()).into_owned())
-                .unwrap_or_else(|_| "<failed to read response body>".to_owned());
+            let body = match read_bounded_body(
+                response
+                    .into_body()
+                    .into_data_stream()
+                    .map_err(UnixSocketError::Hyper),
+                content_length,
+                MAX_ERROR_RESPONSE_SIZE,
+            )
+            .await
+            {
+                Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+                Err(error @ StreamableHttpError::ResponseBodyTooLarge { .. }) => return Err(error),
+                Err(_) => "<failed to read response body>".to_owned(),
+            };
             if let Some(response) =
                 legacy_discover_response(&message, session_was_attached, status, &body)
             {
@@ -285,26 +301,23 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         }
 
         let content_type = response.headers().get(http::header::CONTENT_TYPE).cloned();
-        let content_length = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
         let session_id = response
             .headers()
             .get(HEADER_SESSION_ID)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        if status.is_success()
-            && content_length == Some(0)
-            && matches!(
-                message,
-                ClientJsonRpcMessage::Notification(_)
-                    | ClientJsonRpcMessage::Response(_)
-                    | ClientJsonRpcMessage::Error(_)
-            )
-        {
+        // A POST carrying only notifications/responses/errors leaves no request
+        // outstanding, so nothing in the response is load-bearing for us.
+        let awaits_no_response = matches!(
+            message,
+            ClientJsonRpcMessage::Notification(_)
+                | ClientJsonRpcMessage::Response(_)
+                | ClientJsonRpcMessage::Error(_)
+        );
+        // Spec requires 202 Accepted for these, but some servers return an empty 200.
+        // Treat empty success responses as equivalent to Accepted.
+        if status.is_success() && content_length == Some(0) && awaits_no_response {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
 
@@ -315,22 +328,18 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 Ok(StreamableHttpPostResponse::Sse(sse_stream, session_id))
             }
             Some(ref ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
-                let body = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| StreamableHttpError::Client(UnixSocketError::Hyper(e)))?
-                    .to_bytes();
+                let body = read_bounded_body(
+                    response
+                        .into_body()
+                        .into_data_stream()
+                        .map_err(UnixSocketError::Hyper),
+                    content_length,
+                    MAX_JSON_RESPONSE_SIZE,
+                )
+                .await?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session_id)),
-                    Err(e)
-                        if matches!(
-                            message,
-                            ClientJsonRpcMessage::Notification(_)
-                                | ClientJsonRpcMessage::Response(_)
-                                | ClientJsonRpcMessage::Error(_)
-                        ) =>
-                    {
+                    Err(e) if awaits_no_response => {
                         tracing::warn!(
                             "could not parse JSON response as ServerJsonRpcMessage, treating as accepted: {e}"
                         );
@@ -340,6 +349,16 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                         json_rpc_parse_error_message(&e, &body),
                     ))),
                 }
+            }
+            // Neither JSON nor SSE. A POST that awaits no response needs nothing
+            // from the body, so accept any 2xx rather than failing the send on an
+            // unexpected or absent Content-Type.
+            _ if awaits_no_response => {
+                tracing::warn!(
+                    "ignoring unexpected content type {:?} on a POST that awaits no response",
+                    content_type
+                );
+                Ok(StreamableHttpPostResponse::Accepted)
             }
             _ => Err(StreamableHttpError::UnexpectedContentType(
                 content_type.map(|ct| String::from_utf8_lossy(ct.as_bytes()).into_owned()),

@@ -15,6 +15,8 @@ pub mod common;
 pub mod prompt;
 mod resource;
 pub mod router;
+#[cfg(feature = "skills-fs")]
+pub mod skill_catalog;
 pub mod tool;
 pub mod tool_name_validation;
 pub mod wrapper;

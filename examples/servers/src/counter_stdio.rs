@@ -3,10 +3,14 @@ use common::counter::Counter;
 use rmcp::{ServiceExt, transport::stdio};
 use tracing_subscriber::{self, EnvFilter};
 mod common;
-/// npx @modelcontextprotocol/inspector cargo run -p mcp-server-examples --example std_io
+/// From the repository root:
+/// ```sh
+/// cargo build -p mcp-server-examples --example servers_counter_stdio
+/// npx @modelcontextprotocol/inspector --cli ./target/debug/examples/servers_counter_stdio --method tools/list
+/// ```
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize the tracing subscriber with file and stdout logging
+    // Write logs to stderr; stdout carries MCP protocol messages.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::DEBUG.into()))
         .with_writer(std::io::stderr)
@@ -15,11 +19,13 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting MCP server");
 
-    // Create an instance of our counter router
+    // The MCP client launches this process and writes protocol messages to stdin.
+    // This await waits for startup input (e.g. initialize for a legacy client).
     let service = Counter::new().serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {:?}", e);
     })?;
 
+    // Wait for the running service to stop after startup has completed.
     service.waiting().await?;
     Ok(())
 }
