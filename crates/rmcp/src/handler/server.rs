@@ -748,7 +748,31 @@ pub trait ServerHandler: Sized + 'static {
 
 macro_rules! impl_server_handler_for_wrapper {
     ($wrapper:ident) => {
+        impl_server_handler_for_wrapper!($wrapper, {
+            fn call_tool(
+                &self,
+                request: CallToolRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<CallToolResponse, McpError>> + MaybeSendFuture + '_ {
+                (**self).call_tool(request, context)
+            }
+
+            fn list_tools(
+                &self,
+                request: Option<PaginatedRequestParams>,
+                context: RequestContext<RoleServer>,
+            ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
+                (**self).list_tools(request, context)
+            }
+
+            fn get_tool(&self, name: &str) -> Option<Tool> {
+                (**self).get_tool(name)
+            }
+        });
+    };
+    ($wrapper:ident, { $($tool_methods:tt)* }) => {
         impl<T: ServerHandler> ServerHandler for $wrapper<T> {
+            $($tool_methods)*
             fn ping(
                 &self,
                 context: RequestContext<RoleServer>,
@@ -869,26 +893,6 @@ macro_rules! impl_server_handler_for_wrapper {
                 (**self).unsubscribe(request, context)
             }
 
-            fn call_tool(
-                &self,
-                request: CallToolRequestParams,
-                context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<CallToolResponse, McpError>> + MaybeSendFuture + '_ {
-                (**self).call_tool(request, context)
-            }
-
-            fn list_tools(
-                &self,
-                request: Option<PaginatedRequestParams>,
-                context: RequestContext<RoleServer>,
-            ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
-                (**self).list_tools(request, context)
-            }
-
-            fn get_tool(&self, name: &str) -> Option<Tool> {
-                (**self).get_tool(name)
-            }
-
             fn on_custom_request(
                 &self,
                 request: CustomRequest,
@@ -995,3 +999,29 @@ macro_rules! impl_server_handler_for_wrapper {
 
 impl_server_handler_for_wrapper!(Box);
 impl_server_handler_for_wrapper!(Arc);
+
+#[cfg(feature = "tool-search")]
+use crate::tool_search::ToolSearchServer;
+
+#[cfg(feature = "tool-search")]
+impl_server_handler_for_wrapper!(ToolSearchServer, {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        self.search_call_tool(request, context).await
+    }
+
+    async fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        self.search_list_tools(request, context).await
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.search_get_tool(name)
+    }
+});
