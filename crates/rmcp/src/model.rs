@@ -4810,10 +4810,10 @@ impl ServerResult {
     ///
     /// A tool's `outputSchema` is dropped when its root `type` is not the
     /// string `"object"`, including `oneOf`/`anyOf`/`$ref` roots.
-    /// `structuredContent` is dropped when it is not a JSON object. Unless a
-    /// text block already holds the same JSON value, the dropped value is added
-    /// as the first content block, where [`CallToolResult::into_typed`] reads
-    /// it, so the peer still gets the result.
+    /// `structuredContent` is dropped when it is not a JSON object. Unless the
+    /// first content block is text holding the same JSON value, the dropped
+    /// value is added as the first block, where [`CallToolResult::into_typed`]
+    /// reads it, so the peer still gets the result.
     ///
     /// # Examples
     ///
@@ -4840,11 +4840,13 @@ impl ServerResult {
             }
             ServerResult::CallToolResult(r) => {
                 if let Some(value) = r.structured_content.take_if(|value| !value.is_object()) {
-                    let in_content = r.content.iter().any(|block| {
-                        block.as_text().is_some_and(|text| {
+                    let in_content = r
+                        .content
+                        .first()
+                        .and_then(ContentBlock::as_text)
+                        .is_some_and(|text| {
                             serde_json::from_str::<Value>(&text.text).is_ok_and(|v| v == value)
-                        })
-                    });
+                        });
                     if !in_content {
                         r.content.insert(0, ContentBlock::text(value.to_string()));
                     }
@@ -5765,10 +5767,10 @@ mod tests {
     }
 
     #[test]
-    fn strip_non_object_output_keeps_a_block_with_the_same_value() {
+    fn strip_non_object_output_keeps_a_first_block_with_the_same_value() {
         let content = vec![
-            ContentBlock::text("Found 2 numbers"),
             ContentBlock::text("[\n  1,\n  2\n]"),
+            ContentBlock::text("Found 2 numbers"),
         ];
         let mut result = ServerResult::CallToolResult(CallToolResult {
             content: content.clone(),
@@ -5782,6 +5784,26 @@ mod tests {
         };
         assert_eq!(result.structured_content, None);
         assert_eq!(result.content, content);
+    }
+
+    #[test]
+    fn strip_non_object_output_adds_the_value_when_only_a_later_block_holds_it() {
+        let mut result = ServerResult::CallToolResult(CallToolResult {
+            content: vec![
+                ContentBlock::text("Found 2 numbers"),
+                ContentBlock::text("[1,2]"),
+            ],
+            structured_content: Some(json!([1, 2])),
+            ..Default::default()
+        });
+        result.strip_non_object_output_for_legacy_peer();
+
+        let ServerResult::CallToolResult(result) = result else {
+            unreachable!()
+        };
+        assert_eq!(result.structured_content, None);
+        assert_eq!(result.content.len(), 3);
+        assert_eq!(result.into_typed::<Vec<u32>>().expect("decode"), [1, 2]);
     }
 
     #[test]
