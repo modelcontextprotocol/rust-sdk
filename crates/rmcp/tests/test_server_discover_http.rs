@@ -27,7 +27,7 @@ impl ServerHandler for DiscoveryServer {
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Borrowed(&[ProtocolVersion::V_2025_11_25])
+        Cow::Borrowed(&[ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2026_07_28])
     }
 }
 
@@ -120,7 +120,7 @@ async fn discover_returns_server_metadata_without_session() {
         body["result"],
         json!({
             "resultType": "complete",
-            "supportedVersions": ["2025-11-25"],
+            "supportedVersions": ["2025-11-25", "2026-07-28"],
             "capabilities": { "tools": {} },
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": {
@@ -153,7 +153,7 @@ async fn discover_does_not_require_initialization_in_legacy_session_mode() {
 async fn discover_rejects_unsupported_version_with_http_400() {
     let (client, url, cancellation_token) = spawn_server(true).await;
 
-    let response = post_discover(&client, &url, "2026-07-28", Some("2026-07-28")).await;
+    let response = post_discover(&client, &url, "2099-01-01", Some("2099-01-01")).await;
 
     assert_eq!(response.status(), 400);
     let body: serde_json::Value = response.json().await.expect("response should be JSON");
@@ -161,8 +161,8 @@ async fn discover_rejects_unsupported_version_with_http_400() {
     assert_eq!(
         body["error"]["data"],
         json!({
-            "requested": "2026-07-28",
-            "supported": ["2025-11-25"]
+            "requested": "2099-01-01",
+            "supported": ["2025-11-25", "2026-07-28"]
         })
     );
 
@@ -191,7 +191,7 @@ async fn regular_request_rejects_server_unsupported_meta_version() {
         "method": "tools/list",
         "params": {
             "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+                "io.modelcontextprotocol/protocolVersion": "2099-01-01"
             }
         }
     });
@@ -200,7 +200,7 @@ async fn regular_request_rejects_server_unsupported_meta_version() {
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")
-        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("MCP-Protocol-Version", "2099-01-01")
         .header("Mcp-Method", "tools/list")
         .json(&body)
         .send()
@@ -365,7 +365,7 @@ async fn discover_accepts_missing_optional_client_info() {
 async fn discover_error_uses_http_400_when_sse_is_configured() {
     let (client, url, cancellation_token) = spawn_server(false).await;
 
-    let response = post_discover(&client, &url, "2026-07-28", Some("2026-07-28")).await;
+    let response = post_discover(&client, &url, "2099-01-01", Some("2099-01-01")).await;
 
     assert_eq!(response.status(), 400);
     assert_eq!(
