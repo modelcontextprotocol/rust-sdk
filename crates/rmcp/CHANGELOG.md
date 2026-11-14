@@ -7,15 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Default `prompts/list`, `completion/complete`, `resources/list`,
-  `resources/templates/list`, and `tools/list` handlers now return JSON-RPC
-  `-32601` (method not found) when their capability is not advertised. Servers
-  that relied on the previous empty success responses without declaring the
-  capability will see a behavior change; advertise the capability to retain
-  the empty default result.
-
 ## [3.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.9.0...rmcp-v3.10.0) - 2026-11-12
 
 ### Added
