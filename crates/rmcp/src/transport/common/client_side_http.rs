@@ -5,6 +5,23 @@ use futures::{Stream, TryStreamExt};
 
 use crate::transport::streamable_http_client::StreamableHttpError;
 
+/// Compare the media-type essence of a `Content-Type` value against `expected`.
+///
+/// Media types are case-insensitive (RFC 9110) and parameters such as
+/// `; charset=utf-8` do not change the type, so a byte-prefix check rejects
+/// valid responses such as `Application/JSON`.
+pub(super) fn media_type_is(value: &[u8], expected: &str) -> bool {
+    value
+        .split(|byte| *byte == b';')
+        .next()
+        .and_then(|essence| std::str::from_utf8(essence).ok())
+        .is_some_and(|essence| {
+            essence
+                .trim_matches([' ', '\t'])
+                .eq_ignore_ascii_case(expected)
+        })
+}
+
 /// Count bytes before retaining them; a length hint can reject a body early,
 /// but never replaces the streamed check or determines allocation size.
 pub(super) async fn read_bounded_body<S, E>(
@@ -219,5 +236,29 @@ mod tests {
     async fn truncated_body_counts_bytes_not_utf8_characters() {
         let stream = stream::iter([Ok::<_, io::Error>(Bytes::from_static("é".as_bytes()))]);
         assert_eq!(read_truncated_body(stream, 1).await.unwrap(), [0xc3]);
+    }
+
+    #[rstest]
+    #[case(b"application/json")]
+    #[case(b"Application/JSON")]
+    #[case(b"APPLICATION/JSON; charset=utf-8")]
+    #[case(b" application/json ")]
+    fn media_type_is_case_insensitive_and_ignores_parameters(#[case] value: &[u8]) {
+        assert!(media_type_is(value, "application/json"));
+        assert!(!media_type_is(value, "text/event-stream"));
+    }
+
+    #[rstest]
+    #[case(b"TEXT/EVENT-STREAM;charset=UTF-8", "text/event-stream", true)]
+    #[case(b"application/jsonx", "application/json", false)]
+    #[case(b"application/json-patch+json", "application/json", false)]
+    #[case(b"application/json;", "application/json", true)]
+    #[case(b"", "application/json", false)]
+    fn media_type_is_matches_the_essence_only(
+        #[case] value: &[u8],
+        #[case] expected: &str,
+        #[case] matches: bool,
+    ) {
+        assert_eq!(media_type_is(value, expected), matches);
     }
 }
