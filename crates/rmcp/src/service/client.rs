@@ -147,6 +147,45 @@ impl ClientInitializeError {
     }
 }
 
+/// Auto's fallback can lose its send queue when the original startup request
+/// fails after the discovery timeout. Replace only the synthetic channel-closed
+/// error; a live typed error delivered by the worker is already more useful.
+/// Closing a failed worker transport also waits for status publication: its
+/// request queue can close just before the terminal-status write.
+async fn recover_fallback_error<T: Transport<RoleClient> + 'static>(
+    transport: &mut T,
+    error: ClientInitializeError,
+) -> ClientInitializeError {
+    let ClientInitializeError::TransportError {
+        error: original, ..
+    } = &error
+    else {
+        return error;
+    };
+    let is_closed = original
+        .error
+        .downcast_ref::<T::Error>()
+        .is_some_and(T::is_closed_error);
+    if !is_closed {
+        return error;
+    }
+    if transport.supports_quit_status() && transport.quit_status().is_none() {
+        // Initialization has already failed; preserve its error rather than any
+        // cleanup error. WorkerTransport::close awaits the worker task, which
+        // orders this read after its terminal-status publication.
+        let _ = transport.close().await;
+    }
+    match (error, transport.quit_status()) {
+        (ClientInitializeError::TransportError { context, .. }, Some(cause)) => {
+            ClientInitializeError::TransportError {
+                error: cause,
+                context,
+            }
+        }
+        (error, _) => error,
+    }
+}
+
 /// Helper function to get the next message from the stream
 async fn expect_next_message<T>(
     transport: &mut T,
@@ -155,10 +194,25 @@ async fn expect_next_message<T>(
 where
     T: Transport<RoleClient>,
 {
-    transport
-        .receive()
-        .await
-        .ok_or_else(|| ClientInitializeError::ConnectionClosed(context.to_string()))
+    match transport.receive().await {
+        Some(m) => Ok(m),
+        None => {
+            // The input stream ended during the handshake. If the transport's
+            // worker already quit with a startup failure, return the retained
+            // cause as a transport error (not a stringified ConnectionClosed),
+            // so the caller can inspect its source and downcast it.
+            // `serve_inner` is only created after init succeeds, so this
+            // pre-init path is the only place a startup failure's cause reaches
+            // the caller.
+            match transport.quit_status() {
+                Some(cause) => Err(ClientInitializeError::TransportError {
+                    error: cause,
+                    context: context.to_string().into(),
+                }),
+                None => Err(ClientInitializeError::ConnectionClosed(context.to_string())),
+            }
+        }
+    }
 }
 
 /// Whether `expect_response` answers a server ping that arrives before the
@@ -888,6 +942,8 @@ where
                         legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
                             .await
                     {
+                        let fallback_error =
+                            recover_fallback_error(&mut transport, fallback_error).await;
                         return Err(ClientInitializeError::LegacyFallbackFailed {
                             discover: discover_error,
                             fallback: Box::new(fallback_error),
@@ -900,8 +956,12 @@ where
                     if let Some(version) = legacy_version {
                         legacy_info.protocol_version = version;
                     }
-                    legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
-                        .await?;
+                    if let Err(error) =
+                        legacy_startup(&service, &mut transport, &id_provider, &peer, legacy_info)
+                            .await
+                    {
+                        return Err(recover_fallback_error(&mut transport, error).await);
+                    }
                 }
             }
         }
@@ -2654,6 +2714,149 @@ mod tests {
             Err(ServiceError::Cancelled { .. })
         ));
         client.cancel().await.unwrap();
+    }
+
+    #[cfg(feature = "transport-worker")]
+    #[tokio::test]
+    async fn auto_fallback_send_recovers_retained_startup_cause() {
+        use crate::transport::worker::{RetainedQuitReason, WorkerQuitReason};
+
+        struct FallbackFailureTransport {
+            sends: Arc<std::sync::atomic::AtomicUsize>,
+            closed: bool,
+        }
+
+        impl Transport<RoleClient> for FallbackFailureTransport {
+            type Error = std::io::Error;
+
+            fn send(
+                &mut self,
+                _item: TxJsonRpcMessage<RoleClient>,
+            ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+                let attempt = self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        futures::future::pending().await
+                    }
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "request queue closed",
+                    ))
+                }
+            }
+
+            async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
+                futures::future::pending().await
+            }
+
+            fn is_closed_error(error: &Self::Error) -> bool {
+                error.kind() == std::io::ErrorKind::BrokenPipe
+            }
+
+            async fn close(&mut self) -> Result<(), Self::Error> {
+                self.closed = true;
+                Ok(())
+            }
+
+            fn supports_quit_status(&self) -> bool {
+                true
+            }
+
+            fn quit_status(&self) -> Option<DynamicTransportError> {
+                if !self.closed {
+                    return None;
+                }
+                // Mirror the real `WorkerTransport`: the retained cause is a
+                // shared quit reason wrapping the typed error, not the bare
+                // error. Boxing the bare error here would hide a downcast
+                // regression on exactly the ack-lost path this test exercises.
+                Some(DynamicTransportError::from_parts(
+                    Self::name(),
+                    std::any::TypeId::of::<Self>(),
+                    Box::new(RetainedQuitReason(Arc::new(
+                        WorkerQuitReason::startup_failed(
+                            std::io::Error::new(
+                                std::io::ErrorKind::ConnectionRefused,
+                                "peer unreachable",
+                            ),
+                            "startup request failed",
+                        ),
+                    ))),
+                ))
+            }
+        }
+
+        let error = serve_client_with_ct_inner(
+            (),
+            FallbackFailureTransport {
+                sends: Arc::default(),
+                closed: false,
+            },
+            ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+            CancellationToken::new(),
+            Duration::from_millis(1),
+        )
+        .await
+        .expect_err("fallback send must fail");
+        match error {
+            ClientInitializeError::TransportError { error, context } => {
+                assert_eq!(context.as_ref(), "send initialize request");
+                // The recovered cause must be reachable through the shared
+                // quit-reason wrapper, not just when the bare error is boxed.
+                let cause = error
+                    .downcast_ref::<FallbackFailureTransport, RoleClient>()
+                    .expect("retained typed cause through the shared quit reason");
+                assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionRefused);
+            }
+            other => panic!("expected retained transport cause, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_error_does_not_close_transport_without_quit_status() {
+        struct NoStatusTransport {
+            closed: bool,
+        }
+
+        impl Transport<RoleClient> for NoStatusTransport {
+            type Error = std::io::Error;
+
+            fn send(
+                &mut self,
+                _item: TxJsonRpcMessage<RoleClient>,
+            ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+                std::future::ready(Ok(()))
+            }
+
+            async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
+                None
+            }
+
+            async fn close(&mut self) -> Result<(), Self::Error> {
+                self.closed = true;
+                Ok(())
+            }
+        }
+
+        let mut transport = NoStatusTransport { closed: false };
+        let error = ClientInitializeError::transport::<NoStatusTransport>(
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "send failed"),
+            "send initialize request",
+        );
+        let error = recover_fallback_error(&mut transport, error).await;
+        assert!(!transport.closed, "unsupported transport must not close");
+        match error {
+            ClientInitializeError::TransportError { error, .. } => {
+                let cause = error
+                    .downcast::<NoStatusTransport, RoleClient>()
+                    .expect("original transport error");
+                assert_eq!(cause.kind(), std::io::ErrorKind::BrokenPipe);
+            }
+            other => panic!("expected original transport error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
