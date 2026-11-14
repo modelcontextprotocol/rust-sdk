@@ -19,7 +19,11 @@ impl ClientHandler for DiscoverClient {}
 #[derive(Clone, Default)]
 struct StatelessServer;
 
-impl ServerHandler for StatelessServer {}
+impl ServerHandler for StatelessServer {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+}
 
 #[tokio::test]
 async fn discover_startup_accepts_stringified_numeric_response_id() {

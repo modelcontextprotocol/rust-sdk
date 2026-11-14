@@ -115,7 +115,7 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
         .await?;
 
     // Make a real request so the session is fully active.
-    let _resources = client.list_all_resources().await?;
+    let _tools = client.list_all_tools().await?;
 
     // The store should now contain exactly one session entry.
     assert_eq!(
@@ -178,7 +178,7 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
         .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
         .serve(transport)
         .await?;
-    let _resources = client.list_all_resources().await?;
+    let _tools = client.list_all_tools().await?;
 
     assert_eq!(store.len().await, 1, "store should have one entry");
 
@@ -422,11 +422,11 @@ async fn test_no_session_created_at_latest_protocol_version() -> anyhow::Result<
         .header("content-type", "application/json")
         .header("mcp-protocol-version", ProtocolVersion::LATEST.as_str())
         // Required by SEP-2243 from 2026-07-28 onward.
-        .header("mcp-method", "resources/list")
+        .header("mcp-method", "tools/list")
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "resources/list",
+            "method": "tools/list",
             "params": {
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": ProtocolVersion::LATEST.as_str(),

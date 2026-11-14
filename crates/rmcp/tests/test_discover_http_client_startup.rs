@@ -16,7 +16,10 @@ use axum::{
 };
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
-    model::{ClientConfig, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion},
+    model::{
+        ClientConfig, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion, ServerCapabilities,
+        ServerConfig,
+    },
     service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{
         StreamableHttpClientTransport,
@@ -34,6 +37,10 @@ use tokio_util::sync::CancellationToken;
 struct DiscoverHttpServer;
 
 impl ServerHandler for DiscoverHttpServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
     }
@@ -43,6 +50,10 @@ impl ServerHandler for DiscoverHttpServer {
 struct LegacyHttpServer;
 
 impl ServerHandler for LegacyHttpServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
     fn discover(
         &self,
         _context: RequestContext<RoleServer>,
