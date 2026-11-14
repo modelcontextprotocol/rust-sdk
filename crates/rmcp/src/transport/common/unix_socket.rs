@@ -13,7 +13,7 @@ use crate::{
     model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
-            client_side_http::{read_bounded_body, read_truncated_body},
+            client_side_http::{media_type_is, read_bounded_body, read_truncated_body},
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -312,7 +312,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         if !status.is_success() {
             let is_json = content_type
                 .as_ref()
-                .is_some_and(|ct| ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()));
+                .is_some_and(|ct| media_type_is(ct.as_bytes(), JSON_MIME_TYPE));
             // Match reqwest: preserve 401/403 status without buffering a full
             // JSON body, and re-correlate discover rejections before returning
             // a complete JSON-RPC error.
@@ -380,14 +380,14 @@ impl StreamableHttpClient for UnixSocketHttpClient {
         }
 
         match content_type {
-            Some(ref ct) if ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes()) => {
+            Some(ref ct) if media_type_is(ct.as_bytes(), EVENT_STREAM_MIME_TYPE) => {
                 let sse_stream = bounded_sse_stream(
                     response.into_body().into_data_stream(),
                     limits.max_sse_event_size,
                 );
                 Ok(StreamableHttpPostResponse::Sse(sse_stream, session_id))
             }
-            Some(ref ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
+            Some(ref ct) if media_type_is(ct.as_bytes(), JSON_MIME_TYPE) => {
                 let body = read_bounded_body(
                     response
                         .into_body()
@@ -573,8 +573,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         match response.headers().get(http::header::CONTENT_TYPE) {
             Some(ct) => {
-                if !ct.as_bytes().starts_with(EVENT_STREAM_MIME_TYPE.as_bytes())
-                    && !ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes())
+                if !media_type_is(ct.as_bytes(), EVENT_STREAM_MIME_TYPE)
+                    && !media_type_is(ct.as_bytes(), JSON_MIME_TYPE)
                 {
                     return Err(StreamableHttpError::UnexpectedContentType(Some(
                         String::from_utf8_lossy(ct.as_bytes()).to_string(),
