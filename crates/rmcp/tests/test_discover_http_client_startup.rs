@@ -17,10 +17,10 @@ use axum::{
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ServerHandler,
     model::{ClientConfig, DiscoverResult, ErrorCode, ErrorData, ProtocolVersion},
-    service::{MaybeSendFuture, RequestContext, RoleServer},
+    service::{ClientInitializeError, MaybeSendFuture, RequestContext, RoleClient, RoleServer},
     transport::{
         StreamableHttpClientTransport,
-        streamable_http_client::StreamableHttpClientTransportConfig,
+        streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpError},
         streamable_http_server::{
             StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
         },
@@ -58,6 +58,7 @@ impl ServerHandler for LegacyHttpServer {
 #[derive(Clone, Default)]
 struct PlainTextLegacyHttpState {
     methods: Arc<Mutex<Vec<String>>>,
+    fail_initialized: bool,
 }
 
 async fn plain_text_legacy_http_handler(
@@ -95,6 +96,14 @@ async fn plain_text_legacy_http_handler(
                 .to_string(),
             ))
             .expect("build initialize response");
+    }
+
+    if method == "notifications/initialized" && state.fail_initialized {
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .header("retry-after", "17")
+            .body(Body::from("rate limited"))
+            .expect("build notification failure");
     }
 
     Response::builder()
@@ -233,6 +242,90 @@ async fn auto_http_client_falls_back_after_plain_text_4xx_rejection() {
         methods.lock().await.as_slice(),
         &["server/discover", "initialize", "notifications/initialized"]
     );
+    ct.cancel();
+    server.await.expect("server task");
+}
+
+#[rstest::rstest]
+#[case::initialize(false)]
+#[case::auto_fallback(true)]
+#[tokio::test]
+async fn initialized_notification_failure_preserves_typed_http_status(#[case] auto_fallback: bool) {
+    let ct = CancellationToken::new();
+    let state = PlainTextLegacyHttpState {
+        methods: Arc::default(),
+        fail_initialized: true,
+    };
+    let methods = state.methods.clone();
+    let router = Router::new()
+        .route("/mcp", post(plain_text_legacy_http_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp")),
+    );
+    let lifecycle = if auto_fallback {
+        ClientLifecycleMode::Auto {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        }
+    } else {
+        ClientLifecycleMode::Initialize
+    };
+    let error = ClientConfig::default()
+        .serve_with_lifecycle(transport, lifecycle)
+        .await
+        .expect_err("initialized notification must fail");
+    let error = match error {
+        ClientInitializeError::LegacyFallbackFailed { fallback, .. } if auto_fallback => *fallback,
+        error => error,
+    };
+    match error {
+        ClientInitializeError::TransportError { error, .. } => {
+            assert!(error.to_string().contains("HTTP 429"));
+            // The borrowed accessor reaches the same typed error without
+            // consuming it, and `startup_error()` unwraps the shared variant.
+            let borrowed = error
+                .downcast_ref::<StreamableHttpClientTransport<reqwest::Client>, RoleClient>()
+                .expect("downcast_ref reaches the typed streamable error");
+            match borrowed.startup_error() {
+                StreamableHttpError::HttpStatus(metadata) => {
+                    assert_eq!(metadata.status, 429);
+                    assert_eq!(metadata.retry_after.as_deref(), Some("17"));
+                }
+                other => panic!("expected HTTP status via downcast_ref, got {other:?}"),
+            }
+            let error = error
+                .downcast::<StreamableHttpClientTransport<reqwest::Client>, RoleClient>()
+                .expect("typed streamable HTTP error");
+            match error.startup_error() {
+                StreamableHttpError::HttpStatus(metadata) => {
+                    assert_eq!(metadata.status, 429);
+                    assert_eq!(metadata.retry_after.as_deref(), Some("17"));
+                }
+                other => panic!("expected HTTP status, got {other:?}"),
+            }
+        }
+        other => panic!("expected transport error, got {other:?}"),
+    }
+    let expected_methods: &[&str] = if auto_fallback {
+        &["server/discover", "initialize", "notifications/initialized"]
+    } else {
+        &["initialize", "notifications/initialized"]
+    };
+    assert_eq!(methods.lock().await.as_slice(), expected_methods);
     ct.cancel();
     server.await.expect("server task");
 }
