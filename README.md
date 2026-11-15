@@ -1891,6 +1891,8 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 - [systemprompt-template](https://github.com/systempromptio/systemprompt-template) - Single-binary Rust runtime providing MCP governance — authentication, authorisation, rate-limiting, audit trails, and cost tracking for AI agents. Self-hosted, air-gap capable, 3,300+ req/s with sub-5ms governance overhead
 - [jilebi-mcp](https://github.com/datron/jilebi) - an extensible MCP server through plugins in Javascript with a secure permissions model
 - [Voltip](https://github.com/sunerpy/voltip) - Push-to-talk dictation app whose local MCP server (Streamable HTTP, token-protected) lets coding agents read its dictionary, rules and correction history, and add dictionary entries the user approves
+- [polymarket-agent](https://github.com/Mattbusel/polymarket-agent) - Polymarket CLI and stdio MCP server that lets agents search markets, read order books and prices, and place, list or cancel CLOB orders (dry-run supported)
+- [tokio-prompt-orchestrator](https://github.com/Mattbusel/tokio-prompt-orchestrator) - LLM proxy with request deduplication, circuit breakers and a spend cap, whose stdio MCP server lets agents run inference, batch prompts, inspect pipeline health and the dead-letter queue, and reconfigure workers
 
 ## Development
 
