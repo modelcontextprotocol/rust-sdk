@@ -462,8 +462,10 @@ Refresh requests leave out `scope` by default. RFC 6749 §6 makes it optional, a
 **Behaviour change:** earlier releases always sent the granted scopes on refresh. If your provider requires `scope` on refresh (e.g. Azure AD v2), you now need to set it:
 
 ```rust,ignore
-auth_manager.set_refresh_scopes(["https://graph.microsoft.com/.default", "offline_access"]);
+auth_manager.set_refresh_scopes(["https://graph.microsoft.com/User.Read"]);
 ```
+
+Use the concrete scopes your provider returned in the token response, not the ones you requested. Azure expands `.default` into concrete scopes and leaves `offline_access` out of the response, so neither ends up in the stored grant and both would be filtered out.
 
 - Only scopes from the original grant are sent.
 - If none of the scopes you set are in the original grant, refresh fails with `AuthError::TokenRefreshFailed` instead of leaving `scope` out, since that would hand back the full grant.

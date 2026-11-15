@@ -1602,6 +1602,10 @@ impl AuthorizationManager {
     /// [`AuthError::TokenRefreshFailed`] instead of omitting `scope`, because
     /// omitting it would return the full original grant. An empty list omits
     /// the parameter again.
+    ///
+    /// Use scope values as they appear in the token response, not as
+    /// requested: Azure, for example, expands `.default` into concrete scopes
+    /// and omits `offline_access`, so those requested values never match.
     pub fn set_refresh_scopes<I, S>(&mut self, scopes: I)
     where
         I: IntoIterator<Item = S>,
