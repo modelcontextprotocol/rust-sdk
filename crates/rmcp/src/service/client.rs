@@ -2143,7 +2143,8 @@ impl Peer<RoleClient> {
         )
     }
 
-    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_tools(&self) -> Result<Vec<crate::model::Tool>, ServiceError> {
         Ok(self.list_all_tools_with_cache_hint().await?.items)
     }
@@ -2155,7 +2156,8 @@ impl Peer<RoleClient> {
         list_all_pages(|params| self.list_tools(params), DEFAULT_LIST_ALL_MAX_PAGES).await
     }
 
-    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_prompts(&self) -> Result<Vec<crate::model::Prompt>, ServiceError> {
         Ok(self.list_all_prompts_with_cache_hint().await?.items)
     }
@@ -2171,7 +2173,8 @@ impl Peer<RoleClient> {
         .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_resources(&self) -> Result<Vec<crate::model::Resource>, ServiceError> {
         Ok(self.list_all_resources_with_cache_hint().await?.items)
     }
@@ -2187,7 +2190,8 @@ impl Peer<RoleClient> {
         .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_skills(&self) -> Result<Vec<crate::model::Skill>, ServiceError> {
         Ok(self.list_all_skills_with_cache_hint().await?.items)
     }
@@ -2203,7 +2207,8 @@ impl Peer<RoleClient> {
         .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed,
+    /// or until [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_resource_templates(
         &self,
     ) -> Result<Vec<crate::model::ResourceTemplate>, ServiceError> {
