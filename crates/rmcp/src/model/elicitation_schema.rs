@@ -983,7 +983,16 @@ impl EnumSchemaBuilder<MultiSelect> {
         }
     }
 
-    /// Set default values
+    /// Set default values.
+    ///
+    /// An empty `default_values` means "no default": it is stored the same way
+    /// as a default that was never set, and [`Self::build`] omits it. It is
+    /// therefore accepted even when `min_items` is set, in either setter order.
+    /// A non-empty default must already satisfy any bounds set so far.
+    ///
+    /// These setters consume the builder, so an `Err` ends the chain. Configure
+    /// bounds before a default that violates them; a later setter cannot recover
+    /// a value that an intermediate call rejected.
     pub fn with_default(
         mut self,
         default_values: Vec<String>,
@@ -993,37 +1002,66 @@ impl EnumSchemaBuilder<MultiSelect> {
                 return Err("One of the provided default values is not in enum values".to_string());
             }
         }
-        if let Some(min) = self.min_items
-            && (default_values.len() as u64) < min
-        {
-            return Err("Number of provided default values is less than min_items".to_string());
-        }
-        if let Some(max) = self.max_items
-            && (default_values.len() as u64) > max
-        {
-            return Err("Number of provided default values is greater than max_items".to_string());
+        // An empty default is "no default": `build()` does not emit it, so it
+        // cannot contradict `min_items` and is not checked against the bounds.
+        if !default_values.is_empty() {
+            if let Some(min) = self.min_items
+                && (default_values.len() as u64) < min
+            {
+                return Err("Number of provided default values is less than min_items".to_string());
+            }
+            if let Some(max) = self.max_items
+                && (default_values.len() as u64) > max
+            {
+                return Err(
+                    "Number of provided default values is greater than max_items".to_string(),
+                );
+            }
         }
         self.default = default_values;
         Ok(self)
     }
 
-    /// Set minimal number of items for multi-select enum options
+    /// Set the minimum number of items for multi-select enum options.
+    ///
+    /// Returns an error if a previously set default has fewer values than
+    /// `value`. An empty default means "no default" and is not checked; see
+    /// [`Self::with_default`].
+    ///
+    /// These setters consume the builder, so an `Err` ends the chain. Configure
+    /// bounds before a default that violates them; a later setter cannot recover
+    /// a value that an intermediate call rejected.
     pub fn min_items(mut self, value: u64) -> Result<EnumSchemaBuilder<MultiSelect>, String> {
         if let Some(max) = self.max_items
             && value > max
         {
             return Err("Provided value is greater than max_items".to_string());
         }
+        // An empty default is not emitted by `build()`, so there is nothing to validate.
+        if !self.default.is_empty() && (self.default.len() as u64) < value {
+            return Err("Number of provided default values is less than min_items".to_string());
+        }
         self.min_items = Some(value);
         Ok(self)
     }
 
-    /// Set maximal number of items for multi-select enum options
+    /// Set the maximum number of items for multi-select enum options.
+    ///
+    /// Returns an error if a previously set default has more values than
+    /// `value`. An empty default means "no default" and is not checked; see
+    /// [`Self::with_default`].
+    ///
+    /// These setters consume the builder, so an `Err` ends the chain. Configure
+    /// bounds before a default that violates them; a later setter cannot recover
+    /// a value that an intermediate call rejected.
     pub fn max_items(mut self, value: u64) -> Result<EnumSchemaBuilder<MultiSelect>, String> {
         if let Some(min) = self.min_items
             && value < min
         {
             return Err("Provided value is less than min_items".to_string());
+        }
+        if !self.default.is_empty() && (self.default.len() as u64) > value {
+            return Err("Number of provided default values is greater than max_items".to_string());
         }
         self.max_items = Some(value);
         Ok(self)
@@ -2075,6 +2113,110 @@ mod tests {
         assert_eq!(json["minItems"], 1);
         assert_eq!(json["maxItems"], 3);
         Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_multi_select_default_bounds_are_order_independent() {
+        // The number of default values has to be validated against min/max items
+        // no matter in which order the builder setters are called: the very same
+        // schema must not be rejected in one order and accepted in the other.
+        let above_max_bounds_first = EnumSchema::builder(vec!["a".to_string(), "b".to_string()])
+            .multiselect()
+            .max_items(1)
+            .and_then(|builder| builder.with_default(vec!["a".to_string(), "b".to_string()]));
+        let above_max_default_first = EnumSchema::builder(vec!["a".to_string(), "b".to_string()])
+            .multiselect()
+            .with_default(vec!["a".to_string(), "b".to_string()])
+            .and_then(|builder| builder.max_items(1));
+
+        assert_eq!(
+            above_max_bounds_first.err().as_deref(),
+            Some("Number of provided default values is greater than max_items"),
+            "a default with more entries than max_items must be rejected"
+        );
+        assert_eq!(
+            above_max_default_first.err().as_deref(),
+            Some("Number of provided default values is greater than max_items"),
+            "a default with more entries than max_items must be rejected regardless of the \
+             order the builder setters are called in"
+        );
+
+        let below_min_bounds_first = EnumSchema::builder(vec!["a".to_string(), "b".to_string()])
+            .multiselect()
+            .min_items(2)
+            .and_then(|builder| builder.with_default(vec!["a".to_string()]));
+        let below_min_default_first = EnumSchema::builder(vec!["a".to_string(), "b".to_string()])
+            .multiselect()
+            .with_default(vec!["a".to_string()])
+            .and_then(|builder| builder.min_items(2));
+
+        assert_eq!(
+            below_min_bounds_first.err().as_deref(),
+            Some("Number of provided default values is less than min_items"),
+            "a default with fewer entries than min_items must be rejected"
+        );
+        assert_eq!(
+            below_min_default_first.err().as_deref(),
+            Some("Number of provided default values is less than min_items"),
+            "a default with fewer entries than min_items must be rejected regardless of the \
+             order the builder setters are called in"
+        );
+    }
+
+    #[test]
+    fn test_enum_schema_multi_select_empty_default_means_no_default() -> anyhow::Result<()> {
+        // An empty default is "no default": `build()` omits it, so both setter
+        // orders must accept it and emit the same schema, even below min_items.
+        let values = vec!["a".to_string(), "b".to_string()];
+
+        let bounds_first = EnumSchema::builder(values.clone())
+            .multiselect()
+            .min_items(1)
+            .map_err(|e| anyhow!("{e}"))?
+            .with_default(vec![])
+            .map_err(|e| anyhow!("{e}"))?
+            .build();
+        let default_first = EnumSchema::builder(values)
+            .multiselect()
+            .with_default(vec![])
+            .map_err(|e| anyhow!("{e}"))?
+            .min_items(1)
+            .map_err(|e| anyhow!("{e}"))?
+            .build();
+
+        let bounds_first_json = serde_json::to_value(&bounds_first)?;
+        let default_first_json = serde_json::to_value(&default_first)?;
+        assert_eq!(bounds_first_json, default_first_json);
+        assert_eq!(bounds_first_json["minItems"], 1);
+        assert!(bounds_first_json["default"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_schema_multi_select_default_within_bounds_is_accepted_in_any_order() {
+        let values = vec!["red".to_string(), "green".to_string(), "blue".to_string()];
+        let defaults = vec!["red".to_string(), "blue".to_string()];
+
+        let bounds_first = EnumSchema::builder(values.clone())
+            .multiselect()
+            .min_items(1)
+            .and_then(|builder| builder.max_items(3))
+            .and_then(|builder| builder.with_default(defaults.clone()));
+        let default_first = EnumSchema::builder(values.clone())
+            .multiselect()
+            .with_default(defaults.clone())
+            .and_then(|builder| builder.min_items(1))
+            .and_then(|builder| builder.max_items(3));
+
+        assert!(
+            bounds_first.is_ok(),
+            "a default within min/max items must be accepted: {bounds_first:?}"
+        );
+        assert!(
+            default_first.is_ok(),
+            "a default within min/max items must be accepted regardless of setter order: \
+             {default_first:?}"
+        );
     }
 
     #[test]
