@@ -12,7 +12,7 @@ use crate::{
     model::{ClientJsonRpcMessage, JsonRpcMessage, ServerJsonRpcMessage},
     transport::{
         common::{
-            client_side_http::{read_bounded_body, read_truncated_body},
+            client_side_http::{media_type_is, read_bounded_body, read_truncated_body},
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
@@ -77,19 +77,6 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
         Ok(message @ JsonRpcMessage::Error(_)) => Some(message),
         _ => None,
     }
-}
-
-// Match the complete media-type essence; parameters do not change its type.
-fn media_type_is(value: &[u8], expected: &str) -> bool {
-    value
-        .split(|byte| *byte == b';')
-        .next()
-        .and_then(|essence| std::str::from_utf8(essence).ok())
-        .is_some_and(|essence| {
-            essence
-                .trim_matches([' ', '\t'])
-                .eq_ignore_ascii_case(expected)
-        })
 }
 
 // Retain only status and bounded Retry-After metadata for HTTP failures.

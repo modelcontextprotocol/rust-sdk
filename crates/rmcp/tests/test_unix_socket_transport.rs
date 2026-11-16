@@ -357,6 +357,60 @@ async fn test_unix_socket_request_malformed_json_is_unexpected() -> anyhow::Resu
     Ok(())
 }
 
+/// `Content-Type` media types are case-insensitive (RFC 9110) and may carry
+/// parameters. A response labelled `Application/JSON; charset=utf-8` is still
+/// JSON and must be parsed, not rejected as an unexpected content type.
+#[tokio::test]
+async fn test_unix_socket_mixed_case_json_content_type_is_parsed() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("rmcp-test-unix-case-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn mixed_case_handler() -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            [(
+                http::header::CONTENT_TYPE,
+                "Application/JSON; charset=utf-8",
+            )],
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+        )
+    }
+
+    let app = Router::new().route("/mcp", post(mixed_case_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let result = client
+        .post_message(
+            Arc::from(uri),
+            ClientJsonRpcMessage::request(
+                ClientRequest::PingRequest(PingRequest::default()),
+                RequestId::Number(1),
+            ),
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    match result {
+        Ok(StreamableHttpPostResponse::Json(message, _)) => {
+            assert!(matches!(message, rmcp::model::JsonRpcMessage::Response(_)));
+        }
+        other => panic!("expected parsed JSON response, got: {other:?}"),
+    }
+    Ok(())
+}
+
 /// A notification POST answered 200 + `text/plain` must be `Accepted`: a
 /// notification awaits no reply, so the response body is not load-bearing.
 /// This exercises the unix-socket transport's copy of the fallback, which the
