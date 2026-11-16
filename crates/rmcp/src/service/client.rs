@@ -1953,7 +1953,7 @@ pub struct MergedList<T> {
     pub items: Vec<T>,
     /// Milliseconds until the earliest page expires, or `None` if any page omitted `ttlMs`.
     pub ttl_ms: Option<u64>,
-    /// `Public` only if every page is public, or `None` if any page omitted `cacheScope`.
+    /// `Private` if any page is private, otherwise `None` if any page omitted `cacheScope`.
     pub cache_scope: Option<CacheScope>,
 }
 
@@ -1979,13 +1979,13 @@ where
         expires_at = expires_at
             .zip(expiry(page.ttl_ms()))
             .map(|(merged, page)| merged.min(page));
-        cache_scope =
-            cache_scope
-                .zip(page.cache_scope())
-                .map(|(merged, page)| match (merged, page) {
-                    (CacheScope::Public, CacheScope::Public) => CacheScope::Public,
-                    _ => CacheScope::Private,
-                });
+        cache_scope = match (cache_scope, page.cache_scope()) {
+            (Some(CacheScope::Private), _) | (_, Some(CacheScope::Private)) => {
+                Some(CacheScope::Private)
+            }
+            (Some(CacheScope::Public), Some(CacheScope::Public)) => Some(CacheScope::Public),
+            _ => None,
+        };
         let (page_items, next_cursor) = page.into_page();
         items.extend(page_items);
         cursor = next_cursor;
@@ -3049,6 +3049,21 @@ mod tests {
 
         let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
         assert_eq!(merged.cache_scope, Some(CacheScope::Private));
+    }
+
+    #[tokio::test]
+    async fn merged_scope_is_private_when_another_page_omits_it() {
+        for scopes in [
+            [Some(CacheScope::Private), None],
+            [None, Some(CacheScope::Private)],
+        ] {
+            let peer = disconnected_peer();
+            let pages = scopes.map(|scope| (Some(5_000), scope));
+            cache_tool_pages(&peer, &pages).await;
+
+            let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
+            assert_eq!(merged.cache_scope, Some(CacheScope::Private), "{scopes:?}");
+        }
     }
 
     #[tokio::test]
