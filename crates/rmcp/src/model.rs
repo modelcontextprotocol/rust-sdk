@@ -1891,9 +1891,20 @@ where
     }
 }
 
+/// One page of a paginated list result.
+#[cfg(feature = "client")]
+pub(crate) trait PaginatedResult {
+    type Item;
+
+    fn ttl_ms(&self) -> Option<u64>;
+    fn cache_scope(&self) -> Option<CacheScope>;
+    /// Splits the page into its items and the cursor for the next page.
+    fn into_page(self) -> (Vec<Self::Item>, Option<Cursor>);
+}
+
 macro_rules! paginated_result {
     ($t:ident {
-        $i_item: ident: $t_item: ty
+        $i_item: ident: Vec<$t_item: ty>
     }) => {
         #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
         #[serde(rename_all = "camelCase")]
@@ -1934,7 +1945,7 @@ macro_rules! paginated_result {
                 skip_serializing_if = "Option::is_none"
             )]
             pub cache_scope: Option<CacheScope>,
-            pub $i_item: $t_item,
+            pub $i_item: Vec<$t_item>,
         }
 
         impl Default for $t {
@@ -1943,8 +1954,25 @@ macro_rules! paginated_result {
             }
         }
 
+        #[cfg(feature = "client")]
+        impl PaginatedResult for $t {
+            type Item = $t_item;
+
+            fn ttl_ms(&self) -> Option<u64> {
+                self.ttl_ms
+            }
+
+            fn cache_scope(&self) -> Option<CacheScope> {
+                self.cache_scope
+            }
+
+            fn into_page(self) -> (Vec<$t_item>, Option<Cursor>) {
+                (self.$i_item, self.next_cursor)
+            }
+        }
+
         impl $t {
-            pub fn with_all_items(items: $t_item) -> Self {
+            pub fn with_all_items(items: Vec<$t_item>) -> Self {
                 Self {
                     result_type: Some(ResultType::COMPLETE),
                     meta: None,

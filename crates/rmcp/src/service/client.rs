@@ -2,7 +2,12 @@
 #![expect(deprecated)]
 pub(super) mod cache;
 
-use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
@@ -24,13 +29,14 @@ use crate::{
         JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
         ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsResult,
-        NumberOrString, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
-        ProtocolVersion, ReadResourceDirectoryRequest, ReadResourceDirectoryRequestMethod,
-        ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequest,
-        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Reference, RequestId,
-        RequestMetaObject, RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification,
-        ServerPeerInfo, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
-        SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
+        NumberOrString, PaginatedRequestParams, PaginatedResult, ProgressNotification,
+        ProgressNotificationParam, ProtocolVersion, ReadResourceDirectoryRequest,
+        ReadResourceDirectoryRequestMethod, ReadResourceDirectoryRequestParams,
+        ReadResourceDirectoryResult, ReadResourceRequest, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Reference, RequestId, RequestMetaObject,
+        RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification, ServerPeerInfo,
+        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
+        SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
         SubscriptionsListenRequestParams, SubscriptionsListenResult, UnsubscribeRequest,
         UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
@@ -1940,100 +1946,126 @@ impl Peer<RoleClient> {
     method!(peer_not notify_roots_list_changed RootsListChangedNotification);
 }
 
+/// Every item from a paginated list, with a cache hint covering all of its pages.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct MergedList<T> {
+    pub items: Vec<T>,
+    /// Milliseconds until the earliest page expires, or `None` if any page omitted `ttlMs`.
+    pub ttl_ms: Option<u64>,
+    /// `Public` only if every page is public, or `None` if any page omitted `cacheScope`.
+    pub cache_scope: Option<CacheScope>,
+}
+
+/// Follows `nextCursor` from the first page to the last and merges the pages.
+async fn list_all_pages<P, Fut>(
+    mut list_page: impl FnMut(Option<PaginatedRequestParams>) -> Fut,
+) -> Result<MergedList<P::Item>, ServiceError>
+where
+    P: PaginatedResult,
+    Fut: Future<Output = Result<P, ServiceError>>,
+{
+    let params = |cursor| Some(PaginatedRequestParams { meta: None, cursor });
+    let expiry = |ttl_ms: Option<u64>| {
+        ttl_ms.and_then(|ttl_ms| Instant::now().checked_add(Duration::from_millis(ttl_ms)))
+    };
+
+    let page = list_page(params(None)).await?;
+    let mut expires_at = expiry(page.ttl_ms());
+    let mut cache_scope = page.cache_scope();
+    let (mut items, mut cursor) = page.into_page();
+    while cursor.is_some() {
+        let page = list_page(params(cursor)).await?;
+        expires_at = expires_at
+            .zip(expiry(page.ttl_ms()))
+            .map(|(merged, page)| merged.min(page));
+        cache_scope =
+            cache_scope
+                .zip(page.cache_scope())
+                .map(|(merged, page)| match (merged, page) {
+                    (CacheScope::Public, CacheScope::Public) => CacheScope::Public,
+                    _ => CacheScope::Private,
+                });
+        let (page_items, next_cursor) = page.into_page();
+        items.extend(page_items);
+        cursor = next_cursor;
+    }
+
+    let ttl_ms = expires_at.map(|expires_at| {
+        let remaining = expires_at.saturating_duration_since(Instant::now());
+        u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)
+    });
+    Ok(MergedList {
+        items,
+        ttl_ms,
+        cache_scope,
+    })
+}
+
 impl Peer<RoleClient> {
-    /// A wrapper method for [`Peer<RoleClient>::list_tools`].
-    ///
-    /// This function will call [`Peer<RoleClient>::list_tools`] multiple times until all tools are listed.
+    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed.
     pub async fn list_all_tools(&self) -> Result<Vec<crate::model::Tool>, ServiceError> {
-        let mut tools = Vec::new();
-        let mut cursor = None;
-        loop {
-            let result = self
-                .list_tools(Some(PaginatedRequestParams { meta: None, cursor }))
-                .await?;
-            tools.extend(result.tools);
-            cursor = result.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(tools)
+        Ok(self.list_all_tools_with_cache_hint().await?.items)
     }
 
-    /// A wrapper method for [`Peer<RoleClient>::list_prompts`].
-    ///
-    /// This function will call [`Peer<RoleClient>::list_prompts`] multiple times until all prompts are listed.
+    /// Like [`Peer<RoleClient>::list_all_tools`], with a cache hint for the merged list.
+    pub async fn list_all_tools_with_cache_hint(
+        &self,
+    ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
+        list_all_pages(|params| self.list_tools(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed.
     pub async fn list_all_prompts(&self) -> Result<Vec<crate::model::Prompt>, ServiceError> {
-        let mut prompts = Vec::new();
-        let mut cursor = None;
-        loop {
-            let result = self
-                .list_prompts(Some(PaginatedRequestParams { meta: None, cursor }))
-                .await?;
-            prompts.extend(result.prompts);
-            cursor = result.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(prompts)
+        Ok(self.list_all_prompts_with_cache_hint().await?.items)
     }
 
-    /// A wrapper method for [`Peer<RoleClient>::list_resources`].
-    ///
-    /// This function will call [`Peer<RoleClient>::list_resources`] multiple times until all resources are listed.
+    /// Like [`Peer<RoleClient>::list_all_prompts`], with a cache hint for the merged list.
+    pub async fn list_all_prompts_with_cache_hint(
+        &self,
+    ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
+        list_all_pages(|params| self.list_prompts(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed.
     pub async fn list_all_resources(&self) -> Result<Vec<crate::model::Resource>, ServiceError> {
-        let mut resources = Vec::new();
-        let mut cursor = None;
-        loop {
-            let result = self
-                .list_resources(Some(PaginatedRequestParams { meta: None, cursor }))
-                .await?;
-            resources.extend(result.resources);
-            cursor = result.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(resources)
+        Ok(self.list_all_resources_with_cache_hint().await?.items)
     }
 
-    /// Call [`Peer<RoleClient>::list_skills`] until every page is listed.
+    /// Like [`Peer<RoleClient>::list_all_resources`], with a cache hint for the merged list.
+    pub async fn list_all_resources_with_cache_hint(
+        &self,
+    ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
+        list_all_pages(|params| self.list_resources(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed.
     pub async fn list_all_skills(&self) -> Result<Vec<crate::model::Skill>, ServiceError> {
-        let mut skills = Vec::new();
-        let mut cursor = None;
-        loop {
-            let result = self
-                .list_skills(Some(PaginatedRequestParams { meta: None, cursor }))
-                .await?;
-            skills.extend(result.skills);
-            cursor = result.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(skills)
+        Ok(self.list_all_skills_with_cache_hint().await?.items)
     }
 
-    /// A wrapper method for [`Peer<RoleClient>::list_resource_templates`].
-    ///
-    /// This function will call [`Peer<RoleClient>::list_resource_templates`] multiple times until all resource templates are listed.
+    /// Like [`Peer<RoleClient>::list_all_skills`], with a cache hint for the merged list.
+    pub async fn list_all_skills_with_cache_hint(
+        &self,
+    ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
+        list_all_pages(|params| self.list_skills(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed.
     pub async fn list_all_resource_templates(
         &self,
     ) -> Result<Vec<crate::model::ResourceTemplate>, ServiceError> {
-        let mut resource_templates = Vec::new();
-        let mut cursor = None;
-        loop {
-            let result = self
-                .list_resource_templates(Some(PaginatedRequestParams { meta: None, cursor }))
-                .await?;
-            resource_templates.extend(result.resource_templates);
-            cursor = result.next_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(resource_templates)
+        Ok(self
+            .list_all_resource_templates_with_cache_hint()
+            .await?
+            .items)
+    }
+
+    /// Like [`Peer<RoleClient>::list_all_resource_templates`], with a cache hint for the merged list.
+    pub async fn list_all_resource_templates_with_cache_hint(
+        &self,
+    ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
+        list_all_pages(|params| self.list_resource_templates(params)).await
     }
 
     /// Convenient method to get completion suggestions for a prompt argument
@@ -2752,7 +2784,50 @@ mod tests {
         )
         .await;
 
-        assert_eq!(peer.list_tools(params).await.unwrap(), expected);
+        let served = peer.list_tools(params).await.unwrap();
+        assert_eq!(
+            ListToolsResult {
+                ttl_ms: expected.ttl_ms,
+                ..served
+            },
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_page_reports_the_time_left_until_expiry() {
+        let peer = disconnected_peer();
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(tools_result(Some(5_000), Some(CacheScope::Public))),
+            Some(5_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let ttl_ms = peer.list_tools(None).await.unwrap().ttl_ms.unwrap();
+        assert!(ttl_ms <= 4_980, "ttl_ms = {ttl_ms}");
+    }
+
+    #[tokio::test]
+    async fn cached_page_without_ttl_stays_without_ttl() {
+        let peer = disconnected_peer();
+        peer.set_response_cache_config(
+            ClientCacheConfig::default().with_default_ttl(Duration::from_secs(5)),
+        )
+        .await;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &None);
+        peer.cache_response(
+            key,
+            ServerResult::ListToolsResult(tools_result(None, Some(CacheScope::Public))),
+            None,
+            Some(CacheScope::Public),
+        )
+        .await;
+
+        assert_eq!(peer.list_tools(None).await.unwrap().ttl_ms, None);
     }
 
     #[tokio::test]
@@ -2847,7 +2922,13 @@ mod tests {
         .await;
         tokio::time::sleep(Duration::from_millis(5)).await;
 
-        assert_eq!(peer.list_tools(params).await.unwrap(), expected);
+        assert_eq!(
+            peer.list_tools(params).await.unwrap(),
+            ListToolsResult {
+                ttl_ms: Some(0),
+                ..expected
+            }
+        );
     }
 
     #[tokio::test]
@@ -2867,7 +2948,120 @@ mod tests {
         )
         .await;
 
-        assert_eq!(peer.discover(meta).await.unwrap(), expected);
+        let served = peer.discover(meta).await.unwrap();
+        assert_eq!(
+            DiscoverResult {
+                ttl_ms: expected.ttl_ms,
+                ..served
+            },
+            expected
+        );
+    }
+
+    /// Caches a chain of tool pages, linked by cursors `page-1`, `page-2`, ...
+    async fn cache_tool_pages(
+        peer: &Peer<RoleClient>,
+        pages: &[(Option<u64>, Option<CacheScope>)],
+    ) {
+        for (index, &(ttl_ms, cache_scope)) in pages.iter().enumerate() {
+            let cursor = (index > 0).then(|| format!("page-{index}"));
+            let params = Some(PaginatedRequestParams { meta: None, cursor });
+            let mut page = tools_result(ttl_ms, cache_scope);
+            page.tools = vec![crate::model::Tool::new(
+                format!("tool-{index}"),
+                "",
+                Arc::new(Default::default()),
+            )];
+            page.next_cursor = (index + 1 < pages.len()).then(|| format!("page-{}", index + 1));
+            peer.cache_response(
+                list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params),
+                ServerResult::ListToolsResult(page),
+                ttl_ms.or(Some(5_000)),
+                cache_scope,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn merged_list_collects_items_from_every_page() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint, hint]).await;
+
+        let names: Vec<_> = peer
+            .list_all_tools_with_cache_hint()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["tool-0", "tool-1", "tool-2"]);
+    }
+
+    #[tokio::test]
+    async fn merged_ttl_is_the_earliest_page_expiry() {
+        let peer = disconnected_peer();
+        let public = Some(CacheScope::Public);
+        cache_tool_pages(&peer, &[(Some(5_000), public), (Some(1_000), public)]).await;
+
+        let ttl_ms = peer
+            .list_all_tools_with_cache_hint()
+            .await
+            .unwrap()
+            .ttl_ms
+            .unwrap();
+        assert!((900..=1_000).contains(&ttl_ms), "ttl_ms = {ttl_ms}");
+    }
+
+    #[tokio::test]
+    async fn merged_ttl_is_absent_when_any_page_omits_it() {
+        let peer = disconnected_peer();
+        let public = Some(CacheScope::Public);
+        cache_tool_pages(&peer, &[(Some(5_000), public), (None, public)]).await;
+
+        let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
+        assert_eq!(merged.ttl_ms, None);
+    }
+
+    #[tokio::test]
+    async fn merged_scope_is_public_when_every_page_is_public() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint]).await;
+
+        let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
+        assert_eq!(merged.cache_scope, Some(CacheScope::Public));
+    }
+
+    #[tokio::test]
+    async fn merged_scope_is_private_when_any_page_is_private() {
+        let peer = disconnected_peer();
+        cache_tool_pages(
+            &peer,
+            &[
+                (Some(5_000), Some(CacheScope::Public)),
+                (Some(5_000), Some(CacheScope::Private)),
+            ],
+        )
+        .await;
+
+        let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
+        assert_eq!(merged.cache_scope, Some(CacheScope::Private));
+    }
+
+    #[tokio::test]
+    async fn merged_scope_is_absent_when_any_page_omits_it() {
+        let peer = disconnected_peer();
+        cache_tool_pages(
+            &peer,
+            &[(Some(5_000), Some(CacheScope::Public)), (Some(5_000), None)],
+        )
+        .await;
+
+        let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
+        assert_eq!(merged.cache_scope, None);
     }
 }
 
