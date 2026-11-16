@@ -309,7 +309,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": true
     },
     "CompleteResult": {
       "type": "object",
@@ -3340,7 +3341,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": true
     },
     "ServerResult": {
       "anyOf": [
