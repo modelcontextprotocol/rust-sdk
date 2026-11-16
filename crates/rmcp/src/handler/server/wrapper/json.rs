@@ -13,7 +13,12 @@ use crate::{
 /// When used with tools, this wrapper indicates that the value should be
 /// serialized as structured JSON content with an associated schema.
 /// The framework will place the JSON in the `structured_content` field
-/// of the tool result rather than the regular `content` field.
+/// of the tool result, with a serialized copy in `content` as a text block.
+///
+/// A `T` whose schema root is not `"type": "object"` (`Vec<U>`, `i32`,
+/// `Option<S>`, tagged enums) is listed without `outputSchema` for peers
+/// before `2026-07-28`. Non-object values also lose `structuredContent` and
+/// reach those peers through the text block.
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct Json<T>(pub T);
 
