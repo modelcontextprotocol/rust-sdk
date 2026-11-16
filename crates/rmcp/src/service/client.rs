@@ -28,7 +28,7 @@ use crate::{
         InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
         JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
-        ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsResult,
+        ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsResult, MetaObject,
         NumberOrString, PaginatedRequestParams, PaginatedResult, ProgressNotification,
         ProgressNotificationParam, ProtocolVersion, ReadResourceDirectoryRequest,
         ReadResourceDirectoryRequestMethod, ReadResourceDirectoryRequestParams,
@@ -42,6 +42,32 @@ use crate::{
     },
     transport::DynamicTransportError,
 };
+
+/// Recovers a `tools/call` reply that omits `content`, which the untagged
+/// [`ServerResult`] decodes as one of these other variants.
+fn contentless_call_tool_result(result: ServerResult) -> Option<CallToolResult> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MetaOnly {
+        #[serde(rename = "_meta")]
+        meta: MetaObject,
+    }
+
+    let (result_type, meta) = match result {
+        ServerResult::EmptyResult(_) => (None, None),
+        ServerResult::TaskAckResult(ack) => (Some(ack.result_type), ack.meta),
+        ServerResult::CustomResult(custom) => {
+            let MetaOnly { meta } = serde_json::from_value(custom.0).ok()?;
+            (None, Some(meta))
+        }
+        _ => return None,
+    };
+    Some(CallToolResult {
+        result_type,
+        meta,
+        ..Default::default()
+    })
+}
 
 /// It represents the error that may occur when serving the client.
 ///
@@ -1496,7 +1522,9 @@ impl Peer<RoleClient> {
             }
             // SEP-2663 Tasks extension: the server materialized a task.
             ServerResult::CreateTaskResult(result) => Ok(CallToolResponse::Task(result)),
-            _ => Err(ServiceError::UnexpectedResponse),
+            other => contentless_call_tool_result(other)
+                .map(CallToolResponse::Complete)
+                .ok_or(ServiceError::UnexpectedResponse),
         }
     }
 
@@ -1723,7 +1751,17 @@ impl Peer<RoleClient> {
         )]
         peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams)
     );
-    method!(peer_req call_tool CallToolRequest(CallToolRequestParams) => CallToolResult);
+
+    /// Send one `tools/call` request, treating MRTR and task replies as unexpected.
+    pub async fn call_tool(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResult, ServiceError> {
+        match self.call_tool_once(params).await? {
+            CallToolResponse::Complete(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
 
     pub async fn list_prompts(
         &self,
