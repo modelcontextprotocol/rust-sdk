@@ -5110,6 +5110,46 @@ impl ServerResult {
         result_type.take_if(|result_type| result_type.is_complete());
     }
 
+    /// Drop the SEP-2549 caching hints so the result keeps the wire shape
+    /// that predates protocol version `2026-07-28`.
+    ///
+    /// `ttlMs` and `cacheScope` did not exist before that version, so the
+    /// server handler calls this before responding to a peer that negotiated
+    /// an older one, even when the handler set them explicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CacheScope, ListToolsResult, ServerResult};
+    ///
+    /// let page = ListToolsResult {
+    ///     ttl_ms: Some(60_000),
+    ///     cache_scope: Some(CacheScope::Public),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let mut result = ServerResult::ListToolsResult(page);
+    /// result.strip_cache_hints_for_legacy_peer();
+    ///
+    /// let json = serde_json::to_value(&result).unwrap();
+    /// assert!(json.get("ttlMs").is_none());
+    /// assert!(json.get("cacheScope").is_none());
+    /// ```
+    pub fn strip_cache_hints_for_legacy_peer(&mut self) {
+        let (ttl_ms, cache_scope) = match self {
+            ServerResult::ListToolsResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListPromptsResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListResourcesResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListResourceTemplatesResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ReadResourceResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::ListSkillsResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            ServerResult::GetSkillResult(r) => (&mut r.ttl_ms, &mut r.cache_scope),
+            _ => return,
+        };
+        *ttl_ms = None;
+        *cache_scope = None;
+    }
+
     /// Drop a non-object tool `outputSchema` or `structuredContent` so the
     /// result keeps the wire shape that predates protocol version `2026-07-28`.
     ///

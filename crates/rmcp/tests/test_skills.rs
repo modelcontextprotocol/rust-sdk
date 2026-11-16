@@ -59,6 +59,7 @@ struct SkillServer {
     omit_resources: bool,
     invoice_uri: Option<&'static str>,
     answer_get_with_other_uri: bool,
+    set_cache_hints: bool,
     directory_calls: Arc<AtomicUsize>,
 }
 
@@ -115,6 +116,10 @@ impl ServerHandler for SkillServer {
         };
         if cursor.is_none() {
             result.next_cursor = Some("page-2".into());
+        }
+        if self.set_cache_hints {
+            result.ttl_ms = Some(60_000);
+            result.cache_scope = Some(CacheScope::Public);
         }
         Ok(result)
     }
@@ -272,6 +277,37 @@ async fn list_skills_should_omit_result_type_for_legacy_peers() {
     assert_eq!(
         (page.result_type, page.ttl_ms, page.cache_scope),
         (None, None, None)
+    );
+}
+
+#[tokio::test]
+async fn list_skills_should_omit_cache_hints_for_legacy_peers() {
+    let server = SkillServer {
+        set_cache_hints: true,
+        ..SkillServer::with_directory_read()
+    };
+    let (client, server_task) = connect(server, ProtocolVersion::V_2025_11_25);
+
+    let page = client.list_skills(None).await.expect("skills/list");
+    disconnect(client, server_task).await;
+
+    assert_eq!((page.ttl_ms, page.cache_scope), (None, None));
+}
+
+#[tokio::test]
+async fn list_skills_should_keep_cache_hints_the_handler_set_for_2026_07_28() {
+    let server = SkillServer {
+        set_cache_hints: true,
+        ..SkillServer::with_directory_read()
+    };
+    let (client, server_task) = connect(server, ProtocolVersion::V_2026_07_28);
+
+    let page = client.list_skills(None).await.expect("skills/list");
+    disconnect(client, server_task).await;
+
+    assert_eq!(
+        (page.ttl_ms, page.cache_scope),
+        (Some(60_000), Some(CacheScope::Public))
     );
 }
 

@@ -9,8 +9,8 @@
 //!   shape (round-tripping a legacy result never adds the field).
 
 use rmcp::model::{
-    CallToolResult, CompleteResult, ContentBlock, EmptyResult, GetPromptResult, ListToolsResult,
-    ReadResourceResult, ResultType, ServerResult,
+    CacheScope, CallToolResult, CompleteResult, ContentBlock, EmptyResult, GetPromptResult,
+    ListToolsResult, ReadResourceResult, ResultType, ServerResult,
 };
 use serde_json::json;
 
@@ -161,6 +161,22 @@ fn strip_removes_complete_result_type() {
 fn strip_removes_complete_result_type_from_paginated_result() {
     let mut result = ServerResult::ListToolsResult(ListToolsResult::default());
     result.strip_result_type_for_legacy_peer();
+
+    let value = serde_json::to_value(result).expect("serialize ServerResult");
+    assert_eq!(value, json!({ "tools": [] }));
+}
+
+#[test]
+fn strip_removes_cache_hints_from_paginated_result() {
+    let page = ListToolsResult {
+        ttl_ms: Some(60_000),
+        cache_scope: Some(CacheScope::Public),
+        ..Default::default()
+    };
+
+    let mut result = ServerResult::ListToolsResult(page);
+    result.strip_result_type_for_legacy_peer();
+    result.strip_cache_hints_for_legacy_peer();
 
     let value = serde_json::to_value(result).expect("serialize ServerResult");
     assert_eq!(value, json!({ "tools": [] }));
