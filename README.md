@@ -1479,6 +1479,12 @@ let tools = peer.list_tools(None).await?;     // served from cache while fresh
 let res   = peer.read_resource(params).await?; // cached per-URI
 ```
 
+A cached response reports the `ttlMs` left on its entry, not the server's
+original value, and a stale entry served after a failed re-fetch reports `0`.
+To keep the hints when following every page, use the `list_all_*_with_cache_hint`
+methods, which return a `MergedList` with the earliest `ttl_ms` and the strictest
+`cache_scope` across pages.
+
 Tune or disable it per connection via the `Peer`:
 
 ```rust, ignore
