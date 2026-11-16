@@ -1751,7 +1751,17 @@ impl Peer<RoleClient> {
         )]
         peer_req unsubscribe UnsubscribeRequest(UnsubscribeRequestParams)
     );
-    method!(peer_req call_tool CallToolRequest(CallToolRequestParams) => CallToolResult);
+
+    /// Send one `tools/call` request, treating MRTR and task replies as unexpected.
+    pub async fn call_tool(
+        &self,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResult, ServiceError> {
+        match self.call_tool_once(params).await? {
+            CallToolResponse::Complete(result) => Ok(result),
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
 
     pub async fn list_prompts(
         &self,
