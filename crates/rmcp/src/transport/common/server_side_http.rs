@@ -8,8 +8,8 @@ use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use sse_stream::{KeepAlive, Sse, SseBody};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-use super::http_header::EVENT_STREAM_MIME_TYPE;
-use crate::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use super::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
+use crate::model::{ClientJsonRpcMessage, ErrorData, JsonRpcError, ServerJsonRpcMessage};
 
 pub type SessionId = Arc<str>;
 
@@ -253,18 +253,18 @@ where
         }
     }
 
-    match serde_json::from_slice::<ClientJsonRpcMessage>(&collected) {
-        Ok(message) => Ok(message),
-        Err(e) => {
-            let response = Response::builder()
-                .status(http::StatusCode::UNSUPPORTED_MEDIA_TYPE)
-                .body(
-                    Full::new(Bytes::from(format!("fail to deserialize request body {e}"))).boxed(),
-                )
-                .expect("valid response");
-            Err(response)
-        }
-    }
+    serde_json::from_slice::<ClientJsonRpcMessage>(&collected).map_err(|e| {
+        let error = JsonRpcError::new(
+            None,
+            ErrorData::parse_error(format!("Parse error: {e}"), None),
+        );
+        let body = serde_json::to_vec(&error).expect("serialize JsonRpcError");
+        Response::builder()
+            .status(http::StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, JSON_MIME_TYPE)
+            .body(Full::new(Bytes::from(body)).boxed())
+            .expect("valid response")
+    })
 }
 
 #[cfg(test)]
@@ -276,7 +276,9 @@ mod tests {
     use http_body_util::StreamBody;
 
     use super::*;
-    use crate::model::{EmptyResult, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult};
+    use crate::model::{
+        EmptyResult, ErrorCode, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult,
+    };
 
     const INITIALIZE_REQUEST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#;
 
@@ -371,10 +373,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expect_json_returns_415_for_invalid_json_under_limit() {
-        let body = Full::new(Bytes::from("not valid json"));
-        let result = expect_json(body, 4 * 1024 * 1024).await;
-        let response = result.unwrap_err();
-        assert_eq!(response.status(), http::StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    async fn expect_json_rejects_malformed_body_with_parse_error() {
+        for body in [
+            "{",
+            "",
+            "null",
+            r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#,
+        ] {
+            let response = expect_json(Full::new(Bytes::from(body)), 1024)
+                .await
+                .unwrap_err();
+            assert_eq!(response.status(), http::StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                response.headers()[http::header::CONTENT_TYPE],
+                JSON_MIME_TYPE
+            );
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let error: JsonRpcError = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error.id, None, "{body}");
+            assert_eq!(error.error.code, ErrorCode::PARSE_ERROR, "{body}");
+        }
     }
 }

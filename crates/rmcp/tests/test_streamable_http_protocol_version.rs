@@ -293,6 +293,39 @@ async fn stateful_rejected_initial_posts_do_not_create_sessions() -> anyhow::Res
     Ok(())
 }
 
+async fn assert_malformed_body_is_parse_error(client: &reqwest::Client, url: &str) {
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body("{")
+        .send()
+        .await
+        .expect("send malformed body");
+    assert_eq!(response.status(), 400);
+    assert_eq!(response.headers()["content-type"], "application/json");
+    let body: Value = response.json().await.expect("JSON-RPC error body");
+    assert_eq!(body["error"]["code"], -32700);
+    assert!(body.get("id").is_none());
+}
+
+#[tokio::test]
+async fn stateless_malformed_body_is_bad_request() {
+    let (client, url, ct) = spawn_server(stateless_json_config()).await;
+    assert_malformed_body_is_parse_error(&client, &url).await;
+    ct.cancel();
+}
+
+#[tokio::test]
+async fn stateful_malformed_body_is_bad_request() {
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let (client, url, ct) =
+        spawn_server_with_manager(stateful_config(), session_manager.clone()).await;
+    assert_malformed_body_is_parse_error(&client, &url).await;
+    assert_eq!(session_manager.sessions.read().await.len(), 0);
+    ct.cancel();
+}
+
 /// The `initialize` handshake exists only in the revisions before `2026-07-28`,
 /// so naming a later version in it does not make the request a modern one: the
 /// server keeps legacy semantics, opens a session, and answers with a version it
