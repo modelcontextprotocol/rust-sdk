@@ -361,8 +361,8 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
         .serve(transport)
         .await?;
 
-    // Verify the session is established: list_all_resources() succeeds
-    let _resources = client.list_all_resources().await?;
+    // Verify the session is established with a method Calculator advertises.
+    let _tools = client.list_all_tools().await?;
 
     // Capture the current session ID from the server
     let original_session_id = {
@@ -381,7 +381,7 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
     }
 
     // This call should trigger transparent re-initialization and still succeed
-    let _resources_after = client.list_all_resources().await?;
+    let _tools_after = client.list_all_tools().await?;
 
     // Verify the server created a new session with a different ID
     {
@@ -441,7 +441,7 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
         .await?;
 
     // Verify the session is established
-    let _resources = client.list_all_resources().await?;
+    let _tools = client.list_all_tools().await?;
 
     // Force session expiry by removing all sessions from the server-side manager
     {
@@ -450,7 +450,7 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
     }
 
     // This call should fail with a SessionExpired transport error
-    let result = client.list_all_resources().await;
+    let result = client.list_all_tools().await;
     match result {
         Err(ServiceError::TransportSend(ref dyn_err)) => {
             let err_msg = format!("{dyn_err}");

@@ -465,7 +465,11 @@ macro_rules! server_handler_methods {
             request: CompleteRequestParams,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<CompleteResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(CompleteResult::default()))
+            std::future::ready(if self.get_info().capabilities.completions.is_some() {
+                Ok(CompleteResult::default())
+            } else {
+                Err(McpError::method_not_found::<CompleteRequestMethod>())
+            })
         }
         fn set_level(
             &self,
@@ -486,14 +490,22 @@ macro_rules! server_handler_methods {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListPromptsResult::default()))
+            std::future::ready(if self.get_info().capabilities.prompts.is_some() {
+                Ok(ListPromptsResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListPromptsRequestMethod>())
+            })
         }
         fn list_resources(
             &self,
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListResourcesResult::default()))
+            std::future::ready(if self.get_info().capabilities.resources.is_some() {
+                Ok(ListResourcesResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListResourcesRequestMethod>())
+            })
         }
         fn list_resource_templates(
             &self,
@@ -502,7 +514,11 @@ macro_rules! server_handler_methods {
         ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>>
                + MaybeSendFuture
                + '_ {
-            std::future::ready(Ok(ListResourceTemplatesResult::default()))
+            std::future::ready(if self.get_info().capabilities.resources.is_some() {
+                Ok(ListResourceTemplatesResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListResourceTemplatesRequestMethod>())
+            })
         }
         fn read_resource(
             &self,
@@ -602,7 +618,11 @@ macro_rules! server_handler_methods {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> impl Future<Output = Result<ListToolsResult, McpError>> + MaybeSendFuture + '_ {
-            std::future::ready(Ok(ListToolsResult::default()))
+            std::future::ready(if self.get_info().capabilities.tools.is_some() {
+                Ok(ListToolsResult::default())
+            } else {
+                Err(McpError::method_not_found::<ListToolsRequestMethod>())
+            })
         }
         /// Get a tool definition by name.
         ///
@@ -661,6 +681,10 @@ macro_rules! server_handler_methods {
             std::future::ready(())
         }
 
+        /// Return the server configuration used for initialization and
+        /// default-method capability checks. Default handlers may call this
+        /// repeatedly, so it should be inexpensive and its capabilities should
+        /// remain consistent with those advertised for the current session.
         fn get_info(&self) -> ServerConfig {
             ServerConfig::default()
         }

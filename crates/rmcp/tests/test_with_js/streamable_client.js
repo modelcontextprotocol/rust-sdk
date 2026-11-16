@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:8001/mcp/`));
 
@@ -19,10 +20,26 @@ const client = new Client(
 await client.connect(transport);
 const tools = await client.listTools();
 console.log(tools);
-const resources = await client.listResources();
-console.log(resources);
-const templates = await client.listResourceTemplates();
-console.log(templates);
-const prompts = await client.listPrompts();
-console.log(prompts);
+// The calculator server declares only the tools capability, so unsupported
+// request methods must fail rather than returning empty successful results.
+async function expectMethodNotFound(name, operation) {
+  try {
+    const result = await operation();
+    throw new Error(`${name} unexpectedly succeeded: ${JSON.stringify(result)}`);
+  } catch (err) {
+    if (err.code !== ErrorCode.MethodNotFound) {
+      throw err;
+    }
+  }
+  console.log(`${name} correctly rejected with method-not-found`);
+}
+await expectMethodNotFound("resources/list", () => client.listResources());
+await expectMethodNotFound("resources/templates/list", () => client.listResourceTemplates());
+await expectMethodNotFound("prompts/list", () => client.listPrompts());
+await expectMethodNotFound("completion/complete", () =>
+  client.complete({
+    ref: { type: "ref/prompt", name: "unknown" },
+    argument: { name: "input", value: "value" },
+  }),
+);
 await client.close();

@@ -7,7 +7,8 @@ use rmcp::{
     model::{
         CacheScope, ClientConfig, InitializeResult, ListPromptsResult, ListResourcesResult,
         ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
-        ReadResourceResponse, ReadResourceResult, ResourceContents,
+        ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities,
+        ServerConfig,
     },
     prompt_handler,
     service::{RequestContext, RunningService, serve_directly},
@@ -40,6 +41,16 @@ impl ServerHandler for CacheHintServer {}
 struct ManualServer;
 
 impl ServerHandler for ManualServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .enable_resources()
+                .build(),
+        )
+    }
+
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -70,6 +81,10 @@ impl ServerHandler for ManualServer {
 struct ExplicitHintServer;
 
 impl ServerHandler for ExplicitHintServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_resources().build())
+    }
+
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,

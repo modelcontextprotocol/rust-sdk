@@ -11,8 +11,8 @@ use rmcp::{
         ClientCapabilities, ClientJsonRpcMessage, ClientRequest, DiscoverRequest,
         DiscoverRequestParams, ErrorCode, ErrorData, Implementation, ListToolsRequest,
         ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotificationParam,
-        ProgressToken, ProtocolVersion, RequestId, RequestMetaObject, ServerJsonRpcMessage,
-        ServerNotification,
+        ProgressToken, ProtocolVersion, RequestId, RequestMetaObject, ServerCapabilities,
+        ServerConfig, ServerJsonRpcMessage, ServerNotification,
     },
     service::{MaybeSendFuture, RequestContext, RoleServer},
     transport::{IntoTransport, Transport},
@@ -21,7 +21,15 @@ use rmcp::{
 #[derive(Clone, Default)]
 struct StatelessServer;
 
-impl ServerHandler for StatelessServer {}
+impl ServerHandler for StatelessServer {
+    fn get_info(&self) -> ServerConfig {
+        tools_info()
+    }
+}
+
+fn tools_info() -> ServerConfig {
+    ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+}
 
 fn complete_meta() -> RequestMetaObject {
     complete_meta_for("stateless-client")
@@ -129,6 +137,10 @@ struct ContextServer {
 }
 
 impl ServerHandler for ContextServer {
+    fn get_info(&self) -> ServerConfig {
+        tools_info()
+    }
+
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -260,6 +272,10 @@ async fn stateless_server_rejects_malformed_metadata_without_selecting_lifecycle
 struct ProgressServer;
 
 impl ServerHandler for ProgressServer {
+    fn get_info(&self) -> ServerConfig {
+        tools_info()
+    }
+
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
