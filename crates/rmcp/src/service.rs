@@ -80,7 +80,7 @@ pub enum ServiceError {
     #[error("Mcp error: {0}")]
     McpError(McpError),
     #[error("Transport send error: {0}")]
-    TransportSend(DynamicTransportError),
+    TransportSend(#[source] DynamicTransportError),
     #[error("Transport closed")]
     TransportClosed,
     #[error("Unexpected response type")]
@@ -94,6 +94,46 @@ pub enum ServiceError {
     /// The peer kept returning `input_required` beyond the configured round cap.
     #[error("input_required did not complete within {max_rounds} MRTR rounds")]
     InputRequiredRoundsExceeded { max_rounds: usize },
+}
+
+impl ServiceError {
+    /// The `WWW-Authenticate` challenge from the 401/403 the transport hit
+    /// while sending a request, if that is why the request failed.
+    ///
+    /// This is the counterpart of `ClientInitializeError::auth_challenge` for
+    /// requests made after initialization, for example when a token is revoked
+    /// or expires during a session.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub fn auth_challenge(&self) -> Option<&str> {
+        use crate::transport::streamable_http_client::{AuthRequiredError, InsufficientScopeError};
+
+        let Self::TransportSend(error) = self else {
+            return None;
+        };
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error.error.as_ref());
+        while let Some(current) = source {
+            if let Some(auth_required) = current.downcast_ref::<AuthRequiredError>() {
+                return Some(&auth_required.www_authenticate_header);
+            }
+            if let Some(insufficient_scope) = current.downcast_ref::<InsufficientScopeError>() {
+                return Some(&insufficient_scope.www_authenticate_header);
+            }
+            source = current.source();
+        }
+        None
+    }
+
+    /// Returns whether the request failed because authorization is required.
+    ///
+    /// This covers both missing or expired local OAuth authorization and an HTTP
+    /// authorization challenge from the MCP server.
+    #[cfg(feature = "client")]
+    pub fn is_authorization_required(&self) -> bool {
+        match self {
+            Self::TransportSend(error) => error.is_authorization_required(),
+            _ => false,
+        }
+    }
 }
 
 trait TransferObject:
