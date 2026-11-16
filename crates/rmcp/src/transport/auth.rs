@@ -2479,10 +2479,18 @@ impl AuthorizationManager {
     /// Transient refresh failures return [`AuthError::TokenRefreshFailed`] so the
     /// caller can retry; other errors are propagated as-is.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
-        self.get_access_token_at(Self::now_epoch_secs()).await
+        self.get_access_token_with_clock(Self::now_epoch_secs).await
     }
 
+    #[cfg(test)]
     async fn get_access_token_at(&self, now_epoch_secs: u64) -> Result<String, AuthError> {
+        self.get_access_token_with_clock(|| now_epoch_secs).await
+    }
+
+    async fn get_access_token_with_clock(
+        &self,
+        now_epoch_secs: impl FnOnce() -> u64 + Send,
+    ) -> Result<String, AuthError> {
         let stored = self.credential_store.load().await?;
         let Some(stored_creds) = stored else {
             return Err(AuthError::AuthorizationRequired);
@@ -2494,7 +2502,8 @@ impl AuthorizationManager {
         if let (Some(expires_in), Some(received_at)) =
             (creds.expires_in(), stored_creds.token_received_at)
         {
-            let elapsed = now_epoch_secs.saturating_sub(received_at);
+            // Loading credentials can take long enough to cross the refresh boundary.
+            let elapsed = now_epoch_secs().saturating_sub(received_at);
             let remaining = expires_in.as_secs().saturating_sub(elapsed);
 
             let buffer = Self::REFRESH_BUFFER_SECS.min(expires_in.as_secs() / 2);
@@ -9268,6 +9277,54 @@ mod tests {
         };
         manager.credential_store.save(stored).await.unwrap();
         manager
+    }
+
+    #[tokio::test]
+    async fn get_access_token_samples_clock_after_credential_load() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct ClockAdvancingStore {
+            credentials: StoredCredentials,
+            clock: Arc<AtomicU64>,
+            after_load: u64,
+        }
+
+        #[async_trait::async_trait]
+        impl CredentialStore for ClockAdvancingStore {
+            async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+                tokio::task::yield_now().await;
+                self.clock.store(self.after_load, Ordering::SeqCst);
+                Ok(Some(self.credentials.clone()))
+            }
+
+            async fn save(&self, _: StoredCredentials) -> Result<(), AuthError> {
+                unreachable!("these credentials have no refresh token")
+            }
+
+            async fn clear(&self) -> Result<(), AuthError> {
+                unreachable!("these credentials have no refresh token")
+            }
+        }
+
+        // Cross both an expiry boundary and the half-lifetime refresh boundary.
+        for (lifetime, age_before_load, age_after_load) in [(1, 0, 1), (2, 1, 2), (20, 10, 11)] {
+            let mut manager = short_lived_token_manager(lifetime, 0).await;
+            let credentials = manager.credential_store.load().await.unwrap().unwrap();
+            let clock = Arc::new(AtomicU64::new(SHORT_LIVED_NOW + age_before_load));
+            manager.set_credential_store(ClockAdvancingStore {
+                credentials,
+                clock: Arc::clone(&clock),
+                after_load: SHORT_LIVED_NOW + age_after_load,
+            });
+
+            let result = manager
+                .get_access_token_with_clock(|| clock.load(Ordering::SeqCst))
+                .await;
+            assert!(
+                matches!(result, Err(AuthError::AuthorizationRequired)),
+                "lifetime={lifetime}, age before={age_before_load}, age after={age_after_load}: {result:?}"
+            );
+        }
     }
 
     #[tokio::test]
