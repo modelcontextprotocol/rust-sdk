@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use percent_encoding::{CONTROLS, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use unicode_general_category::{GeneralCategory, get_general_category};
 use unicode_normalization::UnicodeNormalization;
@@ -271,9 +271,8 @@ impl Skill {
     /// without reading any file.
     ///
     /// The 1–64 character limit counts Unicode scalar values after NFKC
-    /// normalization. This same form is used to compare the frontmatter name
-    /// with the decoded URI segment. Use the advertised URI for reads and
-    /// pair it with the originating server for cache and approval keys.
+    /// normalization, the same form used to compare the frontmatter name with
+    /// the decoded URI segment.
     pub fn validate(&self) -> Result<(), SkillValidationError> {
         let Some(encoded_name) = skill_name_from_uri(&self.uri) else {
             return Err(SkillValidationError::UriNotSkillMd(self.uri.clone()));
@@ -358,10 +357,10 @@ fn is_valid_skill_name(name: &str) -> bool {
 fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> {
     // Keep the trailing slash to distinguish a child from a sibling whose
     // directory name merely starts with the skill's name, under any scheme.
-    let root = skill_uri.strip_suffix(SKILL_MD)?;
-    let relative = resource_uri.strip_prefix(root)?;
+    let root = normalize_percent_encoding(skill_uri.strip_suffix(SKILL_MD)?);
+    let resource_uri = normalize_percent_encoding(resource_uri);
+    let relative = resource_uri.strip_prefix(&*root)?;
     let (path, suffix) = relative.split_at(relative.find(['?', '#']).unwrap_or(relative.len()));
-    let path = normalize_percent_encoding(path);
     let mut segments = path.split('/');
     // An empty or dot-segment leaf resolves to a directory.
     let file = segments.next_back()?;
@@ -384,11 +383,24 @@ fn manifest_resource_key(skill_uri: &str, resource_uri: &str) -> Option<String> 
     Some(key)
 }
 
-// First percent-encode literal Unicode and ASCII control characters. Then apply
+/// ASCII characters RFC 3986 never allows unencoded; non-ASCII is always encoded.
+const NOT_IN_URI: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'<')
+    .add(b'>')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}');
+
+// First percent-encode characters a URI cannot hold literally. Then apply
 // RFC 3986 §6.2.2: decode unreserved bytes and uppercase the other escapes,
 // keeping reserved delimiters encoded in the comparison key.
 fn normalize_percent_encoding(value: &str) -> Cow<'_, str> {
-    let encoded: Cow<'_, str> = utf8_percent_encode(value, CONTROLS).into();
+    let encoded: Cow<'_, str> = utf8_percent_encode(value, NOT_IN_URI).into();
     let Some((prefix, escaped)) = encoded.split_once('%') else {
         return encoded;
     };
@@ -917,6 +929,55 @@ mod tests {
             let duplicate = SkillValidationError::DuplicateResource(alias.uri.clone());
             skill.resources = SkillResources::Files(vec![entry, file("invoice.md"), alias]);
             assert_eq!(skill.validate(), Err(duplicate));
+        }
+
+        #[test]
+        fn accepts_resources_that_spell_the_skill_root_differently() {
+            let uri = "skill://team/r%C3%A9sum%C3%A9/SKILL.md";
+            for resource in [
+                "skill://team/r%c3%a9sum%c3%a9/refs/guide.md",
+                "skill://team/résumé/refs/guide.md",
+            ] {
+                let skill = Skill::new(
+                    uri,
+                    SkillFrontmatter::new("résumé", "Résumé templates"),
+                    SkillResources::Files(vec![
+                        SkillResource::from_bytes(uri, b""),
+                        SkillResource::from_bytes(resource, b""),
+                    ]),
+                );
+                assert_eq!(skill.validate(), Ok(()), "{resource}");
+            }
+        }
+
+        #[test]
+        fn rejects_a_skill_md_entry_spelled_differently_from_the_skill_uri() {
+            let skill = Skill::new(
+                "skill://team/r%C3%A9sum%C3%A9/SKILL.md",
+                SkillFrontmatter::new("résumé", "Résumé templates"),
+                SkillResources::Files(vec![SkillResource::from_bytes(
+                    "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
+                    b"",
+                )]),
+            );
+            assert!(matches!(
+                skill.validate(),
+                Err(SkillValidationError::MissingSkillMd(_))
+            ));
+        }
+
+        #[test]
+        fn rejects_a_literal_space_alias_of_an_encoded_file() {
+            let file =
+                |path: &str| SkillResource::from_bytes(format!("skill://acme/billing/{path}"), b"");
+            let mut skill = billing_skill();
+            let alias = file("my notes.md");
+            skill.resources =
+                SkillResources::Files(vec![file("SKILL.md"), file("my%20notes.md"), alias.clone()]);
+            assert_eq!(
+                skill.validate(),
+                Err(SkillValidationError::DuplicateResource(alias.uri))
+            );
         }
 
         #[test]
