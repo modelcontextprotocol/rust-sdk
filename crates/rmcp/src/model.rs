@@ -5115,7 +5115,9 @@ impl ServerResult {
     ///
     /// `ttlMs` and `cacheScope` did not exist before that version, so the
     /// server handler calls this before responding to a peer that negotiated
-    /// an older one, even when the handler set them explicitly.
+    /// an older one, even when the handler set them explicitly. Unlike
+    /// [`Self::fill_missing_cache_hints`], it ignores `resultType`, because
+    /// an older peer has no use for the hints on any result.
     ///
     /// # Examples
     ///
