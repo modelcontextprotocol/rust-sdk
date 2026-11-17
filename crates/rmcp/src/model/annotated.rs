@@ -3,6 +3,7 @@
 //! The `Annotations` struct carries optional hints about audience, priority, and freshness.
 //! Individual content/resource types embed `annotations: Option<Annotations>` directly.
 
+#[cfg(feature = "chrono")]
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,8 @@ impl Annotations {
     /// # Panics
     ///
     /// Panics if `priority` is not in the inclusive range `0.0..=1.0`.
+    #[cfg(feature = "chrono")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "chrono")))]
     pub fn for_resource(priority: f32, timestamp: DateTime<Utc>) -> Self {
         assert!(
             (0.0..=1.0).contains(&priority),
@@ -56,20 +59,22 @@ impl Annotations {
     }
 
     /// Sets `lastModified` from a typed timestamp, serialized as RFC 3339.
+    #[cfg(feature = "chrono")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "chrono")))]
     pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.last_modified = Some(timestamp.to_rfc3339());
         self
     }
 
     /// Sets `lastModified` to the current time, serialized as RFC 3339.
-    pub fn with_timestamp_now(self) -> Self {
-        self.with_timestamp(Utc::now())
+    pub fn with_timestamp_now(mut self) -> Self {
+        self.last_modified = Some(crate::time::now_rfc3339());
+        self
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
     use serde_json::json;
 
     use super::*;
@@ -110,7 +115,20 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_now_is_rfc3339_in_utc() {
+        let annotations = Annotations::default().with_timestamp_now();
+        let value = annotations.last_modified.expect("lastModified is set");
+        assert!(value.ends_with("+00:00"), "{value}");
+        value
+            .parse::<jiff::Timestamp>()
+            .expect("RFC 3339 timestamp");
+    }
+
+    #[cfg(feature = "chrono")]
+    #[test]
     fn timestamp_round_trips_as_rfc3339_string() {
+        use chrono::TimeZone;
+
         let timestamp = Utc.with_ymd_and_hms(2025, 1, 12, 15, 0, 58).unwrap();
         let annotations = Annotations::default().with_timestamp(timestamp);
 

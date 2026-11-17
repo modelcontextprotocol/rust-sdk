@@ -23,6 +23,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `client` | Client functionality | |
 | `macros` | `#[tool]` / `#[prompt]` macros (re-exports [`rmcp-macros`](../rmcp-macros)) | ✅ |
 | `schemars` | JSON Schema generation for tool definitions | |
+| `chrono` | `chrono::DateTime` arguments for `Annotations::for_resource` and `with_timestamp`, and schemars' `chrono04` support | ✅ |
 | `auth` | OAuth 2.0 authentication support | |
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |

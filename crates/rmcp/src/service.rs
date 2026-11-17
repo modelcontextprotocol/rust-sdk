@@ -89,7 +89,7 @@ pub enum ServiceError {
     SubscriptionLagged { capacity: usize },
     #[error("task cancelled for reason {}", reason.as_deref().unwrap_or("<unknown>"))]
     Cancelled { reason: Option<String> },
-    #[error("request timeout after {}", chrono::Duration::from_std(*timeout).unwrap_or_default())]
+    #[error("request timeout after {}", crate::time::Iso8601Duration(*timeout))]
     Timeout { timeout: Duration },
     /// The peer kept returning `input_required` beyond the configured round cap.
     #[error("input_required did not complete within {max_rounds} MRTR rounds")]

@@ -782,7 +782,7 @@ impl RequestStateCodec {
     }
 
     fn now_ms() -> i64 {
-        chrono::Utc::now().timestamp_millis()
+        crate::time::now_unix_millis()
     }
 }
 
