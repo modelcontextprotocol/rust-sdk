@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.10.0...rmcp-macros-v3.11.0) - 2026-11-17
+
+### Fixed
+
+- *(client)* keep private scope when merging pages ([#1463](https://github.com/modelcontextprotocol/rust-sdk/pull/1463))
+
+### Other
+
+- add polymarket-agent and tokio-prompt-orchestrator to built with rmcp list ([#1459](https://github.com/modelcontextprotocol/rust-sdk/pull/1459))
+
 ## [3.10.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v3.9.0...rmcp-macros-v3.10.0) - 2026-11-12
 
 ### Other
