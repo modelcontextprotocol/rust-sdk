@@ -1,10 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use futures::SinkExt;
-use serde::{
-    Serialize,
-    de::{DeserializeOwned, IgnoredAny},
-};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
@@ -226,12 +223,9 @@ where
 
 /// Recover a correlatable request id from a truncated top-level JSON object.
 ///
-/// The scanner returns as soon as it has consumed complete `id` and string
-/// `method` fields, so the remainder of the oversized object does not need to
-/// be buffered or parsed. Each JSON token is still decoded by serde, including
-/// string escapes. Seeing a top-level `result` or `error` first classifies the
-/// object as a response and keeps it unanswered. Any incomplete, malformed,
-/// nested-only, or otherwise ambiguous prefix fails closed and remains silent.
+/// Check all retained bytes before using an ID. An expected cutoff can follow
+/// complete, delimited `id` and string `method` fields. Definite syntax errors,
+/// duplicate request fields, and visible response fields keep the line unanswered.
 fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
     fn skip_whitespace(prefix: &[u8], position: &mut usize) {
         while prefix
@@ -242,15 +236,27 @@ fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
         }
     }
 
-    fn take_value<T: DeserializeOwned>(prefix: &[u8], position: &mut usize) -> Option<T> {
+    /// Return `Ok(None)` for an incomplete token at the end of the prefix.
+    fn take_value<T: DeserializeOwned>(
+        prefix: &[u8],
+        position: &mut usize,
+    ) -> Result<Option<T>, serde_json::Error> {
         let mut values =
             serde_json::Deserializer::from_slice(&prefix[*position..]).into_iter::<T>();
-        let value = values.next()?.ok()?;
-        *position += values.byte_offset();
-        Some(value)
+        match values.next().transpose() {
+            Err(error) if error.is_eof() => Ok(None),
+            result => {
+                *position += values.byte_offset();
+                result
+            }
+        }
     }
 
     let prefix = prefix.strip_prefix(UTF8_BOM.as_slice()).unwrap_or(prefix);
+    // An incomplete final code point is consistent with a truncated prefix.
+    if std::str::from_utf8(prefix).is_err_and(|error| error.error_len().is_some()) {
+        return None;
+    }
     let mut position = 0;
     let mut id = None;
     let mut has_method = false;
@@ -263,38 +269,59 @@ fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
 
     loop {
         skip_whitespace(prefix, &mut position);
-        let key = take_value::<String>(prefix, &mut position)?;
-        skip_whitespace(prefix, &mut position);
-        if prefix.get(position) != Some(&b':') {
-            return None;
+        match prefix.get(position) {
+            Some(b'"') => {}
+            None => break,
+            _ => return None,
         }
-        position += 1;
-        skip_whitespace(prefix, &mut position);
-
+        let Some(key) = take_value::<String>(prefix, &mut position).ok()? else {
+            break;
+        };
         match key.as_str() {
-            "id" => id = Some(take_value::<RequestId>(prefix, &mut position)?),
-            "method" => {
-                take_value::<String>(prefix, &mut position)?;
-                has_method = true;
-            }
             "result" | "error" => return None,
-            _ => {
-                take_value::<IgnoredAny>(prefix, &mut position)?;
-            }
+            "id" if id.is_some() => return None,
+            "method" if has_method => return None,
+            _ => {}
         }
 
         skip_whitespace(prefix, &mut position);
         match prefix.get(position) {
-            Some(b',') => {
-                position += 1;
-                if has_method && id.is_some() {
-                    return id;
-                }
-            }
-            Some(b'}') if has_method => return id,
+            Some(b':') => position += 1,
+            None => break,
             _ => return None,
         }
+
+        // Validate nested values and string encoding even for fields we do not use.
+        let Some(value) = take_value::<serde_json::Value>(prefix, &mut position).ok()? else {
+            break;
+        };
+
+        skip_whitespace(prefix, &mut position);
+        let end_of_object = match prefix.get(position) {
+            Some(b',') => false,
+            Some(b'}') => true,
+            None => break,
+            _ => return None,
+        };
+        // Record fields only after seeing their delimiter. A number at EOF
+        // could still be the beginning of a longer request ID.
+        match key.as_str() {
+            "id" => id = Some(serde_json::from_value(value).ok()?),
+            "method" if value.is_string() => has_method = true,
+            "method" => return None,
+            _ => {}
+        }
+        position += 1;
+        if end_of_object {
+            skip_whitespace(prefix, &mut position);
+            if position != prefix.len() {
+                return None;
+            }
+            break;
+        }
     }
+
+    if has_method { id } else { None }
 }
 
 /// What to do once the `fill_buf` borrow has been released.
@@ -730,6 +757,28 @@ mod test {
     use tokio_util::codec::FramedRead;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::malformed_value(br#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"value":]}"#)]
+    #[case::trailing_data(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}[]"#)]
+    #[case::response_field(br#"{"jsonrpc":"2.0","id":1,"method":"ping","result":{}}"#)]
+    #[case::duplicate_id(br#"{"jsonrpc":"2.0","id":1,"method":"ping","id":2}"#)]
+    fn oversized_prefix_rejects_malformed_or_ambiguous_json(#[case] prefix: &[u8]) {
+        assert_eq!(request_id_from_oversized_prefix(prefix), None);
+    }
+
+    #[test]
+    fn oversized_prefix_accepts_a_truncated_code_point_but_rejects_invalid_utf8() {
+        let mut prefix = b"{\"id\":1,\"method\":\"ping\",\"params\":\"\xe2".to_vec();
+        assert_eq!(
+            request_id_from_oversized_prefix(&prefix),
+            Some(RequestId::Number(1))
+        );
+
+        prefix.push(b'a');
+        assert_eq!(request_id_from_oversized_prefix(&prefix), None);
+    }
+
     fn from_async_read<T: DeserializeOwned, R: AsyncRead>(reader: R) -> impl Stream<Item = T> {
         FramedRead::new(reader, JsonRpcMessageCodec::<T>::default()).filter_map(|result| {
             if let Err(e) = &result {
