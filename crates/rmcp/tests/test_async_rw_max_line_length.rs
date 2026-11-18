@@ -13,7 +13,7 @@ use rmcp::{
         async_rw::{AsyncRwTransport, DEFAULT_MAX_LINE_LENGTH},
     },
 };
-use tokio::io::{AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 const MAX: usize = 4 * 1024;
 
@@ -38,8 +38,171 @@ fn transport(max_line_length: usize) -> (DuplexStream, impl Transport<RoleServer
     (peer, transport)
 }
 
+fn transport_with_replies(max_line_length: usize) -> (DuplexStream, impl Transport<RoleServer>) {
+    let (peer, ours) = tokio::io::duplex(64 * 1024);
+    let (read, write) = tokio::io::split(ours);
+    let transport = AsyncRwTransport::<RoleServer, _, _>::new(read, write)
+        .with_max_line_length(max_line_length);
+    (peer, transport)
+}
+
 fn received_id(msg: &rmcp::service::RxJsonRpcMessage<RoleServer>) -> serde_json::Value {
     serde_json::to_value(msg).expect("received message is serializable")["id"].clone()
+}
+
+async fn replies_after_oversized_line(line: String) -> Vec<serde_json::Value> {
+    assert!(line.len() > MAX, "the test input must exceed the limit");
+
+    let (peer, mut transport) = transport_with_replies(MAX);
+    let (mut peer_read, mut peer_write) = tokio::io::split(peer);
+
+    peer_write.write_all(line.as_bytes()).await.unwrap();
+    peer_write.write_all(b"\n").await.unwrap();
+    peer_write
+        .write_all(small_request(999).as_bytes())
+        .await
+        .unwrap();
+    peer_write.write_all(b"\n").await.unwrap();
+    drop(peer_write);
+
+    let next = transport
+        .receive()
+        .await
+        .expect("the request after the oversized line is delivered");
+    assert_eq!(received_id(&next), serde_json::json!(999));
+
+    transport.close().await.unwrap();
+    drop(transport);
+    let mut output = String::new();
+    peer_read.read_to_string(&mut output).await.unwrap();
+    output
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("reply is valid JSON"))
+        .collect()
+}
+
+#[tokio::test]
+async fn oversized_request_with_early_numeric_id_gets_invalid_request() {
+    let replies = replies_after_oversized_line(padded_request(41, MAX * 4)).await;
+
+    assert_eq!(
+        replies,
+        [serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 41,
+            "error": {"code": -32600, "message": "Invalid request"},
+        })]
+    );
+}
+
+#[tokio::test]
+async fn oversized_request_recovers_an_escaped_string_id() {
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":"request-\"\\-\u03bb","method":"ping","params":{{"pad":"{}"}}}}"#,
+        "x".repeat(MAX * 2)
+    );
+    let replies = replies_after_oversized_line(request).await;
+
+    assert_eq!(
+        replies,
+        [serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "request-\"\\-λ",
+            "error": {"code": -32600, "message": "Invalid request"},
+        })]
+    );
+}
+
+#[tokio::test]
+async fn oversized_request_id_survives_cancellation_while_discarding() {
+    let (peer, mut transport) = transport_with_replies(MAX);
+    let (mut peer_read, mut peer_write) = tokio::io::split(peer);
+    let request = padded_request(52, MAX * 4);
+
+    peer_write
+        .write_all(&request.as_bytes()[..MAX * 2])
+        .await
+        .unwrap();
+    {
+        let mut receive = Box::pin(transport.receive());
+        assert!(
+            futures::poll!(&mut receive).is_pending(),
+            "the transport is waiting for the oversized line's delimiter"
+        );
+    }
+
+    peer_write
+        .write_all(&request.as_bytes()[MAX * 2..])
+        .await
+        .unwrap();
+    peer_write.write_all(b"\n").await.unwrap();
+    peer_write
+        .write_all(small_request(999).as_bytes())
+        .await
+        .unwrap();
+    peer_write.write_all(b"\n").await.unwrap();
+    drop(peer_write);
+
+    let next = transport
+        .receive()
+        .await
+        .expect("the request after the oversized line is delivered");
+    assert_eq!(received_id(&next), serde_json::json!(999));
+
+    transport.close().await.unwrap();
+    drop(transport);
+    let mut output = String::new();
+    peer_read.read_to_string(&mut output).await.unwrap();
+    let replies = output
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("reply is valid JSON"))
+        .collect::<Vec<serde_json::Value>>();
+    assert_eq!(
+        replies,
+        [serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 52,
+            "error": {"code": -32600, "message": "Invalid request"},
+        })]
+    );
+}
+
+#[tokio::test]
+async fn oversized_request_with_id_after_retained_prefix_stays_silent() {
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","params":{{"pad":"{}"}},"id":77,"method":"ping"}}"#,
+        "x".repeat(MAX * 2)
+    );
+
+    assert!(replies_after_oversized_line(request).await.is_empty());
+}
+
+#[tokio::test]
+async fn oversized_notification_and_response_stay_silent() {
+    let notification = format!(
+        r#"{{"jsonrpc":"2.0","method":"notifications/initialized","params":{{"pad":"{}"}}}}"#,
+        "x".repeat(MAX * 2)
+    );
+    let response = format!(
+        r#"{{"jsonrpc":"2.0","id":88,"result":{{"pad":"{}"}}}}"#,
+        "x".repeat(MAX * 2)
+    );
+
+    assert!(
+        replies_after_oversized_line(notification).await.is_empty(),
+        "notifications have no request id to correlate"
+    );
+    assert!(
+        replies_after_oversized_line(response).await.is_empty(),
+        "responses must not receive responses"
+    );
+}
+
+#[tokio::test]
+async fn oversized_non_json_input_stays_silent() {
+    let input = format!("not-json {}", "x".repeat(MAX * 2));
+
+    assert!(replies_after_oversized_line(input).await.is_empty());
 }
 
 /// A *valid* message over the limit must be dropped rather than delivered, and
