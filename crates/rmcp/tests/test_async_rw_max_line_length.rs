@@ -178,6 +178,36 @@ async fn oversized_request_with_id_after_retained_prefix_stays_silent() {
 }
 
 #[tokio::test]
+async fn oversized_request_requires_a_complete_numeric_id_at_the_prefix_boundary() {
+    let before_id = r#"{"jsonrpc":"2.0","method":"ping","id":"#;
+    let after_id = r#","params":{"pad":""}}"#;
+    let request = |bytes_before_boundary| {
+        let padding = " ".repeat(MAX - before_id.len() - bytes_before_boundary);
+        format!("{before_id}{padding}1234{after_id}")
+    };
+
+    // The prefix contains the method and only the first two digits of the ID.
+    let truncated = request(2);
+    assert_eq!(&truncated[MAX - 2..MAX + 2], "1234");
+    assert!(
+        replies_after_oversized_line(truncated).await.is_empty(),
+        "a partial number must not be used as a request id"
+    );
+
+    // Keep the same request oversized, but include the entire ID and comma.
+    let complete = request(5);
+    assert_eq!(&complete[MAX - 5..MAX], "1234,");
+    assert_eq!(
+        replies_after_oversized_line(complete).await,
+        [serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1234,
+            "error": {"code": -32600, "message": "Invalid request"},
+        })]
+    );
+}
+
+#[tokio::test]
 async fn oversized_notification_and_response_stay_silent() {
     let notification = format!(
         r#"{{"jsonrpc":"2.0","method":"notifications/initialized","params":{{"pad":"{}"}}}}"#,
