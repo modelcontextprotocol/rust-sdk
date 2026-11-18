@@ -120,8 +120,9 @@ where
 
     /// Override the maximum size of a single incoming line.
     ///
-    /// Defaults to [`DEFAULT_MAX_LINE_LENGTH`]. Lines longer than this are
-    /// dropped and logged rather than buffered, and the connection stays open.
+    /// Defaults to [`DEFAULT_MAX_LINE_LENGTH`]. Lines are logged as soon as they
+    /// exceed this limit and the rest of the line is discarded without buffering.
+    /// The connection stays open.
     /// `usize::MAX` restores the previous unbounded behaviour.
     pub fn with_max_line_length(mut self, max_line_length: usize) -> Self {
         self.max_line_length = max_line_length;
@@ -165,6 +166,10 @@ where
                         newline.map(|_| Step::EndDiscard).unwrap_or(Step::More),
                     )
                 } else if self.line_buf.len().saturating_add(take) > self.max_line_length {
+                    tracing::error!(
+                        max_line_length = self.max_line_length,
+                        "Incoming message exceeded the maximum line length, discarding it"
+                    );
                     let prefix_length = OVERSIZED_LINE_PREFIX_LENGTH.min(self.max_line_length);
                     self.oversized_line_prefix.clear();
                     self.oversized_line_prefix.extend_from_slice(
@@ -412,10 +417,6 @@ where
             match self.read_line().await {
                 LineRead::Line => {}
                 LineRead::Oversized(id) => {
-                    tracing::error!(
-                        max_line_length = self.max_line_length,
-                        "Incoming message exceeded the maximum line length, discarding it"
-                    );
                     if id.is_some() {
                         self.pending_error_response = Some(PendingErrorResponse::Queue(id));
                     }
