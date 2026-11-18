@@ -6,6 +6,11 @@
 //! unterminated or oversized line could grow the process's memory until it was
 //! killed. See https://github.com/modelcontextprotocol/rust-sdk/issues/1030.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use rmcp::{
     RoleServer,
     transport::{
@@ -14,8 +19,34 @@ use rmcp::{
     },
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tracing_subscriber::prelude::*;
 
 const MAX: usize = 4 * 1024;
+
+#[derive(Clone, Default)]
+struct OversizedLineLogs(Arc<AtomicUsize>);
+
+impl OversizedLineLogs {
+    fn count(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for OversizedLineLogs {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let metadata = event.metadata();
+        if metadata.target() == "rmcp::transport::async_rw"
+            && *metadata.level() == tracing::Level::ERROR
+            && metadata.fields().field("max_line_length").is_some()
+        {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 /// A single-line JSON-RPC request padded out to at least `total` bytes.
 fn padded_request(id: u64, total: usize) -> String {
@@ -115,6 +146,10 @@ async fn oversized_request_recovers_an_escaped_string_id() {
 
 #[tokio::test]
 async fn oversized_request_id_survives_cancellation_while_discarding() {
+    let logs = OversizedLineLogs::default();
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(logs.clone()));
+
     let (peer, mut transport) = transport_with_replies(MAX);
     let (mut peer_read, mut peer_write) = tokio::io::split(peer);
     let request = padded_request(52, MAX * 4);
@@ -130,6 +165,7 @@ async fn oversized_request_id_survives_cancellation_while_discarding() {
             "the transport is waiting for the oversized line's delimiter"
         );
     }
+    assert_eq!(logs.count(), 1, "the limit is logged before the newline");
 
     peer_write
         .write_all(&request.as_bytes()[MAX * 2..])
@@ -148,6 +184,7 @@ async fn oversized_request_id_survives_cancellation_while_discarding() {
         .await
         .expect("the request after the oversized line is delivered");
     assert_eq!(received_id(&next), serde_json::json!(999));
+    assert_eq!(logs.count(), 1, "draining the rest of the line adds no log");
 
     transport.close().await.unwrap();
     drop(transport);
@@ -165,6 +202,28 @@ async fn oversized_request_id_survives_cancellation_while_discarding() {
             "error": {"code": -32600, "message": "Invalid request"},
         })]
     );
+}
+
+#[rstest::rstest]
+#[case::unterminated(false)]
+#[case::terminated(true)]
+#[tokio::test]
+async fn oversized_line_is_logged_once_when_peer_closes(#[case] terminated: bool) {
+    let logs = OversizedLineLogs::default();
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(logs.clone()));
+    let (mut peer, mut transport) = transport(MAX);
+
+    peer.write_all(padded_request(53, MAX + 1).as_bytes())
+        .await
+        .unwrap();
+    if terminated {
+        peer.write_all(b"\n").await.unwrap();
+    }
+    peer.shutdown().await.unwrap();
+
+    assert!(transport.receive().await.is_none());
+    assert_eq!(logs.count(), 1);
 }
 
 #[tokio::test]
