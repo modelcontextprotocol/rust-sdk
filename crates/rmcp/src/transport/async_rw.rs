@@ -1,7 +1,10 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use futures::SinkExt;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{
+    Serialize,
+    de::{DeserializeOwned, IgnoredAny},
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
@@ -14,7 +17,7 @@ use tokio_util::{
 
 use super::{IntoTransport, Transport};
 use crate::{
-    model::ErrorData,
+    model::{ErrorData, RequestId},
     service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
 };
 
@@ -57,6 +60,11 @@ pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpc
 /// HTTP is also acceptable over stdio.
 pub const DEFAULT_MAX_LINE_LENGTH: usize = 16 * 1024 * 1024;
 
+/// Maximum prefix retained while draining an oversized line. A small prefix is
+/// enough to recover the conventional early `id` and `method` fields without
+/// undermining the line-length bound.
+const OVERSIZED_LINE_PREFIX_LENGTH: usize = 8 * 1024;
+
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     read: BufReader<R>,
     line_buf: Vec<u8>,
@@ -65,13 +73,17 @@ pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     /// newline is seen. Lives on the struct rather than in `read_line` because
     /// `receive` is polled inside a `select!` and can be cancelled mid-discard.
     discarding: bool,
+    /// Bounded prefix of the oversized line currently being discarded. This
+    /// also lives across cancelled `receive` calls so a correlatable request
+    /// can still receive an Invalid Request response after the line is drained.
+    oversized_line_prefix: Vec<u8>,
     write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
     pending_error_response: Option<PendingErrorResponse>,
     _role: PhantomData<fn() -> Role>,
 }
 
 enum PendingErrorResponse {
-    Queue,
+    Queue(Option<RequestId>),
     Flush,
 }
 
@@ -80,7 +92,7 @@ enum LineRead {
     /// A whole `\n`-terminated line is in `line_buf`.
     Line,
     /// The line exceeded `max_line_length`; it has been dropped.
-    Oversized,
+    Oversized(Option<RequestId>),
     /// The peer closed the stream.
     Eof,
     Io(std::io::Error),
@@ -102,6 +114,7 @@ where
             line_buf: Vec::new(),
             max_line_length: DEFAULT_MAX_LINE_LENGTH,
             discarding: false,
+            oversized_line_prefix: Vec::new(),
             write,
             pending_error_response: None,
             _role: PhantomData,
@@ -155,6 +168,14 @@ where
                         newline.map(|_| Step::EndDiscard).unwrap_or(Step::More),
                     )
                 } else if self.line_buf.len().saturating_add(take) > self.max_line_length {
+                    let prefix_length = OVERSIZED_LINE_PREFIX_LENGTH.min(self.max_line_length);
+                    self.oversized_line_prefix.clear();
+                    self.oversized_line_prefix.extend_from_slice(
+                        &self.line_buf[..self.line_buf.len().min(prefix_length)],
+                    );
+                    let remaining = prefix_length - self.oversized_line_prefix.len();
+                    self.oversized_line_prefix
+                        .extend_from_slice(&available[..take.min(remaining)]);
                     self.line_buf.clear();
                     (
                         take,
@@ -182,13 +203,96 @@ where
             match step {
                 Step::Line => return LineRead::Line,
                 Step::More => {}
-                Step::EndDiscard => self.discarding = false,
-                Step::Oversized => return LineRead::Oversized,
+                Step::EndDiscard => {
+                    self.discarding = false;
+                    return LineRead::Oversized(self.finish_oversized_line());
+                }
+                Step::Oversized => {
+                    return LineRead::Oversized(self.finish_oversized_line());
+                }
                 Step::OversizedNeedsDiscard => {
                     self.discarding = true;
-                    return LineRead::Oversized;
                 }
             }
+        }
+    }
+
+    fn finish_oversized_line(&mut self) -> Option<RequestId> {
+        let request_id = request_id_from_oversized_prefix(&self.oversized_line_prefix);
+        self.oversized_line_prefix.clear();
+        request_id
+    }
+}
+
+/// Recover a correlatable request id from a truncated top-level JSON object.
+///
+/// The scanner returns as soon as it has consumed complete `id` and string
+/// `method` fields, so the remainder of the oversized object does not need to
+/// be buffered or parsed. Each JSON token is still decoded by serde, including
+/// string escapes. Seeing a top-level `result` or `error` first classifies the
+/// object as a response and keeps it unanswered. Any incomplete, malformed,
+/// nested-only, or otherwise ambiguous prefix fails closed and remains silent.
+fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
+    fn skip_whitespace(prefix: &[u8], position: &mut usize) {
+        while prefix
+            .get(*position)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            *position += 1;
+        }
+    }
+
+    fn take_value<T: DeserializeOwned>(prefix: &[u8], position: &mut usize) -> Option<T> {
+        let mut values =
+            serde_json::Deserializer::from_slice(&prefix[*position..]).into_iter::<T>();
+        let value = values.next()?.ok()?;
+        *position += values.byte_offset();
+        Some(value)
+    }
+
+    let prefix = prefix.strip_prefix(UTF8_BOM.as_slice()).unwrap_or(prefix);
+    let mut position = 0;
+    let mut id = None;
+    let mut has_method = false;
+
+    skip_whitespace(prefix, &mut position);
+    if prefix.get(position) != Some(&b'{') {
+        return None;
+    }
+    position += 1;
+
+    loop {
+        skip_whitespace(prefix, &mut position);
+        let key = take_value::<String>(prefix, &mut position)?;
+        skip_whitespace(prefix, &mut position);
+        if prefix.get(position) != Some(&b':') {
+            return None;
+        }
+        position += 1;
+        skip_whitespace(prefix, &mut position);
+
+        match key.as_str() {
+            "id" => id = Some(take_value::<RequestId>(prefix, &mut position)?),
+            "method" => {
+                take_value::<String>(prefix, &mut position)?;
+                has_method = true;
+            }
+            "result" | "error" => return None,
+            _ => {
+                take_value::<IgnoredAny>(prefix, &mut position)?;
+            }
+        }
+
+        skip_whitespace(prefix, &mut position);
+        match prefix.get(position) {
+            Some(b',') => {
+                position += 1;
+                if has_method && id.is_some() {
+                    return id;
+                }
+            }
+            Some(b'}') if has_method => return id,
+            _ => return None,
         }
     }
 }
@@ -254,10 +358,10 @@ where
             if let Some(state) = self.pending_error_response.as_mut() {
                 let mut write = self.write.lock().await;
                 let framed = write.as_mut()?;
-                if matches!(state, PendingErrorResponse::Queue) {
+                if let PendingErrorResponse::Queue(id) = state {
                     let response = TxJsonRpcMessage::<Role>::error(
                         ErrorData::invalid_request("Invalid request", None),
-                        None,
+                        id.clone(),
                     );
                     if framed.feed(response).await.is_err() {
                         return None;
@@ -280,11 +384,14 @@ where
             // incoming requests under concurrent response load.
             match self.read_line().await {
                 LineRead::Line => {}
-                LineRead::Oversized => {
+                LineRead::Oversized(id) => {
                     tracing::error!(
                         max_line_length = self.max_line_length,
                         "Incoming message exceeded the maximum line length, discarding it"
                     );
+                    if id.is_some() {
+                        self.pending_error_response = Some(PendingErrorResponse::Queue(id));
+                    }
                     continue;
                 }
                 // EOF. Any bytes still in `line_buf` are an incomplete trailing
@@ -327,7 +434,7 @@ where
                             // real protocol error rather than unparsable input, so surface it with
                             // an Invalid Request response instead of silently dropping it.
                             tracing::debug!("Protocol error on incoming message: {e}");
-                            self.pending_error_response = Some(PendingErrorResponse::Queue);
+                            self.pending_error_response = Some(PendingErrorResponse::Queue(None));
                         }
                     }
                 }
