@@ -52,6 +52,23 @@ For enterprise-managed authorization, enable `auth-enterprise-managed` and a TLS
 backend such as `reqwest`. See the [EMA/XAA guide](../../docs/OAUTH_SUPPORT.md#enterprise-managed-authorization-emaxaa)
 for client authentication and an MCP connection example.
 
+### Building without chrono
+
+The `chrono` feature is on by default. To leave chrono out (for example because of
+[RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)), turn off the
+default features and list the ones you use:
+
+```toml
+[dependencies]
+rmcp = { version = "3", default-features = false, features = ["base64", "macros", "server", "transport-io"] }
+```
+
+Without `chrono`, `Annotations::for_resource` and `Annotations::with_timestamp` are not
+available; `Annotations::with_timestamp_now` and the public `last_modified` field (an RFC 3339
+string) still work. The `auth` features still pull chrono in through `oauth2` 5, and
+`cargo tree -i chrono` shows whether anything else does. `chrono` is planned to leave the
+default features in the next major release.
+
 ## Transports
 
 The transport layer is pluggable. Two built-in pairs cover the most common cases:
