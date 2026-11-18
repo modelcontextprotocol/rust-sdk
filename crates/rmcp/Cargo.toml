@@ -50,6 +50,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 async-trait = { version = "0.1.89", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+serde_path_to_error = { version = "0.1", optional = true }
 thiserror = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt", "time"] }
 futures = "0.3"
@@ -144,7 +145,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = tr
 [features]
 default = ["base64", "macros", "server"]
 local = ["rmcp-macros?/local"]
-client = ["dep:tokio-stream"]
+client = ["dep:serde_path_to_error", "dep:tokio-stream"]
 server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
