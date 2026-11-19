@@ -7,7 +7,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    Router, body::Bytes, extract::State, http::StatusCode, response::IntoResponse, routing::post,
+    Router,
+    body::Bytes,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
 };
 use http::{HeaderName, HeaderValue};
 use hyper_util::rt::TokioIo;
@@ -543,6 +548,58 @@ async fn test_unix_socket_notification_server_error_is_rejected() -> anyhow::Res
             assert!(msg.contains("500"), "expected 500 in error, got: {msg}");
         }
         other => panic!("expected UnexpectedServerResponse(500), got: {other:?}"),
+    }
+    Ok(())
+}
+
+/// A 404 GET carrying a session ID means the server terminated the session
+/// (transports spec, Session Management); without a session it stays generic.
+#[tokio::test]
+async fn test_unix_socket_get_404_maps_to_session_expired_only_with_session() -> anyhow::Result<()>
+{
+    let dir = std::env::temp_dir().join(format!("rmcp-test-get-404-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let socket_path = dir.join("mcp.sock");
+    let _ = std::fs::remove_file(&socket_path);
+
+    async fn not_found_handler() -> impl IntoResponse {
+        (StatusCode::NOT_FOUND, "")
+    }
+
+    let app = Router::new().route("/mcp", get(not_found_handler));
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    let server_handle = spawn_unix_server(listener, app);
+
+    let socket_str = socket_path.to_str().unwrap();
+    let uri = "http://localhost/mcp";
+    let client = UnixSocketHttpClient::new(socket_str, uri);
+    let get = |session: Option<&'static str>| {
+        client.get_stream(
+            Arc::from(uri),
+            session.map(Arc::from),
+            None,
+            None,
+            HashMap::new(),
+        )
+    };
+    let with_session = get(Some("unix-test-session")).await;
+    let without_session = get(None).await;
+
+    server_handle.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_dir(&dir);
+
+    assert!(
+        matches!(&with_session, Err(StreamableHttpError::SessionExpired)),
+        "expected SessionExpired, got: {:?}",
+        with_session.as_ref().err().map(ToString::to_string)
+    );
+    match without_session {
+        Err(StreamableHttpError::UnexpectedServerResponse(msg)) => {
+            assert!(msg.contains("404"), "expected 404 in error, got: {msg}");
+        }
+        Err(other) => panic!("expected UnexpectedServerResponse(404), got: {other:?}"),
+        Ok(_) => panic!("expected UnexpectedServerResponse(404), got an SSE stream"),
     }
     Ok(())
 }
