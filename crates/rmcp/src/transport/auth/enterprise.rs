@@ -31,7 +31,7 @@
 //!     "https://mcp.example", refresh,
 //! ).with_scopes(["files.read"]).exchange(&http, &http).await?;
 //! // Use token.access_token only for the approved MCP resource; never log it.
-//! // token.scopes contains the final granted scopes, which may be narrower.
+//! // token.scopes contains the final scopes granted by the resource AS, which may differ from those requested.
 //! # Ok(()) }
 //! ```
 
