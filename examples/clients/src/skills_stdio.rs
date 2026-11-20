@@ -127,11 +127,17 @@ async fn read_verified(
 /// Parse the YAML block between the leading `---` lines of a `SKILL.md`.
 fn parse_frontmatter(bytes: &[u8]) -> Result<SkillFrontmatter> {
     let text = std::str::from_utf8(bytes).context("SKILL.md is not UTF-8")?;
-    let rest = text
-        .strip_prefix("---\n")
-        .ok_or_else(|| anyhow!("SKILL.md does not start with a frontmatter block"))?;
-    let (yaml, _) = rest
-        .split_once("\n---\n")
-        .ok_or_else(|| anyhow!("SKILL.md frontmatter has no closing ---"))?;
-    Ok(yaml_serde::from_str(yaml)?)
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        bail!("SKILL.md does not start with a frontmatter block");
+    }
+    let mut yaml = String::new();
+    for line in lines {
+        if line.trim_end() == "---" {
+            return Ok(yaml_serde::from_str(&yaml)?);
+        }
+        yaml.push_str(line);
+        yaml.push('\n');
+    }
+    bail!("SKILL.md frontmatter has no closing ---")
 }
