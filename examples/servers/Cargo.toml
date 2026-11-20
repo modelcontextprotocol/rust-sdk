@@ -15,6 +15,7 @@ rmcp = { workspace = true, features = [
     "elicitation",
     "request-state",
     "schemars",
+    "skills-fs",
 ] }
 tokio = { version = "1", features = [
     "macros",
@@ -123,3 +124,7 @@ path = "src/mrtr.rs"
 [[example]]
 name = "servers_subscriptions_streamhttp"
 path = "src/subscriptions_streamhttp.rs"
+
+[[example]]
+name = "servers_skills_stdio"
+path = "src/skills_stdio.rs"

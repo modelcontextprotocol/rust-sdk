@@ -28,6 +28,8 @@ tower = "0.5"
 axum = "0.8"
 reqwest = "0.13.2"
 clap = { version = "4.0", features = ["derive"] }
+base64 = "0.23"
+yaml_serde = "0.10"
 
 [[example]]
 name = "clients_git_stdio"
@@ -69,3 +71,7 @@ path = "src/task_stdio.rs"
 [[example]]
 name = "clients_subscriptions_streamhttp"
 path = "src/subscriptions_streamhttp.rs"
+
+[[example]]
+name = "clients_skills_stdio"
+path = "src/skills_stdio.rs"
