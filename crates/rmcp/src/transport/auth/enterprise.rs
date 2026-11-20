@@ -796,11 +796,14 @@ impl ResourceTokenResponse {
         }
         // The AS has the final say on scope; without a `scope` field, the ID-JAG's scopes apply (RFC 6749 §5.1).
         let scopes = if let Some(scope) = self.scope.as_deref() {
-            parse_scope(scope)
-                .ok_or_else(|| invalid("malformed or duplicate scopes"))?
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
+            let scopes =
+                parse_scope(scope).ok_or_else(|| invalid("malformed or duplicate scopes"))?;
+            // Count only; scope values are never logged.
+            let added = scopes.iter().filter(|s| !granted.contains(**s)).count();
+            if added > 0 {
+                tracing::debug!(added, "resource AS granted scopes beyond the ID-JAG");
+            }
+            scopes.into_iter().map(str::to_owned).collect()
         } else {
             granted
         };
