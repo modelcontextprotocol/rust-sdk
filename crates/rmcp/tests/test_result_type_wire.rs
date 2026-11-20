@@ -9,8 +9,10 @@
 //!   shape (round-tripping a legacy result never adds the field).
 
 use rmcp::model::{
-    CallToolResult, CompleteResult, ContentBlock, EmptyResult, GetPromptResult, ListToolsResult,
-    ReadResourceResult, ResultType, ServerResult,
+    CallToolResult, CompleteResult, ContentBlock, EmptyResult, GetPromptResult, GetSkillResult,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListSkillsResult,
+    ListToolsResult, ReadResourceResult, ResultType, ServerResult, Skill, SkillFrontmatter,
+    SkillResources,
 };
 use serde_json::json;
 
@@ -164,6 +166,35 @@ fn strip_removes_complete_result_type_from_paginated_result() {
 
     let value = serde_json::to_value(result).expect("serialize ServerResult");
     assert_eq!(value, json!({ "tools": [] }));
+}
+
+#[test]
+fn strip_removes_cache_hints_from_every_cacheable_result() {
+    let skill = Skill::new(
+        "skill://demo/SKILL.md",
+        SkillFrontmatter::new("demo", "Demo skill"),
+        SkillResources::Files(vec![]),
+    );
+    let results = [
+        ServerResult::ListToolsResult(ListToolsResult::default().with_ttl_ms(60_000)),
+        ServerResult::ListPromptsResult(ListPromptsResult::default().with_ttl_ms(60_000)),
+        ServerResult::ListResourcesResult(ListResourcesResult::default().with_ttl_ms(60_000)),
+        ServerResult::ListResourceTemplatesResult(
+            ListResourceTemplatesResult::default().with_ttl_ms(60_000),
+        ),
+        ServerResult::ReadResourceResult(ReadResourceResult::new(vec![]).with_ttl_ms(60_000)),
+        ServerResult::ListSkillsResult(ListSkillsResult::default().with_ttl_ms(60_000)),
+        ServerResult::GetSkillResult(GetSkillResult::new(skill).with_ttl_ms(60_000)),
+    ];
+
+    for mut result in results {
+        result.fill_missing_cache_hints();
+        result.strip_cache_hints_for_legacy_peer();
+
+        let value = serde_json::to_value(&result).expect("serialize ServerResult");
+        assert!(value.get("ttlMs").is_none(), "{value}");
+        assert!(value.get("cacheScope").is_none(), "{value}");
+    }
 }
 
 #[test]

@@ -5110,6 +5110,40 @@ impl ServerResult {
         result_type.take_if(|result_type| result_type.is_complete());
     }
 
+    /// Drop the SEP-2549 caching hints so the result keeps the wire shape
+    /// that predates protocol version `2026-07-28`.
+    ///
+    /// `ttlMs` and `cacheScope` did not exist before that version, so the
+    /// server handler calls this before responding to a peer that negotiated
+    /// an older one, even when the handler set them explicitly. Unlike
+    /// [`Self::fill_missing_cache_hints`], it ignores `resultType`, because
+    /// an older peer has no use for the hints on any result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::model::{CacheScope, ListToolsResult, ServerResult};
+    ///
+    /// let page = ListToolsResult {
+    ///     ttl_ms: Some(60_000),
+    ///     cache_scope: Some(CacheScope::Public),
+    ///     ..Default::default()
+    /// };
+    ///
+    /// let mut result = ServerResult::ListToolsResult(page);
+    /// result.strip_cache_hints_for_legacy_peer();
+    ///
+    /// let json = serde_json::to_value(&result).unwrap();
+    /// assert!(json.get("ttlMs").is_none());
+    /// assert!(json.get("cacheScope").is_none());
+    /// ```
+    pub fn strip_cache_hints_for_legacy_peer(&mut self) {
+        if let Some((_, ttl_ms, cache_scope)) = self.cache_hints_mut() {
+            *ttl_ms = None;
+            *cache_scope = None;
+        }
+    }
+
     /// Drop a non-object tool `outputSchema` or `structuredContent` so the
     /// result keeps the wire shape that predates protocol version `2026-07-28`.
     ///
@@ -5194,25 +5228,8 @@ impl ServerResult {
     /// assert_eq!(result.cache_scope, Some(CacheScope::Private));
     /// ```
     pub fn fill_missing_cache_hints(&mut self) {
-        let (result_type, ttl_ms, cache_scope) = match self {
-            ServerResult::ListToolsResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
-            ServerResult::ListPromptsResult(r) => {
-                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
-            }
-            ServerResult::ListResourcesResult(r) => {
-                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
-            }
-            ServerResult::ListResourceTemplatesResult(r) => {
-                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
-            }
-            ServerResult::ReadResourceResult(r) => {
-                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
-            }
-            ServerResult::ListSkillsResult(r) => {
-                (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope)
-            }
-            ServerResult::GetSkillResult(r) => (&r.result_type, &mut r.ttl_ms, &mut r.cache_scope),
-            _ => return,
+        let Some((result_type, ttl_ms, cache_scope)) = self.cache_hints_mut() else {
+            return;
         };
         // Only complete results are cacheable; the spec treats an absent
         // `resultType` as complete.
@@ -5221,6 +5238,31 @@ impl ServerResult {
         }
         ttl_ms.get_or_insert(0);
         cache_scope.get_or_insert(CacheScope::Private);
+    }
+
+    /// The `resultType` and SEP-2549 caching hints of a cacheable result.
+    fn cache_hints_mut(
+        &mut self,
+    ) -> Option<(
+        &Option<ResultType>,
+        &mut Option<u64>,
+        &mut Option<CacheScope>,
+    )> {
+        macro_rules! fields {
+            ($r:ident) => {
+                Some((&$r.result_type, &mut $r.ttl_ms, &mut $r.cache_scope))
+            };
+        }
+        match self {
+            ServerResult::ListToolsResult(r) => fields!(r),
+            ServerResult::ListPromptsResult(r) => fields!(r),
+            ServerResult::ListResourcesResult(r) => fields!(r),
+            ServerResult::ListResourceTemplatesResult(r) => fields!(r),
+            ServerResult::ReadResourceResult(r) => fields!(r),
+            ServerResult::ListSkillsResult(r) => fields!(r),
+            ServerResult::GetSkillResult(r) => fields!(r),
+            _ => None,
+        }
     }
 }
 
