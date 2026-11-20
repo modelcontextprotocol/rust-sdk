@@ -20,11 +20,11 @@ use crate::{
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
         CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
-        CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
-        DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
-        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequest,
-        GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, GetTaskParams,
-        GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
+        CompletionContext, CompletionInfo, DEFAULT_LIST_MAX_PAGES, DEFAULT_MRTR_MAX_ROUNDS,
+        DiscoverRequest, DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta,
+        GetPromptRequest, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        GetSkillRequest, GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult,
+        GetTaskParams, GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
         InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
         JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
@@ -2015,7 +2015,17 @@ pub struct MergedList<T> {
 }
 
 /// Follows `nextCursor` from the first page to the last and merges the pages.
+///
+/// Only a missing `nextCursor` ends the walk: a cursor is opaque, so a repeated
+/// or empty one is a reason to ask for the next page, not to stop. A peer that
+/// never drops the field would loop forever and grow `items` without bound, so
+/// the walk fails with [`ServiceError::ListPaginationExceeded`] once it has read
+/// `max_pages` pages and the last of them still carried a cursor. A peer that
+/// keeps returning the same page is bounded by that cap rather than detected, so
+/// this must not be tightened into a page-equality stop. `max_pages` is
+/// the number of pages the walk may read, so 0 fails before the first request.
 async fn list_all_pages<P, Fut>(
+    max_pages: usize,
     mut list_page: impl FnMut(Option<PaginatedRequestParams>) -> Fut,
 ) -> Result<MergedList<P::Item>, ServiceError>
 where
@@ -2027,25 +2037,41 @@ where
         ttl_ms.and_then(|ttl_ms| Instant::now().checked_add(Duration::from_millis(ttl_ms)))
     };
 
-    let page = list_page(params(None)).await?;
-    let mut expires_at = expiry(page.ttl_ms());
-    let mut cache_scope = page.cache_scope();
-    let (mut items, mut cursor) = page.into_page();
-    while cursor.is_some() {
+    let mut items = Vec::new();
+    let mut expires_at = None;
+    let mut cache_scope = None;
+    let mut cursor = None;
+    let mut pages_read = 0;
+    loop {
+        if pages_read == max_pages {
+            return Err(ServiceError::ListPaginationExceeded { max_pages });
+        }
         let page = list_page(params(cursor)).await?;
-        expires_at = expires_at
-            .zip(expiry(page.ttl_ms()))
-            .map(|(merged, page)| merged.min(page));
-        cache_scope = match (cache_scope, page.cache_scope()) {
-            (Some(CacheScope::Private), _) | (_, Some(CacheScope::Private)) => {
-                Some(CacheScope::Private)
-            }
-            (Some(CacheScope::Public), Some(CacheScope::Public)) => Some(CacheScope::Public),
-            _ => None,
-        };
+        let page_expiry = expiry(page.ttl_ms());
+        let page_scope = page.cache_scope();
+        // The first page seeds the merged hints; later pages narrow them.
+        if pages_read == 0 {
+            expires_at = page_expiry;
+            cache_scope = page_scope;
+        } else {
+            expires_at = expires_at
+                .zip(page_expiry)
+                .map(|(merged, page)| merged.min(page));
+            cache_scope = match (cache_scope, page_scope) {
+                (Some(CacheScope::Private), _) | (_, Some(CacheScope::Private)) => {
+                    Some(CacheScope::Private)
+                }
+                (Some(CacheScope::Public), Some(CacheScope::Public)) => Some(CacheScope::Public),
+                _ => None,
+            };
+        }
+        pages_read += 1;
         let (page_items, next_cursor) = page.into_page();
         items.extend(page_items);
         cursor = next_cursor;
+        if cursor.is_none() {
+            break;
+        }
     }
 
     let ttl_ms = expires_at.map(|expires_at| {
@@ -2060,7 +2086,12 @@ where
 }
 
 impl Peer<RoleClient> {
-    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_all_tools`] until every page is listed.
+    ///
+    /// The walk reads at most [`DEFAULT_LIST_MAX_PAGES`] pages and fails with
+    /// [`ServiceError::ListPaginationExceeded`] instead of following a cursor that
+    /// never ends; [`Peer<RoleClient>::list_all_tools_with_max_pages`] raises that cap for a
+    /// list that legitimately runs longer.
     pub async fn list_all_tools(&self) -> Result<Vec<crate::model::Tool>, ServiceError> {
         Ok(self.list_all_tools_with_cache_hint().await?.items)
     }
@@ -2069,10 +2100,28 @@ impl Peer<RoleClient> {
     pub async fn list_all_tools_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
-        list_all_pages(|params| self.list_tools(params)).await
+        self.list_all_tools_with_max_pages(DEFAULT_LIST_MAX_PAGES)
+            .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed.
+    /// Like [`Peer<RoleClient>::list_all_tools_with_cache_hint`], with an explicit cap
+    /// on how many pages the walk may read.
+    ///
+    /// Returns [`ServiceError::ListPaginationExceeded`] if the peer keeps returning a
+    /// `nextCursor` after `max_pages` pages.
+    pub async fn list_all_tools_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
+        list_all_pages(max_pages, |params| self.list_tools(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_all_prompts`] until every page is listed.
+    ///
+    /// The walk reads at most [`DEFAULT_LIST_MAX_PAGES`] pages and fails with
+    /// [`ServiceError::ListPaginationExceeded`] instead of following a cursor that
+    /// never ends; [`Peer<RoleClient>::list_all_prompts_with_max_pages`] raises that cap for a
+    /// list that legitimately runs longer.
     pub async fn list_all_prompts(&self) -> Result<Vec<crate::model::Prompt>, ServiceError> {
         Ok(self.list_all_prompts_with_cache_hint().await?.items)
     }
@@ -2081,10 +2130,28 @@ impl Peer<RoleClient> {
     pub async fn list_all_prompts_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
-        list_all_pages(|params| self.list_prompts(params)).await
+        self.list_all_prompts_with_max_pages(DEFAULT_LIST_MAX_PAGES)
+            .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed.
+    /// Like [`Peer<RoleClient>::list_all_prompts_with_cache_hint`], with an explicit cap
+    /// on how many pages the walk may read.
+    ///
+    /// Returns [`ServiceError::ListPaginationExceeded`] if the peer keeps returning a
+    /// `nextCursor` after `max_pages` pages.
+    pub async fn list_all_prompts_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
+        list_all_pages(max_pages, |params| self.list_prompts(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_all_resources`] until every page is listed.
+    ///
+    /// The walk reads at most [`DEFAULT_LIST_MAX_PAGES`] pages and fails with
+    /// [`ServiceError::ListPaginationExceeded`] instead of following a cursor that
+    /// never ends; [`Peer<RoleClient>::list_all_resources_with_max_pages`] raises that cap for a
+    /// list that legitimately runs longer.
     pub async fn list_all_resources(&self) -> Result<Vec<crate::model::Resource>, ServiceError> {
         Ok(self.list_all_resources_with_cache_hint().await?.items)
     }
@@ -2093,10 +2160,28 @@ impl Peer<RoleClient> {
     pub async fn list_all_resources_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
-        list_all_pages(|params| self.list_resources(params)).await
+        self.list_all_resources_with_max_pages(DEFAULT_LIST_MAX_PAGES)
+            .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed.
+    /// Like [`Peer<RoleClient>::list_all_resources_with_cache_hint`], with an explicit cap
+    /// on how many pages the walk may read.
+    ///
+    /// Returns [`ServiceError::ListPaginationExceeded`] if the peer keeps returning a
+    /// `nextCursor` after `max_pages` pages.
+    pub async fn list_all_resources_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
+        list_all_pages(max_pages, |params| self.list_resources(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_all_skills`] until every page is listed.
+    ///
+    /// The walk reads at most [`DEFAULT_LIST_MAX_PAGES`] pages and fails with
+    /// [`ServiceError::ListPaginationExceeded`] instead of following a cursor that
+    /// never ends; [`Peer<RoleClient>::list_all_skills_with_max_pages`] raises that cap for a
+    /// list that legitimately runs longer.
     pub async fn list_all_skills(&self) -> Result<Vec<crate::model::Skill>, ServiceError> {
         Ok(self.list_all_skills_with_cache_hint().await?.items)
     }
@@ -2105,10 +2190,28 @@ impl Peer<RoleClient> {
     pub async fn list_all_skills_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
-        list_all_pages(|params| self.list_skills(params)).await
+        self.list_all_skills_with_max_pages(DEFAULT_LIST_MAX_PAGES)
+            .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed.
+    /// Like [`Peer<RoleClient>::list_all_skills_with_cache_hint`], with an explicit cap
+    /// on how many pages the walk may read.
+    ///
+    /// Returns [`ServiceError::ListPaginationExceeded`] if the peer keeps returning a
+    /// `nextCursor` after `max_pages` pages.
+    pub async fn list_all_skills_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
+        list_all_pages(max_pages, |params| self.list_skills(params)).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_all_resource_templates`] until every page is listed.
+    ///
+    /// The walk reads at most [`DEFAULT_LIST_MAX_PAGES`] pages and fails with
+    /// [`ServiceError::ListPaginationExceeded`] instead of following a cursor that
+    /// never ends; [`Peer<RoleClient>::list_all_resource_templates_with_max_pages`] raises that cap for a
+    /// list that legitimately runs longer.
     pub async fn list_all_resource_templates(
         &self,
     ) -> Result<Vec<crate::model::ResourceTemplate>, ServiceError> {
@@ -2118,11 +2221,25 @@ impl Peer<RoleClient> {
             .items)
     }
 
-    /// Like [`Peer<RoleClient>::list_all_resource_templates`], with a cache hint for the merged list.
+    /// Like [`Peer<RoleClient>::list_all_resource_templates`], with a cache hint for the merged
+    /// list.
     pub async fn list_all_resource_templates_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
-        list_all_pages(|params| self.list_resource_templates(params)).await
+        self.list_all_resource_templates_with_max_pages(DEFAULT_LIST_MAX_PAGES)
+            .await
+    }
+
+    /// Like [`Peer<RoleClient>::list_all_resource_templates_with_cache_hint`], with an explicit
+    /// cap on how many pages the walk may read.
+    ///
+    /// Returns [`ServiceError::ListPaginationExceeded`] if the peer keeps returning a
+    /// `nextCursor` after `max_pages` pages.
+    pub async fn list_all_resource_templates_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
+        list_all_pages(max_pages, |params| self.list_resource_templates(params)).await
     }
 
     /// Convenient method to get completion suggestions for a prompt argument
@@ -3048,6 +3165,139 @@ mod tests {
 
         let names: Vec<_> = peer
             .list_all_tools_with_cache_hint()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["tool-0", "tool-1", "tool-2"]);
+    }
+
+    async fn cache_tool_page(
+        peer: &Peer<RoleClient>,
+        cursor: Option<&str>,
+        name: &'static str,
+        next_cursor: Option<&str>,
+    ) {
+        let params = Some(PaginatedRequestParams {
+            meta: None,
+            cursor: cursor.map(str::to_owned),
+        });
+        let mut page = tools_result(Some(5_000), None);
+        page.tools = vec![crate::model::Tool::new(
+            name,
+            "",
+            Arc::new(Default::default()),
+        )];
+        page.next_cursor = next_cursor.map(str::to_owned);
+        peer.cache_response(
+            list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params),
+            ServerResult::ListToolsResult(page),
+            Some(5_000),
+            None,
+        )
+        .await;
+    }
+
+    /// A peer that answers every page with a cursor that points back at itself
+    /// used to make the walk grow `items` until the process died.
+    #[tokio::test]
+    async fn cursor_that_never_ends_stops_at_the_page_cap() {
+        let peer = disconnected_peer();
+        cache_tool_page(&peer, None, "tool-0", Some("loop")).await;
+        cache_tool_page(&peer, Some("loop"), "tool-1", Some("loop")).await;
+
+        // Without the cap this walk never returns; the timeout turns that into a
+        // failure instead of a hung test.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            peer.list_all_tools_with_max_pages(3),
+        )
+        .await
+        .expect("the walk ignored its page cap");
+        let error = outcome.unwrap_err();
+        assert!(
+            matches!(error, ServiceError::ListPaginationExceeded { max_pages: 3 }),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_default_cap_is_what_the_plain_helper_uses() {
+        let peer = disconnected_peer();
+        cache_tool_page(&peer, None, "tool-0", Some("loop")).await;
+        cache_tool_page(&peer, Some("loop"), "tool-1", Some("loop")).await;
+
+        let outcome = tokio::time::timeout(Duration::from_secs(2), peer.list_all_tools())
+            .await
+            .expect("the walk ignored the default page cap");
+        let error = outcome.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ServiceError::ListPaginationExceeded { max_pages }
+                    if max_pages == DEFAULT_LIST_MAX_PAGES
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    /// An empty cursor is a cursor: the spec forbids reading it as the end.
+    #[tokio::test]
+    async fn empty_cursor_is_not_the_end_of_the_walk() {
+        let peer = disconnected_peer();
+        cache_tool_page(&peer, None, "tool-0", Some("")).await;
+        cache_tool_page(&peer, Some(""), "tool-1", None).await;
+
+        let names: Vec<_> = peer
+            .list_all_tools_with_cache_hint()
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(names, ["tool-0", "tool-1"]);
+    }
+
+    /// `max_pages == 0` reads nothing: the walk fails before it asks for the
+    /// first page, even when that page would have ended the list.
+    #[tokio::test]
+    async fn a_zero_cap_fails_before_the_first_request() {
+        let peer = disconnected_peer();
+        cache_tool_page(&peer, None, "tool-0", None).await;
+
+        let error = peer.list_all_tools_with_max_pages(0).await.unwrap_err();
+        assert!(
+            matches!(error, ServiceError::ListPaginationExceeded { max_pages: 0 }),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_cap_shorter_than_the_walk_fails() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint, hint]).await;
+
+        let error = peer.list_all_tools_with_max_pages(2).await.unwrap_err();
+        assert!(
+            matches!(error, ServiceError::ListPaginationExceeded { max_pages: 2 }),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    /// A list that ends on the last page the cap allows is not over the cap:
+    /// the walk stops on the missing cursor, not on the count.
+    #[tokio::test]
+    async fn a_list_that_ends_on_the_last_allowed_page_succeeds() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint, hint]).await;
+
+        let names: Vec<_> = peer
+            .list_all_tools_with_max_pages(3)
             .await
             .unwrap()
             .items
