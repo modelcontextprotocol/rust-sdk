@@ -1754,6 +1754,17 @@ impl Implementation {
     }
 }
 
+/// Default cap on the pages a `list_all_*` walk will read before it fails.
+///
+/// The spec says a missing `nextCursor` — not a repeated or empty one — ends a
+/// list, so a peer that keeps returning a cursor would otherwise keep the walk
+/// going until the process runs out of memory. This matches the
+/// `listMaxPages` default of the TypeScript SDK.
+///
+/// A list that legitimately runs past it can be walked with the helpers'
+/// `*_with_max_pages` variants.
+pub const DEFAULT_LIST_MAX_PAGES: usize = 64;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

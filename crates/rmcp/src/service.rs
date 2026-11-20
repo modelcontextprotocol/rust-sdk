@@ -94,6 +94,12 @@ pub enum ServiceError {
     /// The peer kept returning `input_required` beyond the configured round cap.
     #[error("input_required did not complete within {max_rounds} MRTR rounds")]
     InputRequiredRoundsExceeded { max_rounds: usize },
+    /// The walk reached its page cap with a `nextCursor` still on the last page it read.
+    ///
+    /// `max_pages` is the cap the walk was given — the number of pages it may read —
+    /// so `max_pages: 0` means it failed before asking for the first page.
+    #[error("list pagination did not finish within {max_pages} pages")]
+    ListPaginationExceeded { max_pages: usize },
 }
 
 impl ServiceError {
