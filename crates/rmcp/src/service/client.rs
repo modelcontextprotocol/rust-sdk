@@ -2020,7 +2020,9 @@ pub struct MergedList<T> {
 /// or empty one is a reason to ask for the next page, not to stop. A peer that
 /// never drops the field would loop forever and grow `items` without bound, so
 /// the walk fails with [`ServiceError::ListPaginationExceeded`] once it has read
-/// `max_pages` pages and the last of them still carried a cursor. `max_pages` is
+/// `max_pages` pages and the last of them still carried a cursor. A peer that
+/// keeps returning the same page is bounded by that cap rather than detected, so
+/// this must not be tightened into a page-equality stop. `max_pages` is
 /// the number of pages the walk may read, so 0 fails before the first request.
 async fn list_all_pages<P, Fut>(
     max_pages: usize,
