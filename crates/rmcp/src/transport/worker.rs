@@ -27,6 +27,22 @@ pub enum WorkerQuitReason<E> {
         error: E,
         context: Cow<'static, str>,
     },
+    /// The transport's startup handshake failed with the typed error.
+    ///
+    /// Distinct from [`Fatal`](Self::Fatal): a startup failure is an ordinary,
+    /// often retryable lifecycle event (peer unreachable, TLS failure, an auth
+    /// challenge), not an internal fault. The real typed error is retained here
+    /// rather than replaced by a synthetic placeholder, so the service loop and
+    /// late observers can see the actual cause.
+    ///
+    /// The error is shared via `Arc` so it can be delivered to the in-flight
+    /// `send()` ack *and* retained here — a single typed value would be lost if
+    /// the ack's receiver is dropped (its own timeout) after a successful queue.
+    #[error("Startup failed {error}, when {context}")]
+    StartupFailed {
+        error: Arc<E>,
+        context: Cow<'static, str>,
+    },
     #[error("Transport cancelled")]
     Cancelled,
     #[error("Transport closed")]
@@ -50,12 +66,29 @@ impl<E: std::error::Error + Send + 'static> WorkerQuitReason<E> {
             context: context.into(),
         }
     }
+    pub fn startup_failed(error: E, context: impl Into<Cow<'static, str>>) -> Self {
+        Self::StartupFailed {
+            error: Arc::new(error),
+            context: context.into(),
+        }
+    }
+    pub fn startup_failed_context(context: impl Into<Cow<'static, str>>) -> impl FnOnce(E) -> Self {
+        |e| Self::StartupFailed {
+            error: Arc::new(e),
+            context: context.into(),
+        }
+    }
 }
 
 pub trait Worker: Sized + Send + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
     type Role: ServiceRole;
     fn err_closed() -> Self::Error;
+    /// Whether this is the synthetic error produced when the worker's channel
+    /// closes, rather than a real transport failure delivered by the worker.
+    fn is_closed_error(_error: &Self::Error) -> bool {
+        false
+    }
     fn err_join(e: tokio::task::JoinError) -> Self::Error;
     fn run(
         self,
@@ -166,13 +199,68 @@ impl<W: Worker> WorkerSendRequest<W> {
     }
 }
 
+/// A retained worker terminal reason, shared via `Arc` so it can outlive the
+/// single fire-and-forget ack delivery window.
+///
+/// Boxed into [`DynamicTransportError`](crate::transport::DynamicTransportError)
+/// by [`Transport::quit_status`].
+/// Callers can downcast to this type to recover the `Arc<WorkerQuitReason<E>>`
+/// (and thus the typed `E`), or walk [`std::error::Error::source`] to reach the
+/// inner typed error directly — preserving source-only data such as an auth challenge.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RetainedQuitReason<E>(pub Arc<WorkerQuitReason<E>>);
+
+impl<E> RetainedQuitReason<E> {
+    /// The typed error behind an abnormal quit, if this reason carries one.
+    ///
+    /// Startup failures share their error through an `Arc`; fatal errors own
+    /// it. Normal shutdown reasons (cancel, clean close, handler termination,
+    /// idle timeout) carry no diagnostic error and return `None`.
+    ///
+    /// This backs [`DynamicTransportError::downcast_ref`], letting callers
+    /// reach the same `&E` on the retained path as on the live-ack path.
+    ///
+    /// [`DynamicTransportError::downcast_ref`]: crate::transport::DynamicTransportError::downcast_ref
+    pub fn startup_error(&self) -> Option<&E> {
+        match self.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => Some(error.as_ref()),
+            WorkerQuitReason::Fatal { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl<E: std::error::Error + Send + 'static> std::fmt::Display for RetainedQuitReason<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.0.as_ref(), f)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for RetainedQuitReason<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => Some(error.as_ref()),
+            WorkerQuitReason::Fatal { error, .. } => Some(error),
+            WorkerQuitReason::Join(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+type WorkerJoinHandle<E> = tokio::task::JoinHandle<Result<(), Arc<WorkerQuitReason<E>>>>;
+
 pub struct WorkerTransport<W: Worker> {
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     control_send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     request_cancellations: RequestCancellations,
     control_generation: Arc<AtomicU64>,
-    join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason<W::Error>>>>,
+    join_handle: Option<WorkerJoinHandle<W::Error>>,
+    /// Retained terminal status of the worker, written exactly once when its
+    /// task quits. Lets an observer whose own timeout has already fired still
+    /// learn why the worker died, rather than relying on a delivery window.
+    quit_status: tokio::sync::watch::Receiver<Option<Arc<WorkerQuitReason<W::Error>>>>,
     _drop_guard: tokio_util::sync::DropGuard,
     ct: CancellationToken,
 }
@@ -226,16 +314,33 @@ impl<W: Worker> WorkerTransport<W> {
             cancellation_token: transport_task_ct.clone(),
         };
 
+        // Retained terminal status: written once when the worker task finishes,
+        // so the quit reason is not lost when no `Transport::close()` is pending
+        // at the moment the worker dies. The reason is shared via `Arc` so both
+        // the join handle (consumed by close()) and late observers can read it.
+        let (quit_status_tx, quit_status) = tokio::sync::watch::channel(None);
+
         let join_handle = tokio::spawn(async move {
-            worker
+            // Hold the input channel open until the terminal status is
+            // published: `run()` drops its `WorkerContext` (and thus
+            // `to_handler_tx`) on return, so without this a concurrently polled
+            // `receive()` could observe EOF and read `quit_status()` as `None`
+            // before the watch write lands. Keeping a clone alive until after
+            // the write orders EOF after the status is visible.
+            let keep_input_open = context.to_handler_tx.clone();
+            let result = worker
                 .run(context)
                 .instrument(tracing::span!(
                     Level::TRACE,
                     "transport_worker",
                     name = worker_name,
                 ))
-                .await
-                .inspect_err(|e| match e {
+                .await;
+            match &result {
+                Ok(()) => {
+                    tracing::debug!("worker quit");
+                }
+                Err(e) => match e {
                     WorkerQuitReason::Cancelled
                     | WorkerQuitReason::TransportClosed
                     | WorkerQuitReason::HandlerTerminated
@@ -245,13 +350,33 @@ impl<W: Worker> WorkerTransport<W> {
                     WorkerQuitReason::Join(e) => {
                         tracing::error!("worker quit with join error: {:?}", e);
                     }
+                    WorkerQuitReason::StartupFailed { error, context } => {
+                        // A startup failure is an ordinary lifecycle event
+                        // (peer unreachable, TLS failure, auth challenge), not
+                        // an internal fault — log at warn, not error.
+                        tracing::warn!("worker startup failed: {error}, when {context}");
+                    }
                     WorkerQuitReason::Fatal { error, context } => {
                         tracing::error!("worker quit with fatal: {error}, when {context}");
                     }
-                })
-                .inspect(|_| {
-                    tracing::debug!("worker quit");
-                })
+                },
+            }
+            // Retain the terminal reason for late observers; the same value is
+            // shared with the join handle so close() can report join errors.
+            let quit = match result {
+                Ok(()) => {
+                    let _ = quit_status_tx.send(None);
+                    Ok(())
+                }
+                Err(e) => {
+                    let shared = Arc::new(e);
+                    let _ = quit_status_tx.send(Some(shared.clone()));
+                    Err(shared)
+                }
+            };
+            // Publish the status before the input channel closes.
+            drop(keep_input_open);
+            quit
         });
         Self {
             rx: from_transport_rx,
@@ -260,6 +385,7 @@ impl<W: Worker> WorkerTransport<W> {
             request_cancellations,
             control_generation,
             join_handle: Some(join_handle),
+            quit_status,
             ct: transport_task_ct.clone(),
             _drop_guard: transport_task_ct.drop_guard(),
         }
@@ -402,11 +528,49 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
     async fn close(&mut self) -> Result<(), Self::Error> {
         if let Some(handle) = self.join_handle.take() {
             self.ct.cancel();
-            let _quit_reason = handle.await.map_err(W::err_join)?;
+            // Await worker termination; the quit reason itself is retained in
+            // `quit_status` rather than moved out, so late observers can still
+            // read it after close() returns.
+            let _ = handle.await.map_err(W::err_join)?;
             Ok(())
         } else {
             Ok(())
         }
+    }
+
+    fn is_closed_error(error: &Self::Error) -> bool {
+        W::is_closed_error(error)
+    }
+
+    fn supports_quit_status(&self) -> bool {
+        true
+    }
+
+    fn quit_status(&self) -> Option<crate::transport::DynamicTransportError> {
+        let guard = self.quit_status.borrow();
+        let reason = guard.as_ref()?;
+        // Only report a cause for abnormal termination. Normal shutdown paths
+        // (cancel, clean transport close, handler termination, idle timeout)
+        // carry no diagnostic value and must not masquerade as a `Transport`
+        // quit reason on the service side.
+        match reason.as_ref() {
+            WorkerQuitReason::StartupFailed { .. }
+            | WorkerQuitReason::Fatal { .. }
+            | WorkerQuitReason::Join(_) => {}
+            WorkerQuitReason::Cancelled
+            | WorkerQuitReason::TransportClosed
+            | WorkerQuitReason::HandlerTerminated
+            | WorkerQuitReason::IdleTimeout(_) => return None,
+        }
+        // Retain the typed reason (not a stringified copy) so callers can still
+        // downcast to `WorkerQuitReason<W::Error>` and reach source-only data
+        // such as an auth challenge. The wrapper's `source()` exposes the inner
+        // typed error for source-chain walks like `is_authorization_required`.
+        Some(crate::transport::DynamicTransportError::from_parts(
+            Self::name(),
+            std::any::TypeId::of::<Self>(),
+            Box::new(RetainedQuitReason(reason.clone())),
+        ))
     }
 }
 
@@ -537,5 +701,65 @@ mod tests {
         assert!(Weak::ptr_eq(&registered, &Arc::downgrade(&current)));
         drop(current);
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    /// A worker whose startup fails must retain the real typed error in its
+    /// terminal status, so an observer whose own timeout already fired (no
+    /// pending `close()`) can still learn the cause. Regression for #1441.
+    #[tokio::test]
+    async fn startup_failure_is_retained_in_quit_status() {
+        struct StartupFailWorker;
+
+        impl Worker for StartupFailWorker {
+            type Error = io::Error;
+            type Role = RoleClient;
+
+            fn err_closed() -> Self::Error {
+                io::Error::other("worker closed")
+            }
+            fn err_join(error: tokio::task::JoinError) -> Self::Error {
+                io::Error::other(error)
+            }
+            async fn run(
+                self,
+                _context: WorkerContext<Self>,
+            ) -> Result<(), WorkerQuitReason<Self::Error>> {
+                Err(WorkerQuitReason::startup_failed(
+                    io::Error::new(io::ErrorKind::ConnectionRefused, "peer unreachable"),
+                    "startup request failed",
+                ))
+            }
+        }
+
+        let mut transport = WorkerTransport::spawn(StartupFailWorker);
+        // No close() pending — the worker dies on its own; the quit reason must
+        // still be observable afterwards.
+        transport.close().await.unwrap();
+        let status = transport.quit_status().expect("quit reason retained");
+        let text = status.to_string();
+        assert!(text.contains("Startup failed"), "got: {text}");
+        assert!(text.contains("peer unreachable"), "got: {text}");
+
+        // The unified accessor reaches the typed error through the retained
+        // wrapper — the same `&E` the live-ack path would expose. This goes
+        // through a real `WorkerTransport`, so it cannot regress silently the
+        // way a fake transport boxing the bare error would.
+        let typed = status
+            .downcast_ref::<WorkerTransport<StartupFailWorker>, RoleClient>()
+            .expect("downcast_ref reaches the typed error through the retained reason");
+        assert_eq!(typed.kind(), io::ErrorKind::ConnectionRefused);
+
+        // The retained reason is downcastable to the typed quit reason, not
+        // stringified — source-only data (here the io::Error kind) survives.
+        let retained = status
+            .error
+            .downcast::<RetainedQuitReason<io::Error>>()
+            .expect("typed reason downcast");
+        match retained.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => {
+                assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+            }
+            other => panic!("expected StartupFailed, got {other:?}"),
+        }
     }
 }

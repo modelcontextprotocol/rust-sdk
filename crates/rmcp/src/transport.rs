@@ -147,6 +147,47 @@ where
 
     /// Close the transport
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Whether this is a synthetic channel-closed error produced after a
+    /// background worker disappeared, rather than a real peer/transport error.
+    fn is_closed_error(_error: &Self::Error) -> bool {
+        false
+    }
+
+    /// Whether this transport retains background-worker terminal status through
+    /// [`quit_status`](Self::quit_status).
+    ///
+    /// The default is `false`. Worker-backed transports override this together
+    /// with `quit_status`, allowing initialization error recovery to wait for
+    /// status publication without closing unrelated transport implementations.
+    ///
+    /// This is a separate method rather than `quit_status().is_some()` because a
+    /// `None` status is ambiguous: the worker may still be running, or the
+    /// transport may have no worker at all. Initialization error recovery reads
+    /// this to decide whether awaiting `close()` is worthwhile — closing a
+    /// worker-backed transport waits for its terminal-status publication,
+    /// whereas closing a transport without a worker (a child process, a custom
+    /// transport) could block for seconds or forever with no status ever
+    /// appearing. Only worker-backed transports should return `true`.
+    fn supports_quit_status(&self) -> bool {
+        false
+    }
+
+    /// Terminal status of the transport's background worker, if it has quit.
+    ///
+    /// `None` means either the transport has no background worker or the worker
+    /// is still running. Implementations backed by a [`Worker`] retain the quit
+    /// reason here so an observer whose own timeout already fired can still
+    /// learn why the worker died, instead of only seeing a channel closure.
+    ///
+    /// The cause is returned as an owned [`DynamicTransportError`] wrapping the
+    /// worker's typed error so it can cross the service API boundary without a
+    /// generic parameter.
+    ///
+    /// [`Worker`]: crate::transport::worker::Worker
+    fn quit_status(&self) -> Option<DynamicTransportError> {
+        None
+    }
 }
 
 pub trait IntoTransport<R, E, A>: Send + 'static
@@ -305,6 +346,63 @@ impl DynamicTransportError {
                 .expect("type is checked"))
         }
     }
+
+    /// Borrow the transport's typed error, looking through the wrappers used to
+    /// share a startup failure between the live acknowledgement and the
+    /// retained quit reason.
+    ///
+    /// [`downcast`](Self::downcast) consumes `self` and returns an owned
+    /// `T::Error`, so it cannot work when the typed error is shared via `Arc`
+    /// between the in-flight `send()` and the retained quit reason — no owned
+    /// value exists to hand back. This accessor borrows instead, so it reaches
+    /// the typed error on **both** delivery paths:
+    ///
+    /// - live acknowledgement: the boxed error is `T::Error` directly;
+    /// - retained quit reason (the acknowledgement was lost, e.g. the caller's
+    ///   own timeout fired): the boxed error is a
+    ///   [`RetainedQuitReason`](worker::RetainedQuitReason) wrapping it.
+    ///
+    /// Returns `None` when `T` does not match the transport that produced this
+    /// error, or when the quit reason carries no typed error (a normal
+    /// shutdown).
+    ///
+    /// For streamable HTTP the borrowed value may still be the
+    /// [`StartupShared`](streamable_http_client::StreamableHttpError::StartupShared)
+    /// variant; call [`startup_error`](streamable_http_client::StreamableHttpError::startup_error)
+    /// on it to recover the original `HttpStatus` / `AuthRequired` / ... variant.
+    /// That call is a no-op for every other variant, so it is safe to apply
+    /// unconditionally on either delivery path:
+    ///
+    /// ```ignore
+    /// if let Some(e) = error
+    ///     .downcast_ref::<StreamableHttpClientTransport<reqwest::Client>, RoleClient>()
+    /// {
+    ///     match e.startup_error() {
+    ///         StreamableHttpError::HttpStatus(m) => { /* m.status, m.retry_after */ }
+    ///         StreamableHttpError::AuthRequired(a) => { /* a.www_authenticate_header */ }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// ```
+    pub fn downcast_ref<T: Transport<R> + 'static, R: ServiceRole>(&self) -> Option<&T::Error> {
+        if self.transport_type_id != std::any::TypeId::of::<T>() {
+            return None;
+        }
+        // Live acknowledgement: the typed error is boxed directly.
+        if let Some(error) = self.error.downcast_ref::<T::Error>() {
+            return Some(error);
+        }
+        // Retained quit reason: unwrap the shared reason to the same typed error.
+        #[cfg(feature = "transport-worker")]
+        if let Some(retained) = self
+            .error
+            .downcast_ref::<worker::RetainedQuitReason<T::Error>>()
+        {
+            return retained.startup_error();
+        }
+        None
+    }
+
     pub fn is<T: Transport<R> + 'static, R: ServiceRole>(&self) -> bool {
         self.error.is::<T::Error>() && self.transport_type_id == std::any::TypeId::of::<T>()
     }
