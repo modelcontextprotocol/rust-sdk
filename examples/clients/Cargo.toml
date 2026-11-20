@@ -29,6 +29,7 @@ axum = "0.8"
 reqwest = "0.13.2"
 clap = { version = "4.0", features = ["derive"] }
 base64 = "0.23"
+yaml_serde = "0.10"
 
 [[example]]
 name = "clients_git_stdio"
