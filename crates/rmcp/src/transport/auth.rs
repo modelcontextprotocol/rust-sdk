@@ -1409,14 +1409,9 @@ impl AuthorizationManager {
         }
     }
 
-    /// Accepts the resource's own origin, or a host the metadata policy allows.
     fn is_allowed_metadata_url(base_url: &Url, url: &Url, allow_private: bool) -> bool {
         if !Self::is_http_url(url) {
             return false;
-        }
-
-        if Self::is_same_origin(base_url, url) {
-            return true;
         }
 
         let Some(host) = url.host() else {
@@ -1460,6 +1455,9 @@ impl AuthorizationManager {
             }
         };
 
+        if Self::is_http_url(&url) && Self::is_same_origin(base_url, &url) {
+            return Some(url);
+        }
         if base_url.scheme() == "https" && url.scheme() != "https" {
             warn!("rejecting resource metadata URL `{url}`: downgrades `{base_url}` from https");
             return None;
@@ -2922,11 +2920,11 @@ impl AuthorizationManager {
                 },
             };
 
-            if !Self::is_allowed_metadata_url(
-                &self.base_url,
-                &candidate_url,
-                self.allow_private_metadata_addresses,
-            ) {
+            // A resource at a private address may name its own HTTPS origin as issuer.
+            let allow_private = self.allow_private_metadata_addresses
+                || (candidate_url.scheme() == "https"
+                    && Self::is_same_origin(&self.base_url, &candidate_url));
+            if !Self::is_allowed_metadata_url(&self.base_url, &candidate_url, allow_private) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
                 continue;
             }
@@ -6926,7 +6924,10 @@ mod tests {
     #[case::cgnat("https://100.64.0.1", "https://100.64.0.1", false, true)]
     #[case::mapped_ipv4("https://[::ffff:a00:1]", "https://[::ffff:a00:1]", false, true)]
     #[case::nat64("https://[64:ff9b::a00:1]", "https://[64:ff9b::a00:1]", false, true)]
-    #[case::link_local("https://[fe80::1]", "https://[fe80::1]", false, true)]
+    #[case::http_ula("http://[fd00::1]", "http://[fd00::1]", false, false)]
+    #[case::http_private_ipv4("http://10.0.0.1", "http://10.0.0.1", false, false)]
+    #[case::link_local("https://[fe80::1]", "https://[fe80::1]", false, false)]
+    #[case::reserved_ipv4("https://198.18.0.1", "https://198.18.0.1", false, false)]
     #[case::explicit_opt_in("https://mcp.example.com", "https://[fd00::1]", true, true)]
     #[tokio::test]
     async fn private_issuer_discovery(
