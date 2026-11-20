@@ -9,7 +9,9 @@ use sse_stream::{KeepAlive, Sse, SseBody};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
 use super::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
-use crate::model::{ClientJsonRpcMessage, ErrorData, JsonRpcError, ServerJsonRpcMessage};
+use crate::model::{
+    ClientJsonRpcMessage, ErrorData, JsonRpcError, RequestId, ServerJsonRpcMessage,
+};
 
 pub type SessionId = Arc<str>;
 
@@ -254,10 +256,18 @@ where
     }
 
     serde_json::from_slice::<ClientJsonRpcMessage>(&collected).map_err(|e| {
-        let error = JsonRpcError::new(
-            None,
-            ErrorData::parse_error(format!("Parse error: {e}"), None),
-        );
+        let error = match serde_json::from_slice::<serde_json::Value>(&collected) {
+            Err(_) => JsonRpcError::new(
+                None,
+                ErrorData::parse_error(format!("Parse error: {e}"), None),
+            ),
+            Ok(value) => JsonRpcError::new(
+                value
+                    .get("id")
+                    .and_then(|id| serde_json::from_value::<RequestId>(id.clone()).ok()),
+                ErrorData::invalid_request(format!("Invalid request: {e}"), None),
+            ),
+        };
         let body = serde_json::to_vec(&error).expect("serialize JsonRpcError");
         Response::builder()
             .status(http::StatusCode::BAD_REQUEST)
@@ -276,9 +286,7 @@ mod tests {
     use http_body_util::StreamBody;
 
     use super::*;
-    use crate::model::{
-        EmptyResult, ErrorCode, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult,
-    };
+    use crate::model::{EmptyResult, ErrorCode, JsonRpcResponse, JsonRpcVersion2_0, ServerResult};
 
     const INITIALIZE_REQUEST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#;
 
@@ -372,26 +380,46 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    async fn expect_json_error(body: &str) -> JsonRpcError {
+        let response = expect_json(Full::new(Bytes::from(body.to_owned())), 1024)
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            response.headers()[http::header::CONTENT_TYPE],
+            JSON_MIME_TYPE
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
     #[tokio::test]
-    async fn expect_json_rejects_malformed_body_with_parse_error() {
-        for body in [
-            "{",
-            "",
-            "null",
-            r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#,
-        ] {
-            let response = expect_json(Full::new(Bytes::from(body)), 1024)
-                .await
-                .unwrap_err();
-            assert_eq!(response.status(), http::StatusCode::BAD_REQUEST, "{body}");
-            assert_eq!(
-                response.headers()[http::header::CONTENT_TYPE],
-                JSON_MIME_TYPE
-            );
-            let bytes = response.into_body().collect().await.unwrap().to_bytes();
-            let error: JsonRpcError = serde_json::from_slice(&bytes).unwrap();
+    async fn expect_json_rejects_unparsable_body_with_parse_error() {
+        for body in ["{", "", r#"{"jsonrpc":"2.0","id":1,"method":"ping"} x"#] {
+            let error = expect_json_error(body).await;
             assert_eq!(error.id, None, "{body}");
             assert_eq!(error.error.code, ErrorCode::PARSE_ERROR, "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn expect_json_rejects_invalid_message_with_invalid_request() {
+        for (body, id) in [
+            ("null", None),
+            ("[]", None),
+            (
+                r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#,
+                Some(RequestId::Number(1)),
+            ),
+            (
+                r#"{"jsonrpc":"1.0","id":"a","method":"ping"}"#,
+                Some(RequestId::String("a".into())),
+            ),
+            (r#"{"jsonrpc":"1.0","id":true,"method":"ping"}"#, None),
+        ] {
+            let error = expect_json_error(body).await;
+            assert_eq!(error.id, id, "{body}");
+            assert_eq!(error.error.code, ErrorCode::INVALID_REQUEST, "{body}");
         }
     }
 }
