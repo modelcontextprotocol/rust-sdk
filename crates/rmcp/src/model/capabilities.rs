@@ -193,6 +193,10 @@ pub struct ClientCapabilities {
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
+    /// Capabilities not modeled above. The schema leaves the set open, so they
+    /// are kept as-is and survive a deserialize/serialize round trip.
+    #[serde(flatten)]
+    pub extra: JsonObject,
 }
 
 impl ClientCapabilities {
@@ -241,6 +245,10 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    /// Capabilities not modeled above, such as `events`. The schema leaves the set
+    /// open, so they are kept as-is and survive a deserialize/serialize round trip.
+    #[serde(flatten)]
+    pub extra: JsonObject,
 }
 
 impl ServerCapabilities {
@@ -296,6 +304,7 @@ macro_rules! builder {
                 pub fn build(self) -> $Target {
                     $Target {
                         $( $f: self.$f, )*
+                        extra: JsonObject::default(),
                     }
                 }
             }
@@ -687,6 +696,33 @@ mod test {
         });
         let server: ServerCapabilities = serde_json::from_value(json).unwrap();
         assert_eq!(server.skills(), Some(SkillsCapability::new()));
+    }
+
+    #[test]
+    fn server_capabilities_keep_unknown_fields() {
+        let json = serde_json::json!({ "tools": {}, "events": { "subscribe": true } });
+        let server: ServerCapabilities = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            server.extra["events"],
+            serde_json::json!({ "subscribe": true })
+        );
+        assert_eq!(serde_json::to_value(&server).unwrap(), json);
+    }
+
+    #[test]
+    fn client_capabilities_keep_unknown_fields() {
+        let json = serde_json::json!({ "roots": {}, "custom": { "level": 2 } });
+        let client: ClientCapabilities = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&client).unwrap(), json);
+    }
+
+    #[test]
+    fn built_capabilities_serialize_without_extra_fields() {
+        let server = ServerCapabilities::builder().enable_tools().build();
+        assert_eq!(
+            serde_json::to_value(&server).unwrap(),
+            serde_json::json!({ "tools": {} })
+        );
     }
 
     #[test]
