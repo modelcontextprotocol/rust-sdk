@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.11.0...rmcp-v3.11.1) - 2026-11-20
+
+### Fixed
+
+- *(auth)* accept same-origin issuers at any address ([#1467](https://github.com/modelcontextprotocol/rust-sdk/pull/1467))
+- *(transport)* answer malformed Streamable HTTP bodies with 400 ([#1464](https://github.com/modelcontextprotocol/rust-sdk/pull/1464))
+- *(server)* omit cache hints for legacy peers ([#1470](https://github.com/modelcontextprotocol/rust-sdk/pull/1470))
+- *(client)* ignore late discovery replies after legacy fallback ([#1436](https://github.com/modelcontextprotocol/rust-sdk/pull/1436))
+
 ## [3.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.10.0...rmcp-v3.11.0) - 2026-11-17
 
 ### Added
