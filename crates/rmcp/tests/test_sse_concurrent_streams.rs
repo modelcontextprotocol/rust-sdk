@@ -201,6 +201,35 @@ async fn wait_for_sse_event(resp: reqwest::Response, needle: &str, timeout: Dura
     matches!(result, Ok(true))
 }
 
+/// Read an SSE stream until an event whose data contains `needle` arrives and
+/// return that event's ID.
+async fn read_event_id_of(
+    resp: reqwest::Response,
+    needle: &str,
+    timeout: Duration,
+) -> Option<String> {
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    tokio::time::timeout(timeout, async {
+        while let Some(Ok(chunk)) = stream.next().await {
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            let normalized = buf.replace("\r\n", "\n");
+            for event in normalized.split("\n\n") {
+                if event.contains(needle) {
+                    return event
+                        .lines()
+                        .find_map(|line| line.strip_prefix("id:"))
+                        .map(|id| id.trim().to_string());
+                }
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 // ─── Tests: Shadow stream creation ──────────────────────────────────────────
 
 /// Second standalone GET with same session ID should return 200 OK
@@ -730,6 +759,41 @@ async fn dead_primary_replacement_replays_cached_events() {
     assert!(
         wait_for_sse_event(get_resume, "tools/list_changed", Duration::from_secs(3)).await,
         "Replacement primary should receive cached notification via sync() replay"
+    );
+
+    ct.cancel();
+}
+
+/// Resuming with the ID of the last event the client received must replay only
+/// the events after it, not that event again.
+#[tokio::test]
+async fn resume_does_not_replay_the_last_event_id() {
+    let ct = CancellationToken::new();
+    let trigger = Arc::new(Notify::new());
+    let url = start_test_server(ct.clone(), trigger.clone()).await;
+    let client = reqwest::Client::new();
+
+    let session_id = initialize_session(&client, &url).await;
+    send_initialized_notification(&client, &url, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let get1 = open_standalone_get(&client, &url, &session_id).await;
+    assert_eq!(get1.status(), 200);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The client receives the notification, then its stream drops.
+    trigger.notify_one();
+    let last_event_id = read_event_id_of(get1, "tools/list_changed", Duration::from_secs(3))
+        .await
+        .expect("notification should carry an event ID");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Resume from the notification the client already has.
+    let get_resume = open_resume_get(&client, &url, &session_id, &last_event_id).await;
+    assert_eq!(get_resume.status(), 200);
+    assert!(
+        !wait_for_sse_event(get_resume, "tools/list_changed", Duration::from_millis(500)).await,
+        "Last-Event-ID {last_event_id} was already delivered and must not be replayed"
     );
 
     ct.cancel();
