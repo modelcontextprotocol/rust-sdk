@@ -581,11 +581,11 @@ async fn expired_grants_are_not_redeemed() {
 }
 
 #[tokio::test]
-async fn bearer_responses_cannot_change_resource_or_widen_scope() {
+async fn bearer_responses_cannot_change_resource() {
     let mut cases = vec![
         ("scope", json!("files.read"), true),
-        ("scope", json!("files.admin"), false),
-        ("scope", json!("files.read files.write"), false),
+        ("scope", json!("files.admin"), true),
+        ("scope", json!("files.read files.write"), true),
         ("scope", json!("files.read files.read"), false),
         ("resource", json!(RESOURCE), true),
         ("resource", json!([RESOURCE]), true),
@@ -627,6 +627,17 @@ async fn bearer_responses_cannot_change_resource_or_widen_scope() {
 }
 
 #[tokio::test]
+async fn bearer_scope_may_exceed_id_jag_scope() {
+    let mut response = bearer();
+    response["scope"] = json!("files.read files.write");
+    let token = redeem(&MockHttp::new(200, response)).await.unwrap();
+    assert_eq!(
+        token.scopes,
+        HashSet::from(["files.read".to_owned(), "files.write".to_owned()])
+    );
+}
+
+#[tokio::test]
 async fn resource_scope_narrowing_is_reported_without_logging_scope_values() {
     for read in ["files.read", "private-scope-sentinel"] {
         let requested = format!("{read} files.write");
@@ -644,7 +655,7 @@ async fn resource_scope_narrowing_is_reported_without_logging_scope_values() {
 }
 
 #[tokio::test]
-async fn bearer_scope_may_be_omitted_but_not_added_to_an_unscoped_grant() {
+async fn bearer_scope_is_taken_from_response_for_unscoped_grant() {
     for scope in [None, Some("files.read")] {
         let mut claims = claims();
         claims.as_object_mut().unwrap().remove("scope");
@@ -655,11 +666,8 @@ async fn bearer_scope_may_be_omitted_but_not_added_to_an_unscoped_grant() {
         if let Some(scope) = scope {
             token["scope"] = json!(scope);
         }
-        let result = grant.exchange(&MockHttp::new(200, token)).await;
-        assert_eq!(result.is_ok(), scope.is_none());
-        if let Ok(token) = result {
-            assert!(token.scopes.is_empty());
-        }
+        let token = grant.exchange(&MockHttp::new(200, token)).await.unwrap();
+        assert_eq!(token.scopes, scope.into_iter().map(str::to_owned).collect());
     }
 }
 

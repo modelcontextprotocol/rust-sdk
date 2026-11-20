@@ -794,14 +794,13 @@ impl ResourceTokenResponse {
         {
             return Err(invalid("access token resource mismatch"));
         }
-        // An omitted scope retains the authority carried by the assertion.
+        // The AS has the final say on scope; without a `scope` field, the ID-JAG's scopes apply (RFC 6749 §5.1).
         let scopes = if let Some(scope) = self.scope.as_deref() {
-            let scopes =
-                parse_scope(scope).ok_or_else(|| invalid("malformed or duplicate scopes"))?;
-            if !scopes.iter().all(|s| granted.contains(*s)) {
-                return Err(invalid("access token scope exceeds ID-JAG scope"));
-            }
-            scopes.into_iter().map(str::to_owned).collect()
+            parse_scope(scope)
+                .ok_or_else(|| invalid("malformed or duplicate scopes"))?
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
         } else {
             granted
         };
