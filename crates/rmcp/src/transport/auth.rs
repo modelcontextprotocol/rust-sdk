@@ -3019,9 +3019,9 @@ impl AuthorizationManager {
                 },
             };
 
-            // A resource at an IPv6 unique-local address may name its own origin as issuer.
+            // A resource at a private address may name its own HTTPS origin as issuer.
             let allow_private = self.allow_private_metadata_addresses
-                || (matches!(candidate_url.host(), Some(Host::Ipv6(ip)) if ip.is_unique_local())
+                || (candidate_url.scheme() == "https"
                     && Self::is_same_origin(&self.base_url, &candidate_url));
             if !Self::is_allowed_metadata_url(&self.base_url, &candidate_url, allow_private) {
                 warn!("rejecting authorization server metadata URL `{candidate_url}`");
@@ -7019,11 +7019,14 @@ mod tests {
     #[case::other_port("https://[fd00::1]", "https://[fd00::1]:8443", false, false)]
     #[case::other_scheme("https://[fd00::1]", "http://[fd00::1]", false, false)]
     #[case::named_resource("https://mcp.example.com", "https://[fd00::1]", false, false)]
-    #[case::private_ipv4("https://10.0.0.1", "https://10.0.0.1", false, false)]
-    #[case::cgnat("https://100.64.0.1", "https://100.64.0.1", false, false)]
-    #[case::mapped_ipv4("https://[::ffff:a00:1]", "https://[::ffff:a00:1]", false, false)]
-    #[case::nat64("https://[64:ff9b::a00:1]", "https://[64:ff9b::a00:1]", false, false)]
+    #[case::private_ipv4("https://10.0.0.1", "https://10.0.0.1", false, true)]
+    #[case::cgnat("https://100.64.0.1", "https://100.64.0.1", false, true)]
+    #[case::mapped_ipv4("https://[::ffff:a00:1]", "https://[::ffff:a00:1]", false, true)]
+    #[case::nat64("https://[64:ff9b::a00:1]", "https://[64:ff9b::a00:1]", false, true)]
+    #[case::http_ula("http://[fd00::1]", "http://[fd00::1]", false, false)]
+    #[case::http_private_ipv4("http://10.0.0.1", "http://10.0.0.1", false, false)]
     #[case::link_local("https://[fe80::1]", "https://[fe80::1]", false, false)]
+    #[case::reserved_ipv4("https://198.18.0.1", "https://198.18.0.1", false, false)]
     #[case::explicit_opt_in("https://mcp.example.com", "https://[fd00::1]", true, true)]
     #[tokio::test]
     async fn private_issuer_discovery(
