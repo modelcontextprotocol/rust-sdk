@@ -848,6 +848,13 @@ impl WWWAuthenticateParams {
 pub struct OAuthClientConfig {
     pub client_id: String,
     pub client_secret: Option<String>,
+    /// Expiry of `client_secret`, as seconds since the Unix epoch (RFC 7591
+    /// section 3.2.1), when the authorization server reported one during dynamic
+    /// client registration.
+    ///
+    /// `None` means no expiry is known: no secret was issued, the server omitted
+    /// `client_secret_expires_at`, or it reported `0` (never expires).
+    pub client_secret_expires_at: Option<u64>,
     pub scopes: Vec<String>,
     pub redirect_uri: String,
     pub application_type: Option<String>,
@@ -858,6 +865,7 @@ impl OAuthClientConfig {
         Self {
             client_id: client_id.into(),
             client_secret: None,
+            client_secret_expires_at: None,
             scopes: Vec::new(),
             redirect_uri: redirect_uri.into(),
             application_type: Some(DEFAULT_APPLICATION_TYPE.to_string()),
@@ -1288,6 +1296,10 @@ pub(crate) struct ClientRegistrationRequest {
 pub struct ClientRegistrationResponse {
     pub client_id: String,
     pub client_secret: Option<String>,
+    /// Seconds since the Unix epoch at which `client_secret` expires, or `0`
+    /// when it never expires (RFC 7591 section 3.2.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret_expires_at: Option<u64>,
     pub client_name: Option<String>,
     pub redirect_uris: Vec<String>,
     // allow additional fields
@@ -1300,6 +1312,7 @@ impl ClientRegistrationResponse {
         Self {
             client_id: client_id.into(),
             client_secret: None,
+            client_secret_expires_at: None,
             client_name: None,
             redirect_uris,
             additional_fields: HashMap::new(),
@@ -2043,16 +2056,25 @@ impl AuthorizationManager {
                 }
             };
 
+        // Some IdP returns a response where the field 'client_secret' is present but with empty string value.
+        // In that case, the interpretation is that the client is a public client and does not have a secret during the
+        // registration phase here, e.g. dynamic client registrations.
+        let client_secret = reg_response.client_secret.filter(|s| !s.is_empty());
+        // RFC 7591 section 3.2.1: `client_secret_expires_at` is only meaningful
+        // when a secret was issued, and `0` means it never expires — which leaves
+        // nothing to track, same as an omitted field.
+        let client_secret_expires_at = if client_secret.is_some() {
+            reg_response
+                .client_secret_expires_at
+                .filter(|seconds| *seconds != 0)
+        } else {
+            None
+        };
+
         let config = OAuthClientConfig {
             client_id: reg_response.client_id,
-            // Some IdP returns a response where the field 'client_secret' is present but with empty string value.
-            // In that case, the interpretation is that the client is a public client and does not have a secret during the
-            // registration phase here, e.g. dynamic client registrations.
-            //
-            // Even though whether or not the empty string is valid is outside of the scope of Oauth2 spec,
-            // we should treat it as no secret since otherwise we end up authenticating with a valid client_id with an empty client_secret
-            // as a password, which is not a goal of the client secret.
-            client_secret: reg_response.client_secret.filter(|s| !s.is_empty()),
+            client_secret,
+            client_secret_expires_at,
             redirect_uri: redirect_uri.to_string(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             application_type,
@@ -2068,6 +2090,7 @@ impl AuthorizationManager {
         let config = OAuthClientConfig {
             client_id: client_id.to_string(),
             client_secret: None,
+            client_secret_expires_at: None,
             scopes: vec![],
             redirect_uri: self.base_url.to_string(),
             // keep the manager's current application_type
@@ -4026,6 +4049,7 @@ impl AuthorizationSession {
             OAuthClientConfig {
                 client_id: client_id.clone(),
                 client_secret: request.client_secret.clone(),
+                client_secret_expires_at: None,
                 scopes: scopes.clone(),
                 redirect_uri: redirect_uri.clone(),
                 application_type: request.application_type.clone(),
@@ -4048,6 +4072,7 @@ impl AuthorizationSession {
             OAuthClientConfig {
                 client_id: client_metadata_url.to_string(),
                 client_secret: None,
+                client_secret_expires_at: None,
                 scopes: scopes.clone(),
                 redirect_uri: redirect_uri.clone(),
                 application_type: Some(
@@ -6782,6 +6807,114 @@ mod tests {
         assert_eq!(body.get("application_type").unwrap(), "web");
     }
 
+    async fn dcr_manager(client: RecordingOAuthHttpClient) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(client),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".to_string(),
+            token_endpoint: "https://auth.example.com/token".to_string(),
+            registration_endpoint: Some("https://auth.example.com/register".to_string()),
+            response_types_supported: Some(vec!["code".to_string()]),
+            ..Default::default()
+        });
+        manager
+    }
+
+    #[tokio::test]
+    async fn dcr_keeps_client_secret_expiry() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "client_secret": "dcr-secret",
+                "client_secret_expires_at": 1_767_225_600_u64,
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        )]);
+        let mut manager = dcr_manager(client).await;
+
+        let config = manager
+            .register_client("MCP Client", "http://localhost:8080/callback", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(config.client_secret.as_deref(), Some("dcr-secret"));
+        assert_eq!(config.client_secret_expires_at, Some(1_767_225_600));
+    }
+
+    #[tokio::test]
+    async fn dcr_treats_zero_client_secret_expiry_as_no_expiry() {
+        // RFC 7591 section 3.2.1: 0 means the issued secret never expires.
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "client_secret": "dcr-secret",
+                "client_secret_expires_at": 0,
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        )]);
+        let mut manager = dcr_manager(client).await;
+
+        let config = manager
+            .register_client("MCP Client", "http://localhost:8080/callback", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(config.client_secret.as_deref(), Some("dcr-secret"));
+        assert_eq!(config.client_secret_expires_at, None);
+    }
+
+    #[tokio::test]
+    async fn dcr_ignores_client_secret_expiry_for_an_empty_secret() {
+        // Some IdPs send `client_secret: ""` for a public client; that is no
+        // secret, so an expiry alongside it describes nothing.
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "client_secret": "",
+                "client_secret_expires_at": 1_767_225_600_u64,
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        )]);
+        let mut manager = dcr_manager(client).await;
+
+        let config = manager
+            .register_client("MCP Client", "http://localhost:8080/callback", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(config.client_secret, None);
+        assert_eq!(config.client_secret_expires_at, None);
+    }
+
+    #[tokio::test]
+    async fn dcr_ignores_client_secret_expiry_without_a_secret() {
+        // A public client gets no secret, so an expiry in the response is meaningless.
+        let client = RecordingOAuthHttpClient::with_responses(vec![http_response(
+            201,
+            serde_json::json!({
+                "client_id": "dcr-client",
+                "client_secret_expires_at": 1_767_225_600_u64,
+                "redirect_uris": ["http://localhost:8080/callback"]
+            }),
+        )]);
+        let mut manager = dcr_manager(client).await;
+
+        let config = manager
+            .register_client("MCP Client", "http://localhost:8080/callback", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(config.client_secret, None);
+        assert_eq!(config.client_secret_expires_at, None);
+    }
+
     #[tokio::test]
     async fn cimd_rejects_non_https_client_metadata_url_and_recovers_state() {
         let client = RecordingOAuthHttpClient::with_responses(cimd_discovery_responses());
@@ -8192,6 +8325,7 @@ mod tests {
         OAuthClientConfig {
             client_id: "my-client".to_string(),
             client_secret: Some("my-secret".to_string()),
+            client_secret_expires_at: None,
             scopes: vec![],
             redirect_uri: "http://localhost/callback".to_string(),
             application_type: None,
