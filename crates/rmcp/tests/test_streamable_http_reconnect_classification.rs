@@ -17,7 +17,7 @@ use std::{
 use futures::{StreamExt, stream::BoxStream};
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    ClientHandler, RoleClient,
+    ClientHandler, RoleClient, ServiceError,
     model::{
         ClientConfig, ClientJsonRpcMessage, ClientRequest, EmptyResult, PingRequest, RequestId,
         ServerJsonRpcMessage, ServerResult,
@@ -44,6 +44,7 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(1);
 #[derive(Clone, Copy)]
 enum PingResponse {
     Json,
+    DelayedJson(Duration),
     InterruptedSse { event_id: Option<&'static str> },
 }
 
@@ -52,6 +53,7 @@ enum GetResponse {
     Unsupported,
     AuthRequired,
     InsufficientScope,
+    SessionExpired,
     Transient,
     CompletePending,
     ToolsChanged,
@@ -63,12 +65,16 @@ struct ScriptState {
     pending_request: Mutex<Option<RequestId>>,
     get_calls: AtomicUsize,
     ping_calls: AtomicUsize,
+    initialize_calls: AtomicUsize,
     last_event_ids: Mutex<Vec<Option<String>>>,
+    get_sessions: Mutex<Vec<Option<String>>>,
+    ping_sessions: Mutex<Vec<Option<String>>>,
 }
 
 #[derive(Clone)]
 struct ScriptedHttpClient {
     session_id: Option<&'static str>,
+    replacement_session_id: Option<&'static str>,
     state: Arc<ScriptState>,
 }
 
@@ -88,23 +94,38 @@ impl StreamableHttpClient for ScriptedHttpClient {
         &self,
         _uri: Arc<str>,
         message: ClientJsonRpcMessage,
-        _session: Option<Arc<str>>,
+        session: Option<Arc<str>>,
         _auth_header: Option<String>,
         _custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let value = serde_json::to_value(message).expect("client message serializes");
+        if value["method"].as_str() == Some("ping") {
+            self.state
+                .ping_sessions
+                .lock()
+                .expect("ping session IDs lock")
+                .push(session.as_ref().map(|id| id.to_string()));
+        }
         match value["method"].as_str() {
-            Some("initialize") => Ok(StreamableHttpPostResponse::Json(
-                response(
-                    value["id"].clone(),
-                    json!({
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {},
-                        "serverInfo": { "name": "scripted", "version": "1" },
-                    }),
-                ),
-                self.session_id.map(str::to_owned),
-            )),
+            Some("initialize") => {
+                let call = self.state.initialize_calls.fetch_add(1, Ordering::SeqCst);
+                let session_id = if call == 0 {
+                    self.session_id
+                } else {
+                    self.replacement_session_id
+                };
+                Ok(StreamableHttpPostResponse::Json(
+                    response(
+                        value["id"].clone(),
+                        json!({
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {},
+                            "serverInfo": { "name": "scripted", "version": "1" },
+                        }),
+                    ),
+                    session_id.map(str::to_owned),
+                ))
+            }
             Some("notifications/initialized") => Ok(StreamableHttpPostResponse::Accepted),
             Some("ping") => {
                 self.state.ping_calls.fetch_add(1, Ordering::SeqCst);
@@ -119,6 +140,10 @@ impl StreamableHttpClient for ScriptedHttpClient {
                     .expect("ping response is scripted");
                 match scripted {
                     PingResponse::Json => {
+                        Ok(StreamableHttpPostResponse::Json(ping_response(id), None))
+                    }
+                    PingResponse::DelayedJson(delay) => {
+                        tokio::time::sleep(delay).await;
                         Ok(StreamableHttpPostResponse::Json(ping_response(id), None))
                     }
                     PingResponse::InterruptedSse { event_id } => {
@@ -155,7 +180,7 @@ impl StreamableHttpClient for ScriptedHttpClient {
     async fn get_stream(
         &self,
         _uri: Arc<str>,
-        _session: Option<Arc<str>>,
+        session: Option<Arc<str>>,
         last_event_id: Option<String>,
         _auth_header: Option<String>,
         _custom_headers: HashMap<HeaderName, HeaderValue>,
@@ -166,6 +191,11 @@ impl StreamableHttpClient for ScriptedHttpClient {
             .lock()
             .expect("last event IDs lock")
             .push(last_event_id);
+        self.state
+            .get_sessions
+            .lock()
+            .expect("GET session IDs lock")
+            .push(session.map(|id| id.to_string()));
         let scripted = self
             .state
             .get_responses
@@ -185,6 +215,7 @@ impl StreamableHttpClient for ScriptedHttpClient {
                     Some("tools:read".to_owned()),
                 ),
             )),
+            GetResponse::SessionExpired => Err(StreamableHttpError::SessionExpired),
             GetResponse::Transient => Err(StreamableHttpError::Client(io::Error::other(
                 "transient reconnect failure",
             ))),
@@ -248,13 +279,33 @@ impl Harness {
         ping_responses: impl IntoIterator<Item = PingResponse>,
         get_responses: impl IntoIterator<Item = GetResponse>,
     ) -> anyhow::Result<Self> {
+        Self::start_with(
+            session_id,
+            Some("session-2"),
+            true,
+            ping_responses,
+            get_responses,
+        )
+        .await
+    }
+
+    async fn start_with(
+        session_id: Option<&'static str>,
+        replacement_session_id: Option<&'static str>,
+        reinit_on_expired_session: bool,
+        ping_responses: impl IntoIterator<Item = PingResponse>,
+        get_responses: impl IntoIterator<Item = GetResponse>,
+    ) -> anyhow::Result<Self> {
         let state = Arc::new(ScriptState {
             get_responses: Mutex::new(get_responses.into_iter().collect()),
             ping_responses: Mutex::new(ping_responses.into_iter().collect()),
             pending_request: Mutex::new(None),
             get_calls: AtomicUsize::new(0),
             ping_calls: AtomicUsize::new(0),
+            initialize_calls: AtomicUsize::new(0),
             last_event_ids: Mutex::new(Vec::new()),
+            get_sessions: Mutex::new(Vec::new()),
+            ping_sessions: Mutex::new(Vec::new()),
         });
         let mut config = StreamableHttpClientTransportConfig::with_uri("http://scripted/mcp");
         let mut retry_config = FixedInterval::default();
@@ -262,9 +313,11 @@ impl Harness {
         retry_config.duration = RETRY_INTERVAL;
         config.retry_config = Arc::new(retry_config);
         config.auth_header = Some("Bearer test-token".to_owned());
+        config.reinit_on_expired_session = reinit_on_expired_session;
         let transport = StreamableHttpClientTransport::with_client(
             ScriptedHttpClient {
                 session_id,
+                replacement_session_id,
                 state: state.clone(),
             },
             config,
@@ -311,6 +364,22 @@ impl Harness {
             .last_event_ids
             .lock()
             .expect("last event IDs lock")
+            .clone()
+    }
+
+    fn get_sessions(&self) -> Vec<Option<String>> {
+        self.state
+            .get_sessions
+            .lock()
+            .expect("GET session IDs lock")
+            .clone()
+    }
+
+    fn ping_sessions(&self) -> Vec<Option<String>> {
+        self.state
+            .ping_sessions
+            .lock()
+            .expect("ping session IDs lock")
             .clone()
     }
 
@@ -511,6 +580,161 @@ async fn established_listener_delivers_notification_after_three_transient_failur
         .await
         .expect("listener should recover and deliver a notification");
     assert_eq!(harness.state.get_calls.load(Ordering::SeqCst), 5);
+    harness.ping().await?;
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn interrupted_post_session_expired_fails_promptly_without_retrying() -> anyhow::Result<()> {
+    // Negative control: without `SessionExpired` in the terminal set, the
+    // unbounded retry policy keeps issuing resume GETs, so the ping below
+    // times out and the GET count assertion fails.
+    let harness = Harness::start_with(
+        None,
+        Some("session-2"),
+        false,
+        [PingResponse::InterruptedSse {
+            event_id: Some("event-1"),
+        }],
+        [GetResponse::SessionExpired],
+    )
+    .await?;
+
+    let error = timeout(TEST_TIMEOUT, harness.ping())
+        .await
+        .expect("session-expired resume should fail promptly")
+        .expect_err("interrupted request cannot be replayed");
+    assert!(matches!(&error, ServiceError::McpError(_)), "{error:?}");
+    assert!(error.to_string().contains("Session expired"), "{error}");
+    harness.assert_get_count_stays(1).await;
+    assert_eq!(harness.state.initialize_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(harness.last_event_ids(), vec![Some("event-1".to_owned())]);
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn interrupted_post_session_expired_reinitializes_and_restarts_listener() -> anyhow::Result<()>
+{
+    let harness = Harness::start_with(
+        Some("session-1"),
+        Some("session-2"),
+        true,
+        [PingResponse::InterruptedSse {
+            event_id: Some("event-1"),
+        }],
+        [
+            GetResponse::ToolsChanged,
+            GetResponse::SessionExpired,
+            GetResponse::ToolsChanged,
+        ],
+    )
+    .await?;
+    harness.wait_for_gets(1).await;
+
+    let error = timeout(TEST_TIMEOUT, harness.ping())
+        .await
+        .expect("interrupted request should fail promptly")
+        .expect_err("interrupted request cannot be replayed");
+    assert!(error.to_string().contains("Session expired"), "{error}");
+    harness.wait_for_gets(3).await;
+    harness.assert_get_count_stays(3).await;
+    assert_eq!(harness.state.initialize_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        harness.get_sessions(),
+        vec![
+            Some("session-1".to_owned()),
+            Some("session-1".to_owned()),
+            Some("session-2".to_owned())
+        ]
+    );
+    assert_eq!(
+        harness.last_event_ids(),
+        vec![None, Some("event-1".to_owned()), None]
+    );
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn stream_recovery_pauses_new_posts_until_the_replacement_session_is_ready()
+-> anyhow::Result<()> {
+    let harness = Harness::start_with(
+        Some("session-1"),
+        Some("session-2"),
+        true,
+        [
+            PingResponse::DelayedJson(Duration::from_millis(80)),
+            PingResponse::InterruptedSse {
+                event_id: Some("event-1"),
+            },
+            PingResponse::Json,
+        ],
+        [
+            GetResponse::ToolsChanged,
+            GetResponse::SessionExpired,
+            GetResponse::ToolsChanged,
+        ],
+    )
+    .await?;
+    harness.wait_for_gets(1).await;
+
+    let (first, second, third) = tokio::join!(
+        harness.ping(),
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            harness.ping().await
+        },
+        async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            harness.ping().await
+        }
+    );
+    first.expect("the slow ping should succeed");
+    let second_error = second.expect_err("the interrupted ping cannot be replayed");
+    assert!(
+        second_error.to_string().contains("Session expired"),
+        "{second_error}"
+    );
+    third.expect("the queued ping should run on the replacement session");
+
+    assert_eq!(
+        harness.ping_sessions(),
+        vec![
+            Some("session-1".to_owned()),
+            Some("session-1".to_owned()),
+            Some("session-2".to_owned())
+        ]
+    );
+    harness.finish().await
+}
+
+#[tokio::test]
+async fn established_listener_session_expired_reinitializes_once() -> anyhow::Result<()> {
+    let harness = Harness::start_with(
+        Some("session-1"),
+        Some("session-2"),
+        true,
+        [PingResponse::Json],
+        [
+            GetResponse::EmptySse,
+            GetResponse::SessionExpired,
+            GetResponse::SessionExpired,
+        ],
+    )
+    .await?;
+
+    harness.wait_for_gets(3).await;
+    // The replacement listener's own 404 must not start another initialize
+    // within one session_recovery_timeout.
+    harness.assert_get_count_stays(3).await;
+    assert_eq!(harness.state.initialize_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        harness.get_sessions(),
+        vec![
+            Some("session-1".to_owned()),
+            Some("session-1".to_owned()),
+            Some("session-2".to_owned())
+        ]
+    );
     harness.ping().await?;
     harness.finish().await
 }
