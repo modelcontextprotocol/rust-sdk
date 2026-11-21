@@ -95,10 +95,11 @@ mod server {
     use std::sync::{Arc, RwLock};
 
     use rmcp::{
-        ErrorData, RoleServer, ServerHandler, ServiceExt,
+        ClientLifecycleMode, ClientServiceExt, ErrorData, RoleServer, ServerHandler, ServiceExt,
         model::{
             CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ListPromptsResult,
-            ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+            ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+            ServerConfig,
         },
         service::RequestContext,
         tool_search::{ToolSearchConfig, ToolSearchServer},
@@ -188,7 +189,14 @@ mod server {
             let server = wrapper.serve(server_io).await.unwrap();
             server.waiting().await.unwrap();
         });
-        let client = ().serve(client_io).await?;
+        let client = ()
+            .serve_with_lifecycle(
+                client_io,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await?;
         let listing = client.list_tools(None).await?;
         let names: Vec<_> = listing
             .tools
