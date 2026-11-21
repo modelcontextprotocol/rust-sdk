@@ -310,8 +310,11 @@ The exchange profile has these requirements and limits:
 - Input is an enterprise IdP refresh token. The ID-JAG's `resource` claim is
   optional; when present, it must be exactly the requested MCP resource. Without
   it, the resource authorization server picks the access token's audience, and the
-  SDK only rejects a mismatched `resource` echoed in the exchange response. Scope
-  may be omitted or narrowed.
+  SDK only rejects a mismatched `resource` echoed in the exchange response.
+- The IdP may omit or narrow the requested scope in the ID-JAG. The resource
+  authorization server decides the access token's scope: a `scope` in its response
+  replaces the ID-JAG's, whether wider or narrower, and an omitted `scope` implies
+  the token has the same scope as the ID-JAG. Malformed or duplicate scopes are still rejected.
 - RAR (`authorization_details`) and DPoP are not supported. Nonempty authorization
   details are rejected at both exchange stages.
 - Redemption consumes the SDK's ID-JAG handle and does not retry automatically.
