@@ -688,9 +688,11 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
 
 /// Whether a stream-triggered session recovery may run now.
 ///
-/// Bounds re-initialization to one attempt per `session_recovery_timeout`: a
-/// server that answers every replacement listener with 404 would otherwise
-/// drive an initialize hot loop, because the initial listener GET has no
+/// This is an event-driven throttle, not a scheduler: it only decides whether
+/// the session-expired event being handled may trigger recovery, and a
+/// suppressed event is dropped rather than retried on a timer. The interval
+/// prevents a server that answers every replacement listener with 404 from
+/// driving an initialize hot loop, because the initial listener GET has no
 /// backoff of its own.
 fn stream_recovery_allowed(last_attempt: Option<tokio::time::Instant>, timeout: Duration) -> bool {
     last_attempt.is_none_or(|attempt| attempt.elapsed() >= timeout)
@@ -2278,9 +2280,16 @@ pub struct StreamableHttpClientTransportConfig {
     ///
     /// A `404` on an SSE resume or listener GET is always terminal: the session is
     /// gone, so the interrupted request fails with a session-expired error instead
-    /// of being replayed. It triggers the same recovery, at most once per
-    /// [`Self::session_recovery_timeout`], and restarts the listener on the new
-    /// session.
+    /// of being replayed. It makes a single recovery request and restarts the
+    /// listener on the new session.
+    ///
+    /// Stream-triggered recovery is event-driven, not scheduled:
+    /// [`Self::session_recovery_timeout`] is a minimum interval between attempts,
+    /// not a retry window. If the replacement listener also receives a `404`
+    /// inside that interval, the event is dropped. No further recovery is queued
+    /// and no timer retries it, so an idle client stays without server-initiated
+    /// messages until a later session-expired event (from a POST or another
+    /// stream) triggers recovery again.
     pub reinit_on_expired_session: bool,
 }
 

@@ -138,6 +138,7 @@ async fn handler(
 async fn start(
     state: &AuditState,
     reinit_on_expired_session: bool,
+    session_recovery_timeout: Duration,
 ) -> anyhow::Result<(
     RunningService<RoleClient, ClientConfig>,
     tokio::task::JoinHandle<()>,
@@ -159,6 +160,7 @@ async fn start(
     retry.duration = Duration::from_millis(1);
     config.retry_config = Arc::new(retry);
     config.reinit_on_expired_session = reinit_on_expired_session;
+    config.session_recovery_timeout = session_recovery_timeout;
     let client = serve_client_with_lifecycle(
         ClientConfig::default(),
         StreamableHttpClientTransport::from_config(config),
@@ -193,7 +195,7 @@ async fn interrupted_ping(
 #[tokio::test]
 async fn resume_get_404_fails_pending_request_with_session_expired() -> anyhow::Result<()> {
     let state = AuditState::default();
-    let (client, server) = start(&state, false).await?;
+    let (client, server) = start(&state, false, Duration::from_secs(5)).await?;
 
     let error = interrupted_ping(&client)
         .await
@@ -212,7 +214,7 @@ async fn resume_get_404_fails_pending_request_with_session_expired() -> anyhow::
 #[tokio::test]
 async fn resume_get_404_reinitializes_once_and_restarts_listener() -> anyhow::Result<()> {
     let state = AuditState::default();
-    let (client, server) = start(&state, true).await?;
+    let (client, server) = start(&state, true, Duration::from_secs(5)).await?;
 
     let error = interrupted_ping(&client)
         .await
@@ -244,7 +246,7 @@ async fn initial_listener_get_404_reinitializes_at_most_once() -> anyhow::Result
         reject_listener_get: true,
         ..Default::default()
     };
-    let (client, server) = start(&state, true).await?;
+    let (client, server) = start(&state, true, Duration::from_secs(5)).await?;
 
     wait_for(|| {
         state.initializes.load(Ordering::SeqCst) == 2
@@ -261,5 +263,35 @@ async fn initial_listener_get_404_reinitializes_at_most_once() -> anyhow::Result
 
     assert_eq!(initializes, 2, "only one recovery attempt is allowed");
     assert_eq!(listener_gets, 2, "the replacement listener 404 is terminal");
+    Ok(())
+}
+
+#[tokio::test]
+async fn replacement_listener_404_is_not_retried_on_a_timer() -> anyhow::Result<()> {
+    let state = AuditState {
+        reject_listener_get: true,
+        ..Default::default()
+    };
+    let recovery_timeout = Duration::from_millis(200);
+    let (client, server) = start(&state, true, recovery_timeout).await?;
+
+    wait_for(|| {
+        state.initializes.load(Ordering::SeqCst) == 2
+            && state.listener_gets.load(Ordering::SeqCst) == 2
+    })
+    .await;
+    // Recovery is event-driven, not scheduled: crossing the interval must not
+    // re-run recovery for a session-expired event that was already dropped.
+    tokio::time::sleep(recovery_timeout * 3).await;
+    let initializes = state.initializes.load(Ordering::SeqCst);
+    let listener_gets = state.listener_gets.load(Ordering::SeqCst);
+    let _ = client.cancel().await;
+    server.abort();
+
+    assert_eq!(initializes, 2, "no timer may retry a dropped recovery");
+    assert_eq!(
+        listener_gets, 2,
+        "the replacement listener 404 stays terminal"
+    );
     Ok(())
 }
