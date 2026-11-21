@@ -94,6 +94,9 @@ pub enum ServiceError {
     /// The peer kept returning `input_required` beyond the configured round cap.
     #[error("input_required did not complete within {max_rounds} MRTR rounds")]
     InputRequiredRoundsExceeded { max_rounds: usize },
+    /// A `list_all_*` walk kept returning a cursor beyond the configured page cap.
+    #[error("listing did not finish within {max_pages} pages")]
+    ListPaginationExceeded { max_pages: usize },
 }
 
 impl ServiceError {
