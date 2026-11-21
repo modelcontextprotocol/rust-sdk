@@ -1744,7 +1744,7 @@ This is a supported-surface decision, not a missing feature: every transport
 
 List operations (`tools/list`, `prompts/list`, `resources/list`,
 `resources/templates/list`) are paginated via a `next_cursor`. The `list_all_*`
-helpers walk every page for you, but never more than 100 pages
+helpers walk every page for you, but never more than 64 pages
 (`rmcp::model::DEFAULT_LIST_ALL_MAX_PAGES`, matching the TypeScript SDK's
 `listMaxPages`): a server that keeps returning a cursor is answered with
 `ServiceError::ListPaginationExceeded` instead of being followed forever. Use the
@@ -1752,7 +1752,7 @@ helpers walk every page for you, but never more than 100 pages
 treat the error as "raise the cap or page manually" rather than "no results".
 
 ```rust,ignore
-// Fetches up to 100 pages transparently; bumps the cap for larger catalogs.
+// Fetches up to 64 pages transparently; bumps the cap for larger catalogs.
 let tools     = client.list_all_tools().await?;
 let prompts   = client.list_all_prompts_with_max_pages(500).await?;
 let resources = client.list_all_resources().await?;

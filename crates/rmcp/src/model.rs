@@ -4424,8 +4424,8 @@ impl CallToolResult {
 /// A server may keep returning `nextCursor` forever (the spec forbids the client
 /// from interpreting the cursor value, and `""` is a valid cursor), so an
 /// unbounded walk is a memory/latency hole. The value matches the TypeScript
-/// SDK's `listMaxPages`.
-pub const DEFAULT_LIST_ALL_MAX_PAGES: usize = 100;
+/// SDK's `listMaxPages` default of 64.
+pub const DEFAULT_LIST_ALL_MAX_PAGES: usize = 64;
 
 const_string!(ListToolsRequestMethod = "tools/list");
 /// Request to list all available tools from a server
