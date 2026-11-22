@@ -14,11 +14,11 @@ pub fn extract_doc_line(
     attr: &Attribute,
 ) -> syn::Result<Option<Expr>> {
     if !attr.path().is_ident("doc") {
-        return Ok(None);
+        return Ok(existing_docs);
     }
 
     let syn::Meta::NameValue(name_value) = &attr.meta else {
-        return Ok(None);
+        return Ok(existing_docs);
     };
 
     let value = &name_value.value;
@@ -38,7 +38,7 @@ pub fn extract_doc_line(
                 lit: syn::Lit::Str(syn::LitStr::new(&content, lit_str.span())),
             }))
         }
-        _ => return Ok(None),
+        _ => return Ok(existing_docs),
     };
 
     match (existing_docs, this_expr) {
