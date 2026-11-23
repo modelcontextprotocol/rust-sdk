@@ -2077,70 +2077,55 @@ where
 }
 
 impl Peer<RoleClient> {
-    /// Like [`Peer::list_all_tools`], but fails with
-    /// [`ServiceError::ListPaginationExceeded`] after `max_pages` pages instead
-    /// of following a peer that never stops returning a cursor.
+    /// Like [`Peer::list_all_tools`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
     pub async fn list_all_tools_with_max_pages(
         &self,
         max_pages: usize,
-    ) -> Result<Vec<crate::model::Tool>, ServiceError> {
-        Ok(list_all_pages(|params| self.list_tools(params), max_pages)
-            .await?
-            .items)
+    ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
+        list_all_pages(|params| self.list_tools(params), max_pages).await
     }
 
-    /// Like [`Peer::list_all_prompts`], but fails with
-    /// [`ServiceError::ListPaginationExceeded`] after `max_pages` pages instead
-    /// of following a peer that never stops returning a cursor.
+    /// Like [`Peer::list_all_prompts`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
     pub async fn list_all_prompts_with_max_pages(
         &self,
         max_pages: usize,
-    ) -> Result<Vec<crate::model::Prompt>, ServiceError> {
-        Ok(
-            list_all_pages(|params| self.list_prompts(params), max_pages)
-                .await?
-                .items,
-        )
+    ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
+        list_all_pages(|params| self.list_prompts(params), max_pages).await
     }
 
-    /// Like [`Peer::list_all_resources`], but fails with
-    /// [`ServiceError::ListPaginationExceeded`] after `max_pages` pages instead
-    /// of following a peer that never stops returning a cursor.
+    /// Like [`Peer::list_all_resources`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
     pub async fn list_all_resources_with_max_pages(
         &self,
         max_pages: usize,
-    ) -> Result<Vec<crate::model::Resource>, ServiceError> {
-        Ok(
-            list_all_pages(|params| self.list_resources(params), max_pages)
-                .await?
-                .items,
-        )
+    ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
+        list_all_pages(|params| self.list_resources(params), max_pages).await
     }
 
-    /// Like [`Peer::list_all_skills`], but fails with
-    /// [`ServiceError::ListPaginationExceeded`] after `max_pages` pages instead
-    /// of following a peer that never stops returning a cursor.
+    /// Like [`Peer::list_all_skills`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
     pub async fn list_all_skills_with_max_pages(
         &self,
         max_pages: usize,
-    ) -> Result<Vec<crate::model::Skill>, ServiceError> {
-        Ok(list_all_pages(|params| self.list_skills(params), max_pages)
-            .await?
-            .items)
+    ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
+        list_all_pages(|params| self.list_skills(params), max_pages).await
     }
 
-    /// Like [`Peer::list_all_resource_templates`], but fails with
-    /// [`ServiceError::ListPaginationExceeded`] after `max_pages` pages instead
-    /// of following a peer that never stops returning a cursor.
+    /// Like [`Peer::list_all_resource_templates`], but returns the merged cache
+    /// hint and fails with [`ServiceError::ListPaginationExceeded`] after
+    /// `max_pages` pages instead of following a peer that never stops returning
+    /// a cursor.
     pub async fn list_all_resource_templates_with_max_pages(
         &self,
         max_pages: usize,
-    ) -> Result<Vec<crate::model::ResourceTemplate>, ServiceError> {
-        Ok(
-            list_all_pages(|params| self.list_resource_templates(params), max_pages)
-                .await?
-                .items,
-        )
+    ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
+        list_all_pages(|params| self.list_resource_templates(params), max_pages).await
     }
 
     /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed, or until
@@ -3210,6 +3195,34 @@ mod tests {
 
         let merged = peer.list_all_tools_with_cache_hint().await.unwrap();
         assert_eq!(merged.cache_scope, Some(CacheScope::Private));
+    }
+
+    #[tokio::test]
+    async fn custom_page_cap_keeps_the_cache_hint() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Private));
+        cache_tool_pages(&peer, &[hint, hint]).await;
+
+        let merged = peer.list_all_tools_with_max_pages(8).await.unwrap();
+        assert_eq!(merged.items.len(), 2);
+        assert_eq!(merged.cache_scope, Some(CacheScope::Private));
+        assert!(merged.ttl_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn custom_page_cap_still_stops_the_walk() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint, hint]).await;
+
+        let result = peer.list_all_tools_with_max_pages(2).await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 2 })
+            ),
+            "expected the cap, got {result:?}"
+        );
     }
 
     #[tokio::test]
