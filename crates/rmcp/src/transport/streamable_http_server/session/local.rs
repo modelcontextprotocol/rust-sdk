@@ -426,18 +426,11 @@ pub struct StreamableHttpMessageReceiver {
 }
 
 impl LocalSessionWorker {
-    fn unregister_resource(&mut self, resource: &ResourceKey) {
-        let Some(http_request_id) = self.resource_router.remove(resource) else {
-            return;
-        };
-        tracing::trace!(?resource, http_request_id, "unregister resource");
+    fn complete_request_wise_channel(&mut self, http_request_id: HttpRequestId) {
         let Some(channel) = self.tx_router.get_mut(&http_request_id) else {
             tracing::warn!(http_request_id, "http request wise channel not found");
             return;
         };
-        if !channel.resources.is_empty() && !matches!(resource, ResourceKey::McpRequestId(_)) {
-            return;
-        }
         tracing::debug!(http_request_id, "close http request wise channel");
         let resources: Vec<_> = channel.resources.drain().collect();
         channel.completed_at = Some(Instant::now());
@@ -449,6 +442,20 @@ impl LocalSessionWorker {
         for resource in resources {
             self.resource_router.remove(&resource);
         }
+    }
+    fn unregister_resource(&mut self, resource: &ResourceKey) {
+        let Some(http_request_id) = self.resource_router.remove(resource) else {
+            return;
+        };
+        tracing::trace!(?resource, http_request_id, "unregister resource");
+        let Some(channel) = self.tx_router.get(&http_request_id) else {
+            tracing::warn!(http_request_id, "http request wise channel not found");
+            return;
+        };
+        if !channel.resources.is_empty() && !matches!(resource, ResourceKey::McpRequestId(_)) {
+            return;
+        }
+        self.complete_request_wise_channel(http_request_id);
     }
     fn register_resource(&mut self, resource: ResourceKey, http_request_id: HttpRequestId) {
         tracing::trace!(?resource, http_request_id, "register resource");
@@ -637,10 +644,8 @@ impl LocalSessionWorker {
             OutboundChannel::RequestWise { id, close } => {
                 if let Some(request_wise) = self.tx_router.get_mut(&id) {
                     request_wise.tx.send(message).await?;
-                    if close && let Some(channel) = self.tx_router.remove(&id) {
-                        for resource in channel.resources {
-                            self.resource_router.remove(&resource);
-                        }
+                    if close {
+                        self.complete_request_wise_channel(id);
                     }
                 } else {
                     return Err(SessionError::ChannelClosed(Some(id)));
@@ -654,6 +659,7 @@ impl LocalSessionWorker {
         &mut self,
         last_event_id: EventId,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        self.evict_expired_channels();
         // Clean up closed shadow senders before processing
         self.shadow_txs.retain(|tx| !tx.is_closed());
 
@@ -760,6 +766,7 @@ impl LocalSessionWorker {
                 let request_wise = self
                     .tx_router
                     .get_mut(&id)
+                    .filter(|rw| rw.completed_at.is_none())
                     .ok_or(SessionError::ChannelClosed(Some(id)))?;
 
                 // Send priming event if retry interval is specified
@@ -1371,5 +1378,204 @@ mod sep2260_routing_tests {
 
         let channel = worker.resolve_outbound_channel(&roots_request(Some(originating_id)));
         assert!(matches!(channel, OutboundChannel::Common));
+    }
+}
+
+#[cfg(test)]
+mod completed_channel_resume_tests {
+    use super::*;
+    use crate::model::{EmptyResult, ErrorData, NumberOrString, ServerResult};
+
+    async fn drain_receiver(mut receiver: StreamableHttpMessageReceiver) -> Vec<ServerSseMessage> {
+        let mut events = Vec::new();
+        while let Some(msg) = receiver.inner.recv().await {
+            events.push(msg);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn completed_request_wise_channel_retains_cache_for_resume_within_ttl() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        assert_eq!(http_request_id, 0);
+
+        let req_id = RequestId::Number(2);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+        worker.register_resource(
+            ResourceKey::ProgressToken(ProgressToken(NumberOrString::Number(9))),
+            http_request_id,
+        );
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id.clone(),
+            ))
+            .await
+            .unwrap();
+
+        let initial_events = drain_receiver(receiver).await;
+        assert_eq!(initial_events.len(), 2);
+        assert_eq!(initial_events[0].event_id.as_deref(), Some("0/0"));
+        assert_eq!(initial_events[1].event_id.as_deref(), Some("1/0"));
+        assert!(matches!(
+            initial_events[1].message.as_deref(),
+            Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+        ));
+
+        assert!(worker.resource_router.is_empty());
+        assert!(
+            worker
+                .tx_router
+                .get(&http_request_id)
+                .is_some_and(|ch| ch.completed_at.is_some())
+        );
+
+        let close_err = worker
+            .close_sse_stream(Some(http_request_id), Some(Duration::from_secs(1)))
+            .await
+            .unwrap_err();
+        assert!(matches!(close_err, SessionError::ChannelClosed(Some(0))));
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed
+                .iter()
+                .all(|ev| ev.retry != Some(Duration::from_secs(1))),
+            "closing an already-completed channel must not append priming events"
+        );
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("1/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+                    )
+            }),
+            "expected response 1/0 to be replayed on resume, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_error_response_retains_cache_for_resume() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(3);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                ErrorData::internal_error("boom", None),
+                Some(req_id.clone()),
+            ))
+            .await
+            .unwrap();
+
+        let initial_events = drain_receiver(receiver).await;
+        assert_eq!(initial_events.len(), 2);
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("1/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Error(err)) if err.id.as_ref() == Some(&req_id)
+                    )
+            }),
+            "expected error response 1/0 to be replayed on resume, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_after_close_sse_stream_replays_completed_response() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(4);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+
+        worker
+            .close_sse_stream(Some(http_request_id), Some(Duration::from_millis(50)))
+            .await
+            .unwrap();
+        let disconnected = drain_receiver(receiver).await;
+        assert_eq!(disconnected.len(), 2);
+        assert_eq!(disconnected[0].event_id.as_deref(), Some("0/0"));
+        assert_eq!(disconnected[1].event_id.as_deref(), Some("1/0"));
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id.clone(),
+            ))
+            .await
+            .unwrap();
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 1,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("2/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+                    )
+            }),
+            "expected response 2/0 to be replayed after close_sse_stream, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_evicts_expired_completed_channel_without_other_events() {
+        let config = SessionConfig {
+            completed_cache_ttl: Duration::ZERO,
+            ..SessionConfig::default()
+        };
+        let (_handle, mut worker) = create_local_session("test-session", config);
+        let _receiver = worker.establish_request_wise_channel().await.unwrap();
+        let req_id = RequestId::Number(5);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), 0);
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let err = worker
+            .resume(EventId {
+                http_request_id: Some(0),
+                index: 0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::ChannelClosed(Some(0))));
+        assert!(worker.tx_router.is_empty());
     }
 }
