@@ -266,7 +266,15 @@ impl CachedTx {
         session_id: &SessionId,
         event_store: Option<Arc<dyn EventStore>>,
     ) -> Self {
-        Self::new(tx, None, 0, format!("{session_id}:common"), event_store)
+        // The tower layer prefixes a standalone GET stream with a priming event
+        // with ID `0` (`ServerSseMessage::priming("0", ..)`). That event is not
+        // stored in this cache, so the cached common events start at 1. Starting
+        // at 0 would give two events with ID `0` on the same stream, and
+        // `Last-Event-ID: 0` could mean either "only the priming event" or "the
+        // first notification". With the cache starting at 1, ID `0` always means
+        // "nothing from the cache received yet", which is the `Some(0)` that
+        // `establish_common_channel` resumes from.
+        Self::new(tx, None, 1, format!("{session_id}:common"), event_store)
     }
 
     fn next_event_id(&self) -> EventId {
@@ -325,6 +333,8 @@ impl CachedTx {
         });
     }
 
+    /// Replay the cached events that come strictly after the event at `index`,
+    /// which is the last one the client received (`Last-Event-ID`).
     async fn sync(&mut self, index: usize) -> Result<(), SessionError> {
         let Some(front) = self.cache.front() else {
             return Ok(());
@@ -334,7 +344,7 @@ impl CachedTx {
             .as_deref()
             .unwrap_or_default()
             .parse::<EventId>()?;
-        let sync_index = index.saturating_sub(front_event_id.index);
+        let sync_index = index.saturating_add(1).saturating_sub(front_event_id.index);
         if sync_index > self.cache.len() {
             // invalid index
             return Err(SessionError::InvalidEventId);
@@ -1371,5 +1381,40 @@ mod sep2260_routing_tests {
 
         let channel = worker.resolve_outbound_channel(&roots_request(Some(originating_id)));
         assert!(matches!(channel, OutboundChannel::Common));
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::model::{ServerNotification, ToolListChangedNotification};
+
+    fn notification() -> ServerJsonRpcMessage {
+        ServerJsonRpcMessage::notification(ServerNotification::ToolListChangedNotification(
+            ToolListChangedNotification {
+                method: Default::default(),
+                extensions: Default::default(),
+            },
+        ))
+    }
+
+    #[tokio::test]
+    async fn resume_replays_only_events_after_last_event_id() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let mut cached = CachedTx::new(tx, Some(3), 0, "test-stream".into(), None);
+        for _ in 0..3 {
+            cached.send(notification()).await.unwrap();
+        }
+
+        // The client last received `1/3`, then reconnected.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        cached.tx = tx;
+        cached.sync(1).await.unwrap();
+
+        let mut replayed = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            replayed.push(message.event_id.unwrap());
+        }
+        assert_eq!(replayed, ["2/3"]);
     }
 }
