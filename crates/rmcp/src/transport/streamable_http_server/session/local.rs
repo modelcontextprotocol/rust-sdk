@@ -266,10 +266,14 @@ impl CachedTx {
         session_id: &SessionId,
         event_store: Option<Arc<dyn EventStore>>,
     ) -> Self {
-        // Index 0 is taken by the synthetic priming event that a standalone GET
-        // sends with ID `0`, so the first cached common event starts at 1.
-        // Otherwise a client that only saw the priming event would resume with
-        // `Last-Event-ID: 0` and skip the first real notification.
+        // The tower layer prefixes a standalone GET stream with a priming event
+        // with ID `0` (`ServerSseMessage::priming("0", ..)`). That event is not
+        // stored in this cache, so the cached common events start at 1. Starting
+        // at 0 would give two events with ID `0` on the same stream, and
+        // `Last-Event-ID: 0` could mean either "only the priming event" or "the
+        // first notification". With the cache starting at 1, ID `0` always means
+        // "nothing from the cache received yet", which is the `Some(0)` that
+        // `establish_common_channel` resumes from.
         Self::new(tx, None, 1, format!("{session_id}:common"), event_store)
     }
 
