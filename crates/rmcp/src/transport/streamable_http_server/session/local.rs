@@ -2,14 +2,17 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     num::ParseIntError,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures::{Stream, StreamExt};
 use thiserror::Error;
-use tokio::sync::{
-    mpsc::{Receiver, Sender},
-    oneshot,
+use tokio::{
+    sync::{
+        mpsc::{Receiver, Sender},
+        oneshot,
+    },
+    time::Instant,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
@@ -496,6 +499,14 @@ impl LocalSessionWorker {
         let ttl = self.session_config.completed_cache_ttl;
         self.tx_router
             .retain(|_, rw| rw.completed_at.is_none_or(|at| at.elapsed() < ttl));
+    }
+    fn next_completed_eviction_deadline(&self) -> Option<Instant> {
+        let ttl = self.session_config.completed_cache_ttl;
+        self.tx_router
+            .values()
+            .filter_map(|rw| rw.completed_at)
+            .filter_map(|at| at.checked_add(ttl))
+            .min()
     }
     fn next_http_request_id(&mut self) -> HttpRequestId {
         let id = self.next_http_request_id;
@@ -1110,10 +1121,13 @@ impl Worker for LocalSessionWorker {
             .send(Ok(()))
             .map_err(|_| WorkerQuitReason::HandlerTerminated)?;
         let ct = context.cancellation_token.clone();
-        let keep_alive = self.session_config.keep_alive.unwrap_or(Duration::MAX);
+        let mut idle_deadline = self
+            .session_config
+            .keep_alive
+            .and_then(|d| Instant::now().checked_add(d));
         loop {
             self.evict_expired_channels();
-            let keep_alive_timeout = tokio::time::sleep(keep_alive);
+            let next_eviction = self.next_completed_eviction_deadline();
             let event = tokio::select! {
                 event = self.event_rx.recv() => {
                     if let Some(event) = event {
@@ -1128,10 +1142,29 @@ impl Worker for LocalSessionWorker {
                 _ = ct.cancelled() => {
                     return Err(WorkerQuitReason::Cancelled)
                 }
-                _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::IdleTimeout(keep_alive))
+                _ = async {
+                    match idle_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    return Err(WorkerQuitReason::IdleTimeout(
+                        self.session_config.keep_alive.unwrap_or(Duration::MAX),
+                    ))
+                }
+                _ = async {
+                    match next_eviction {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    continue;
                 }
             };
+            idle_deadline = self
+                .session_config
+                .keep_alive
+                .and_then(|d| Instant::now().checked_add(d));
             match event {
                 InnerEvent::FromHandler(WorkerSendRequest {
                     message, responder, ..
@@ -1577,5 +1610,234 @@ mod completed_channel_resume_tests {
             .unwrap_err();
         assert!(matches!(err, SessionError::ChannelClosed(Some(0))));
         assert!(worker.tx_router.is_empty());
+    }
+
+    struct DropDetector(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropDetector {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Clone)]
+    #[allow(dead_code)]
+    struct DropFlag(Arc<DropDetector>);
+
+    async fn spawn_initialized_session(
+        config: SessionConfig,
+    ) -> (LocalSessionHandle, WorkerTransport<LocalSessionWorker>) {
+        use crate::{
+            model::{
+                ClientCapabilities, Implementation, InitializeRequest, InitializeRequestParams,
+                InitializeResult, ProtocolVersion, ServerCapabilities,
+            },
+            transport::Transport,
+        };
+
+        let (handle, worker) = create_local_session("test-session", config);
+        let mut transport = WorkerTransport::spawn(worker);
+        let init_handle = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                let init_req = ClientJsonRpcMessage::request(
+                    ClientRequest::InitializeRequest(InitializeRequest::new(
+                        InitializeRequestParams::new(
+                            ClientCapabilities::default(),
+                            Implementation::new("test", "1.0"),
+                        ),
+                    )),
+                    RequestId::Number(1),
+                );
+                handle.initialize(init_req).await
+            }
+        });
+        let received = transport.receive().await.expect("initialize forwarded");
+        assert!(matches!(received, ClientJsonRpcMessage::Request(_)));
+        transport
+            .send(ServerJsonRpcMessage::response(
+                crate::model::ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default())
+                        .with_protocol_version(ProtocolVersion::default()),
+                ),
+                RequestId::Number(1),
+            ))
+            .await
+            .unwrap();
+        init_handle.await.unwrap().unwrap();
+        (handle, transport)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_session_evicts_completed_cache_at_ttl_without_keep_alive() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{
+            model::{PingRequest, ServerRequest},
+            service::OriginatingRequestId,
+            transport::Transport,
+        };
+
+        let config = SessionConfig {
+            keep_alive: None,
+            completed_cache_ttl: Duration::from_secs(60),
+            ..SessionConfig::default()
+        };
+        let (handle, mut transport) = spawn_initialized_session(config).await;
+
+        let receiver = handle.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(2);
+        handle
+            .push_message(
+                ClientJsonRpcMessage::request(
+                    ClientRequest::PingRequest(PingRequest::default()),
+                    req_id.clone(),
+                ),
+                Some(http_request_id),
+            )
+            .await
+            .unwrap();
+        assert!(transport.receive().await.is_some());
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        #[expect(
+            deprecated,
+            reason = "roots is SEP-2577-deprecated; any restricted request works here"
+        )]
+        let mut associated = crate::model::ListRootsRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        };
+        associated
+            .extensions
+            .insert(OriginatingRequestId(req_id.clone()));
+        associated
+            .extensions
+            .insert(DropFlag(Arc::new(DropDetector(dropped.clone()))));
+        transport
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::ListRootsRequest(associated),
+                RequestId::Number(100),
+            ))
+            .await
+            .unwrap();
+
+        transport
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let events = drain_receiver(receiver).await;
+        assert_eq!(events.len(), 3);
+        drop(events);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(59)).await;
+        tokio::task::yield_now().await;
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "completed cache must be evicted at TTL even when idle without keep_alive"
+        );
+
+        let err = handle
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::ChannelClosed(Some(id)) if id == http_request_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_cache_eviction_does_not_extend_keep_alive_timeout() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{
+            model::{PingRequest, ServerRequest},
+            service::OriginatingRequestId,
+            transport::Transport,
+        };
+
+        let config = SessionConfig {
+            keep_alive: Some(Duration::from_secs(100)),
+            completed_cache_ttl: Duration::from_secs(60),
+            ..SessionConfig::default()
+        };
+        let (handle, mut transport) = spawn_initialized_session(config).await;
+
+        let receiver = handle.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(2);
+        handle
+            .push_message(
+                ClientJsonRpcMessage::request(
+                    ClientRequest::PingRequest(PingRequest::default()),
+                    req_id.clone(),
+                ),
+                Some(http_request_id),
+            )
+            .await
+            .unwrap();
+        assert!(transport.receive().await.is_some());
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        #[expect(
+            deprecated,
+            reason = "roots is SEP-2577-deprecated; any restricted request works here"
+        )]
+        let mut associated = crate::model::ListRootsRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        };
+        associated
+            .extensions
+            .insert(OriginatingRequestId(req_id.clone()));
+        associated
+            .extensions
+            .insert(DropFlag(Arc::new(DropDetector(dropped.clone()))));
+        transport
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::ListRootsRequest(associated),
+                RequestId::Number(100),
+            ))
+            .await
+            .unwrap();
+
+        transport
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let events = drain_receiver(receiver).await;
+        assert_eq!(events.len(), 3);
+        drop(events);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "completed cache must be evicted at TTL"
+        );
+
+        tokio::time::advance(Duration::from_secs(40)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            transport.receive().await.is_none(),
+            "idle keep_alive timeout must not be extended by cache eviction wakeup"
+        );
+        drop(handle);
     }
 }
