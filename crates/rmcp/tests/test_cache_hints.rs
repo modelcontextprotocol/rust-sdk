@@ -1,5 +1,5 @@
 use rmcp::model::{
-    CacheScope, ListToolsResult, ReadResourceResult, ResourceContents, ServerResult,
+    CacheScope, DiscoverResult, ListToolsResult, ReadResourceResult, ResourceContents, ServerResult,
 };
 use serde_json::json;
 
@@ -87,6 +87,47 @@ fn cache_hints_default_to_none_and_negative_ttl_is_normalized_to_zero() {
     .expect("deserialize result with negative ttlMs");
     assert_eq!(negative.ttl_ms, Some(0));
     assert_eq!(negative.cache_scope, Some(CacheScope::Private));
+}
+
+#[test]
+fn numeric_ttl_preserves_the_typed_tools_result() {
+    for (number, expected) in [
+        ("5000.0", 5000),
+        ("5e3", 5000),
+        ("1200.0e-2", 12),
+        ("15e-1", 0),
+        ("-1.5", 0),
+        ("9007199254740993.0", 9007199254740993),
+        ("18446744073709551615", u64::MAX),
+        ("1e20", 0),
+    ] {
+        let payload = format!(
+            r#"{{"tools":[{{"name":"search","inputSchema":{{"type":"object"}}}}],"ttlMs":{number}}}"#
+        );
+        let direct: ListToolsResult = serde_json::from_str(&payload).unwrap();
+        let ServerResult::ListToolsResult(result) = serde_json::from_str(&payload).unwrap() else {
+            panic!("ttlMs {number} lost the typed tools result");
+        };
+        assert_eq!(result, direct);
+        assert_eq!(result.ttl_ms, Some(expected), "ttlMs {number}");
+        assert_eq!(result.tools[0].name, "search");
+    }
+}
+
+#[test]
+fn discovery_normalizes_numeric_ttl_but_still_requires_it() {
+    let mut payload = json!({
+        "resultType": "complete",
+        "supportedVersions": ["2026-07-28"],
+        "capabilities": {},
+        "cacheScope": "private"
+    });
+    assert!(serde_json::from_value::<DiscoverResult>(payload.clone()).is_err());
+    payload["ttlMs"] = json!(5000.0);
+    let ServerResult::DiscoverResult(result) = serde_json::from_value(payload).unwrap() else {
+        panic!("decimal TTL lost the typed discovery result");
+    };
+    assert_eq!(result.ttl_ms, 5000);
 }
 
 #[test]

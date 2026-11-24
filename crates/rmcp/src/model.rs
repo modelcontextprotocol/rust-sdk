@@ -1484,6 +1484,7 @@ pub struct DiscoverResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     /// How long clients may consider this response fresh, in milliseconds.
+    #[serde(deserialize_with = "deserialize_required_ttl_ms")]
     pub ttl_ms: u64,
     /// Whether the cached result may be shared across authorization contexts.
     pub cache_scope: CacheScope,
@@ -1857,17 +1858,45 @@ pub enum CacheScope {
     Private,
 }
 
-/// Normalize a `ttlMs` value during deserialization.
-///
-/// Per SEP-2549, `ttlMs` MUST be `>= 0`; if a server returns a negative value,
-/// clients SHOULD treat it as `0` (immediately stale). This tolerates that case
-/// rather than erroring, while still accepting an absent field as `None`.
+/// Read whole milliseconds without rounding a decimal or exponent through f64.
+/// A negative (SEP-2549), fractional or overflowing TTL is immediately stale.
+/// Rejecting the number would make untagged ServerResult lose the typed result.
+fn cache_ttl_ms(number: serde_json::Number) -> u64 {
+    if let Some(ms) = number.as_u64() {
+        return ms;
+    }
+    let decimal = number.to_string();
+    let (mantissa, exponent) = decimal.split_once(['e', 'E']).unwrap_or((&decimal, "0"));
+    let Ok(exponent) = exponent.parse::<i64>() else {
+        return 0;
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{fraction}");
+    let significant = digits.trim_end_matches('0');
+    // After removing trailing zeros, a negative power means fractional milliseconds.
+    let power = exponent.saturating_add(whole.len() as i64 - significant.len() as i64);
+    let (Ok(ms), Ok(power)) = (significant.parse::<u64>(), u32::try_from(power)) else {
+        return 0;
+    };
+    10u64
+        .checked_pow(power)
+        .and_then(|scale| ms.checked_mul(scale))
+        .unwrap_or(0)
+}
+
+fn deserialize_required_ttl_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Number::deserialize(deserializer).map(cache_ttl_ms)
+}
+
 fn deserialize_ttl_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = Option::<i64>::deserialize(deserializer)?;
-    Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
+    let value = Option::<serde_json::Number>::deserialize(deserializer)?;
+    Ok(value.map(cache_ttl_ms))
 }
 
 /// Normalize a `cacheScope` value during deserialization.
