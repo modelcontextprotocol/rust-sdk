@@ -256,20 +256,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         let status = response.status();
 
-        if status == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
+        if let Some(error) = auth_required_error(status, response.headers()) {
+            return Err(error);
         }
 
         if status == StatusCode::FORBIDDEN
@@ -532,20 +520,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
 
-        if response.status() == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
+        if let Some(error) = auth_required_error(response.status(), response.headers()) {
+            return Err(error);
         }
 
         if response.status() == StatusCode::FORBIDDEN
