@@ -500,7 +500,7 @@ async fn main() -> Result<()> {
         )
         .route("/authorize", get(authorize_get).post(authorize_post))
         .route("/token", post(token).layer(cors_layer.clone()))
-        .nest_service("/mcp", mcp_service)
+        .route_service("/mcp", mcp_service)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

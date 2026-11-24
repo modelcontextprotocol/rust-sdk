@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
                 .with_sse_keep_alive(Some(Duration::from_secs(10)))
                 .with_cancellation_token(cancellation_token.child_token()),
         );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await?;
 
     axum::serve(listener, router)

@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
     // Create protected MCP routes (require authorization)
     let protected_mcp_router =
         Router::new()
-            .nest_service("/mcp", mcp_service)
+            .route_service("/mcp", mcp_service)
             .layer(middleware::from_fn_with_state(
                 token_store.clone(),
                 auth_middleware,

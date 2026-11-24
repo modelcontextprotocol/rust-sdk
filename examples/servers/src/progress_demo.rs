@@ -54,7 +54,7 @@ async fn run_streamable_http() -> anyhow::Result<()> {
         Default::default(),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(HTTP_BIND_ADDRESS).await?;
 
     tracing::info!(
@@ -79,7 +79,7 @@ async fn run_all_transports() -> anyhow::Result<()> {
         LocalSessionManager::default().into(),
         Default::default(),
     );
-    let http_router = axum::Router::new().nest_service("/mcp", http_service);
+    let http_router = axum::Router::new().route_service("/mcp", http_service);
     let http_listener = tokio::net::TcpListener::bind(HTTP_BIND_ADDRESS).await?;
 
     // Start Streamable HTTP server
