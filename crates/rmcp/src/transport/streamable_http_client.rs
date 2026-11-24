@@ -212,6 +212,40 @@ impl HttpStatusError {
     }
 }
 
+/// Shared startup error delivered to a live sender while the same typed value
+/// remains in the transport's quit reason.
+#[derive(Debug)]
+pub struct SharedStartupError<E: std::error::Error + Send + Sync + 'static> {
+    error: Arc<StreamableHttpError<E>>,
+    // Keep an erased handle to the same allocation. Returning the typed field
+    // directly from `source()` would create a recursive `Error` trait bound.
+    source: Arc<dyn std::error::Error + Send + Sync>,
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> SharedStartupError<E> {
+    fn new(error: Arc<StreamableHttpError<E>>) -> Self {
+        let source: Arc<dyn std::error::Error + Send + Sync> = error.clone();
+        Self { error, source }
+    }
+
+    /// Return the original typed startup error.
+    pub fn error(&self) -> &StreamableHttpError<E> {
+        self.error.as_ref()
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Display for SharedStartupError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.error.as_ref(), f)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for SharedStartupError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
@@ -243,6 +277,11 @@ pub enum StreamableHttpError<E: std::error::Error + Send + Sync + 'static> {
     Deserialize(#[from] serde_json::Error),
     #[error("Transport channel closed")]
     TransportChannelClosed,
+    /// A startup handshake failure shared with the transport's retained quit
+    /// reason. Use [`startup_error`](Self::startup_error) to recover the original
+    /// typed error without changing how existing variants are inspected.
+    #[error("startup handshake failed: {0}")]
+    StartupShared(#[source] SharedStartupError<E>),
     #[error("Missing session id in HTTP response")]
     MissingSessionIdInResponse,
     #[cfg(feature = "auth")]
@@ -297,6 +336,20 @@ pub(crate) fn json_rpc_parse_error_message(err: &serde_json::Error, body: &[u8])
 }
 
 impl<E: std::error::Error + Send + Sync + 'static> StreamableHttpError<E> {
+    /// Return the original startup error behind [`StartupShared`](Self::StartupShared),
+    /// or this error itself for every other variant.
+    ///
+    /// Startup errors are not generally `Clone`, so the live `send()` result and
+    /// the retained quit reason share one typed value through `Arc`. This
+    /// accessor preserves typed inspection of `HttpStatus`, `AuthRequired`, and
+    /// other variants without requiring callers to handle the sharing wrapper.
+    pub fn startup_error(&self) -> &Self {
+        match self {
+            Self::StartupShared(error) => error.error(),
+            _ => self,
+        }
+    }
+
     /// The `WWW-Authenticate` challenge carried by this error, when the
     /// server answered 401 ([`AuthRequired`](Self::AuthRequired)) or 403
     /// ([`InsufficientScope`](Self::InsufficientScope)). Feed it to
@@ -304,7 +357,7 @@ impl<E: std::error::Error + Send + Sync + 'static> StreamableHttpError<E> {
     /// to authorize reactively.
     #[cfg(feature = "auth")]
     pub fn auth_challenge(&self) -> Option<&str> {
-        match self {
+        match self.startup_error() {
             Self::AuthRequired(error) => Some(&error.www_authenticate_header),
             Self::InsufficientScope(error) => Some(&error.www_authenticate_header),
             _ => None,
@@ -1205,6 +1258,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     fn err_closed() -> Self::Error {
         StreamableHttpError::TransportChannelClosed
     }
+    fn is_closed_error(error: &Self::Error) -> bool {
+        matches!(error, StreamableHttpError::TransportChannelClosed)
+    }
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
         StreamableHttpError::TokioJoinError(e)
     }
@@ -1261,16 +1317,21 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             Ok(res) => {
                 let _ = responder.send(Ok(()));
                 res.expect_initialized::<C::Error>().await.map_err(
-                    WorkerQuitReason::fatal_context("process initialize response"),
+                    WorkerQuitReason::startup_failed_context("process initialize response"),
                 )?
             }
             Err(err) => {
-                let msg = format!("{:?}", err);
-                let _ = responder.send(Err(err));
-                return Err(WorkerQuitReason::fatal(
-                    StreamableHttpError::TransportChannelClosed,
-                    msg,
-                ));
+                // Keep one typed error in both delivery paths. The live sender
+                // can inspect the original variant through `startup_error()`;
+                // dropping an unreceived ack cannot destroy the retained copy.
+                let error = Arc::new(err);
+                let _ = responder.send(Err(StreamableHttpError::StartupShared(
+                    SharedStartupError::new(error.clone()),
+                )));
+                return Err(WorkerQuitReason::StartupFailed {
+                    error,
+                    context: "startup request failed".into(),
+                });
             }
         };
         let mut uses_modern_http = !is_legacy_startup;
@@ -1314,7 +1375,8 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 &tool_header_cache,
                 &negotiated_version,
             );
-            self.client
+            let initialized_result = self
+                .client
                 .post_message_with_response_limits(
                     config.uri.clone(),
                     initialized_notification.message,
@@ -1324,13 +1386,20 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     config.response_limits(),
                 )
                 .await
-                .map_err(WorkerQuitReason::fatal_context(
-                    "send initialized notification",
-                ))?
-                .expect_accepted_or_json::<C::Error>()
-                .map_err(WorkerQuitReason::fatal_context(
-                    "process initialized notification response",
-                ))?;
+                .and_then(|response| response.expect_accepted_or_json::<C::Error>());
+            if let Err(error) = initialized_result {
+                // The initialized notification is still part of startup. Deliver
+                // the real typed error to its waiter and retain the same value
+                // for observers whose receiver has already been dropped.
+                let error = Arc::new(error);
+                let _ = initialized_notification.responder.send(Err(
+                    StreamableHttpError::StartupShared(SharedStartupError::new(error.clone())),
+                ));
+                return Err(WorkerQuitReason::StartupFailed {
+                    error,
+                    context: "send initialized notification".into(),
+                });
+            }
             let _ = initialized_notification.responder.send(Ok(()));
         }
         #[expect(
