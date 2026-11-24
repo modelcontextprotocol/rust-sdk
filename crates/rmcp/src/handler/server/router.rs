@@ -3,7 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use prompt::{IntoPromptRoute, PromptRoute};
 use tool::{IntoToolRoute, ToolRoute};
 
-use super::ServerHandler;
+use super::{ServerHandler, common::reject_cursor};
 use crate::{
     RoleServer, Service,
     model::{
@@ -116,7 +116,8 @@ where
                         .await
                 }
             }
-            ClientRequest::ListToolsRequest(_) => {
+            ClientRequest::ListToolsRequest(request) => {
+                reject_cursor(request.params.as_ref())?;
                 let tools = self.tool_router.list_all();
                 Ok(ServerResult::ListToolsResult(ListToolsResult {
                     tools,
@@ -139,7 +140,8 @@ where
                         .await
                 }
             }
-            ClientRequest::ListPromptsRequest(_) => {
+            ClientRequest::ListPromptsRequest(request) => {
+                reject_cursor(request.params.as_ref())?;
                 let prompts = self.prompt_router.list_all();
                 Ok(ServerResult::ListPromptsResult(ListPromptsResult {
                     prompts,

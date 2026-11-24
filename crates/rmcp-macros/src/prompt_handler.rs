@@ -56,9 +56,10 @@ pub fn prompt_handler(attr: TokenStream, input: TokenStream) -> syn::Result<Toke
     let list_prompts_impl: ImplItem = parse_quote! {
         async fn list_prompts(
             &self,
-            _request: Option<rmcp::model::PaginatedRequestParams>,
+            request: Option<rmcp::model::PaginatedRequestParams>,
             context: rmcp::service::RequestContext<rmcp::RoleServer>,
         ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
+                rmcp::handler::server::common::reject_cursor(request.as_ref())?;
             let prompts = #router_expr.list_all();
             let supports_cache_hints = context.protocol_version().is_some_and(|version| {
                 version >= rmcp::model::ProtocolVersion::V_2026_07_28
