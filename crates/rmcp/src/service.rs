@@ -85,6 +85,15 @@ pub enum ServiceError {
     TransportClosed,
     #[error("Unexpected response type")]
     UnexpectedResponse,
+    /// A JSON-RPC result could not be decoded as the expected result for this method.
+    #[cfg(feature = "client")]
+    #[error("invalid {method} result at {path}: {source}")]
+    ResponseDecode {
+        method: &'static str,
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("subscription consumer lagged behind its {capacity}-message buffer")]
     SubscriptionLagged { capacity: usize },
     #[error("task cancelled for reason {}", reason.as_deref().unwrap_or("<unknown>"))]

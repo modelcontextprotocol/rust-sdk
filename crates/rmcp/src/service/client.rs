@@ -11,6 +11,7 @@ use std::{
 
 use cache::CacheGeneration;
 pub use cache::{ClientCacheConfig, MAX_CLIENT_CACHE_TTL};
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use super::*;
@@ -20,28 +21,56 @@ use crate::{
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
         CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
-        CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
-        DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
-        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequest,
-        GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, GetTaskParams,
-        GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
-        InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
-        JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
-        ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
-        ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsResult, MetaObject,
-        NumberOrString, PaginatedRequestParams, PaginatedResult, ProgressNotification,
-        ProgressNotificationParam, ProtocolVersion, ReadResourceDirectoryRequest,
-        ReadResourceDirectoryRequestMethod, ReadResourceDirectoryRequestParams,
-        ReadResourceDirectoryResult, ReadResourceRequest, ReadResourceRequestParams,
-        ReadResourceResponse, ReadResourceResult, Reference, RequestId, RequestMetaObject,
-        RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification, ServerPeerInfo,
-        ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams, SubscribeRequest,
-        SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
+        CompletionContext, CompletionInfo, ConstString, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
+        DiscoverRequestMethod, DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions,
+        GetMeta, GetPromptRequest, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        GetSkillRequest, GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult,
+        GetTaskParams, GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
+        InitializeResult, InitializeResultMethod, InitializedNotification, InputRequest,
+        InputRequiredResult, InputResponses, JsonRpcResponse, ListPromptsRequest,
+        ListPromptsRequestMethod, ListPromptsResult, ListResourceTemplatesRequest,
+        ListResourceTemplatesRequestMethod, ListResourceTemplatesResult, ListResourcesRequest,
+        ListResourcesRequestMethod, ListResourcesResult, ListSkillsRequest,
+        ListSkillsRequestMethod, ListSkillsResult, ListToolsRequest, ListToolsRequestMethod,
+        ListToolsResult, MetaObject, NumberOrString, PaginatedRequestParams, PaginatedResult,
+        ProgressNotification, ProgressNotificationParam, ProtocolVersion,
+        ReadResourceDirectoryRequest, ReadResourceDirectoryRequestMethod,
+        ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequest,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Reference, RequestId,
+        RequestMetaObject, RootsListChangedNotification, ServerJsonRpcMessage, ServerNotification,
+        ServerPeerInfo, ServerRequest, ServerResult, SetLevelRequest, SetLevelRequestParams,
+        SubscribeRequest, SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequest,
         SubscriptionsListenRequestParams, SubscriptionsListenResult, UnsubscribeRequest,
         UnsubscribeRequestParams, UpdateTaskParams, UpdateTaskRequest,
     },
     transport::DynamicTransportError,
 };
+
+/// Recover the error discarded by the untagged result enum using the type
+/// expected by this call. Only the fallback variant still has the original JSON.
+fn typed_result_decode_error<T: DeserializeOwned>(
+    result: &ServerResult,
+) -> Option<(String, serde_json::Error)> {
+    let ServerResult::CustomResult(custom) = result else {
+        return None;
+    };
+    let error = serde_path_to_error::deserialize::<_, T>(&custom.0).err()?;
+    Some((error.path().to_string(), error.into_inner()))
+}
+
+fn unexpected_typed_result<T: DeserializeOwned>(
+    method: &'static str,
+    result: ServerResult,
+) -> ServiceError {
+    match typed_result_decode_error::<T>(&result) {
+        Some((path, source)) => ServiceError::ResponseDecode {
+            method,
+            path,
+            source,
+        },
+        None => ServiceError::UnexpectedResponse,
+    }
+}
 
 /// Recovers a `tools/call` reply that omits `content`, which the untagged
 /// [`ServerResult`] decodes as one of these other variants.
@@ -80,6 +109,15 @@ pub enum ClientInitializeError {
 
     #[error("expect initialized result, but received: {0:?}")]
     ExpectedInitResult(Option<ServerResult>),
+
+    /// A JSON-RPC result could not be decoded as the expected startup result.
+    #[error("invalid {method} result at {path}: {source}")]
+    ResponseDecode {
+        method: &'static str,
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
 
     #[error("conflict initialized response id: expected {0}, got {1}")]
     ConflictInitResponseId(RequestId, RequestId),
@@ -126,6 +164,17 @@ pub enum ClientInitializeError {
 }
 
 impl ClientInitializeError {
+    fn unexpected_result<T: DeserializeOwned>(method: &'static str, result: ServerResult) -> Self {
+        match typed_result_decode_error::<T>(&result) {
+            Some((path, source)) => Self::ResponseDecode {
+                method,
+                path,
+                source,
+            },
+            None => Self::ExpectedInitResult(Some(result)),
+        }
+    }
+
     pub fn transport<T: Transport<RoleClient> + 'static>(
         error: T::Error,
         context: impl Into<Cow<'static, str>>,
@@ -1098,7 +1147,12 @@ where
     .await?;
 
     let ServerResult::InitializeResult(initialize_result) = response else {
-        return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
+        return Err(
+            ClientInitializeError::unexpected_result::<InitializeResult>(
+                InitializeResultMethod::VALUE,
+                response,
+            ),
+        );
     };
     // A server may answer `initialize` with a version that has no handshake
     // (e.g. a client pinned past `NO_INITIALIZE` talking to a server that
@@ -1199,7 +1253,10 @@ where
                 return Ok(DiscoverOutcome::Modern);
             }
             Ok(response) => {
-                return Err(ClientInitializeError::ExpectedInitResult(Some(response)));
+                return Err(ClientInitializeError::unexpected_result::<DiscoverResult>(
+                    DiscoverRequestMethod::VALUE,
+                    response,
+                ));
             }
             Err(ClientInitializeError::JsonRpcError(error))
                 if error.code == crate::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION =>
@@ -1887,7 +1944,10 @@ impl Peer<RoleClient> {
                 .await;
                 Ok(result)
             }
-            _ => Err(ServiceError::UnexpectedResponse),
+            result => Err(unexpected_typed_result::<ListPromptsResult>(
+                ListPromptsRequestMethod::VALUE,
+                result,
+            )),
         }
     }
 
@@ -1940,7 +2000,10 @@ impl Peer<RoleClient> {
                 .await;
                 Ok(result)
             }
-            _ => Err(ServiceError::UnexpectedResponse),
+            result => Err(unexpected_typed_result::<ListResourcesResult>(
+                ListResourcesRequestMethod::VALUE,
+                result,
+            )),
         }
     }
 
@@ -1993,7 +2056,10 @@ impl Peer<RoleClient> {
                 .await;
                 Ok(result)
             }
-            _ => Err(ServiceError::UnexpectedResponse),
+            result => Err(unexpected_typed_result::<ListResourceTemplatesResult>(
+                ListResourceTemplatesRequestMethod::VALUE,
+                result,
+            )),
         }
     }
 
@@ -2052,7 +2118,10 @@ impl Peer<RoleClient> {
                 .await;
                 Ok(result)
             }
-            _ => Err(ServiceError::UnexpectedResponse),
+            result => Err(unexpected_typed_result::<ListToolsResult>(
+                ListToolsRequestMethod::VALUE,
+                result,
+            )),
         }
     }
 
