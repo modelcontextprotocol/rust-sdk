@@ -6,7 +6,7 @@ pub mod http_header;
 #[cfg(any(
     feature = "client-side-sse",
     feature = "server-side-http",
-    all(feature = "events", feature = "server"),
+    all(feature = "events", any(feature = "server", feature = "client")),
 ))]
 pub mod mcp_headers;
 

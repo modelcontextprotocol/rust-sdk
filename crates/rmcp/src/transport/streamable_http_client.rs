@@ -64,14 +64,16 @@ fn build_request_headers(
             headers.retain(|name, _| {
                 name.as_str() != "mcp-name" && !name.as_str().starts_with("mcp-param-")
             });
-            let mirrored = if let Some(schema) = schema.0.as_deref()
-                && crate::events::named_method(&custom.method)
-            {
-                mcp_headers::events_request_headers(&value, schema)
-            } else {
-                mcp_headers::standard_request_headers(&value, None)
-            };
-            headers.extend(mirrored);
+            let name = custom
+                .params
+                .as_ref()
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str);
+            headers.extend(mcp_headers::request_headers(
+                &value,
+                schema.0.as_deref(),
+                name,
+            ));
             return headers;
         }
         let schema = value

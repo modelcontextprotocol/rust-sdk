@@ -1,9 +1,8 @@
 //! MCP Events Beta for protocol 2026-07-28 and later.
 //!
-//! Compiling this module does not opt either peer into Events.
-//!
-//! Install an SDK runtime in `ServerHandler::events` to take over
-//! Events dispatch. Enable the `server` feature for this example:
+//! Install an `EventsServer` in `ServerHandler::events`. Use `EventsClient`
+//! with a peer that advertised Events in discovery.
+//! Persist only checkpoints whose events you have processed.
 //!
 //! ```
 //! # #[cfg(feature = "server")]
@@ -28,21 +27,31 @@
 //! # #[cfg(not(feature = "server"))]
 //! # fn main() {}
 //! ```
-//!
-//! On the client, use discovery startup and call `EventsClient::list_page`
-//! and `EventsClient::poll`. Persist only the cursor of a consumed page.
-//! Poll result payloads still appear in DEBUG response logs because `CustomResult` carries no method name.
 
 #[cfg(feature = "client")]
 pub mod client;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "events-webhook-receiver")]
+pub mod webhook;
 pub mod wire;
 
-pub(crate) const EXTENSION: &str = "io.modelcontextprotocol/events";
 #[cfg(any(feature = "server", feature = "client"))]
-pub(crate) const LIST_CHANGED: &str = "notifications/events/list_changed";
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamParams {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arguments: Option<crate::model::JsonObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_age_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    heartbeat_ms: Option<u64>,
+}
 
+pub(crate) const EXTENSION: &str = "io.modelcontextprotocol/events";
 pub(crate) fn advertises_list_changes(capabilities: &crate::model::ServerCapabilities) -> bool {
     capabilities
         .extensions
@@ -54,27 +63,24 @@ pub(crate) fn advertises_list_changes(capabilities: &crate::model::ServerCapabil
 }
 
 #[cfg(any(feature = "server", feature = "client"))]
-const LIST: &str = "events/list";
+mod methods {
+    pub(crate) const LIST: &str = "events/list";
+    pub(crate) const POLL: &str = "events/poll";
+    pub(crate) const STREAM: &str = "events/stream";
+    pub(crate) const ACTIVE: &str = "notifications/events/active";
+    pub(crate) const EVENT: &str = "notifications/events/event";
+    pub(crate) const HEARTBEAT: &str = "notifications/events/heartbeat";
+    pub(crate) const ERROR: &str = "notifications/events/error";
+    pub(crate) const TERMINATED: &str = "notifications/events/terminated";
+    pub(crate) const LIST_CHANGED: &str = "notifications/events/list_changed";
+}
 #[cfg(any(feature = "server", feature = "client"))]
-const POLL: &str = "events/poll";
+pub(crate) use methods::*;
 
-#[cfg(any(
-    feature = "server",
-    all(feature = "client", feature = "transport-streamable-http-client")
-))]
+#[cfg(feature = "server")]
 pub(crate) fn named_method(method: &str) -> bool {
     matches!(
         method,
-        POLL | "events/stream" | "events/subscribe" | "events/unsubscribe"
+        POLL | STREAM | "events/subscribe" | "events/unsubscribe"
     )
-}
-
-#[cfg(feature = "server")]
-pub(crate) fn clear_advertisement(capabilities: &mut crate::model::ServerCapabilities) {
-    if let Some(extensions) = &mut capabilities.extensions
-        && extensions.remove(EXTENSION).is_some()
-        && extensions.is_empty()
-    {
-        capabilities.extensions = None;
-    }
 }

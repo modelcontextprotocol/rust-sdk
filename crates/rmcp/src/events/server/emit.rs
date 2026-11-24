@@ -9,9 +9,9 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::{
-    CheckQuery, DEFAULT_POLL_MS, Descriptor, EventContext, EventOccurrence, EventsError,
-    EventsServer, JsonObject, MAX_BATCH_BYTES, PollResult, Registry, Shared, Source,
-    ensure_current, event_bytes, limit, not_found, poll_result, schema_changed,
+    CheckQuery, DEFAULT_POLL_MS, Descriptor, EventOccurrence, EventsError, EventsServer,
+    JsonObject, MAX_BATCH_BYTES, PollResult, Registry, RequestContext, RoleServer, Shared, Source,
+    event_bytes, limit, not_found, poll_result,
 };
 
 const MAX_RECORDS: usize = 256;
@@ -35,13 +35,7 @@ impl fmt::Debug for EmitHandle {
 }
 
 impl EventsServer {
-    /// Register a replay ring limited to 256 events, 256 KiB of encoded
-    /// occurrences, and one hour per event type. Older entries are evicted.
-    /// Cursors are process-local: use source-affine routing or a durable
-    /// check source if polls may reach different replicas.
-    ///
-    /// Omitting [`Descriptor::authorize`] means allow-all; install it wherever
-    /// authenticated permissions need checking.
+    /// Register a process-local ring limited to 256 events, 256 KiB, and one hour.
     pub fn register_emit(&self, descriptor: Descriptor) -> Result<EmitHandle, EventsError> {
         let name = descriptor.wire.name.clone();
         let registration = self.insert(descriptor, Source::Emit(Ring::default()))?;
@@ -63,39 +57,23 @@ impl EmitHandle {
         data: JsonObject,
     ) -> Result<(), EventsError> {
         let registry = self.registry.upgrade().ok_or_else(not_found)?;
-        let (mut descriptor, generation) = {
-            let state = registry.state();
-            let entry = state
-                .entries
-                .get(&self.name)
-                .filter(|entry| entry.registration == self.registration)
-                .ok_or_else(not_found)?;
-            (entry.descriptor.clone(), entry.generation)
-        };
         let id = event_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        if id.is_empty() {
-            return Err(super::invalid("empty event ID"));
+        let event = EventOccurrence::new(id, &self.name, timestamp, data);
+        let bytes = event_bytes(&event)?.ok_or_else(|| limit("eventBytes", MAX_BATCH_BYTES))?;
+        let mut state = registry.state();
+        let entry = state
+            .entries
+            .get_mut(&self.name)
+            .filter(|entry| entry.registration == self.registration)
+            .ok_or_else(not_found)?;
+        let Source::Emit(ring) = &mut entry.source else {
+            return Err(not_found());
+        };
+        ring.append(event, bytes);
+        if let Some(emitted) = &entry.emitted {
+            emitted.notify_waiters();
         }
-        let mut event = EventOccurrence::new(id, &self.name, timestamp, data);
-        loop {
-            event.data = (descriptor.normalize_payload)(event.data)?;
-            let bytes = event_bytes(&event)?.ok_or_else(|| limit("eventBytes", MAX_BATCH_BYTES))?;
-            let mut state = registry.state();
-            let entry = state.entries.get_mut(&self.name).ok_or_else(not_found)?;
-            ensure_current(entry, self.registration, generation)?;
-            if !Shared::ptr_eq(&entry.descriptor, &descriptor) {
-                // The replacement is additive. Revalidate the already-normalized
-                // occurrence against the new schema instead of losing it.
-                let newer = entry.descriptor.clone();
-                drop(state);
-                descriptor = newer;
-                continue;
-            }
-            let Source::Emit(ring) = &mut entry.source else {
-                return Err(not_found());
-            };
-            return ring.append(event, bytes);
-        }
+        Ok(())
     }
 }
 
@@ -130,11 +108,8 @@ impl Ring {
         }
     }
 
-    fn append(&mut self, event: EventOccurrence, bytes: usize) -> Result<(), EventsError> {
-        let position = self
-            .head
-            .checked_add(1)
-            .ok_or_else(|| limit("emitPositions", usize::MAX))?;
+    fn append(&mut self, event: EventOccurrence, bytes: usize) {
+        let position = self.head + 1;
         let inserted = Instant::now();
         self.prune(inserted);
         while self.records.len() >= MAX_RECORDS || self.bytes + bytes > MAX_BATCH_BYTES {
@@ -148,7 +123,6 @@ impl Ring {
             bytes,
             event: Arc::new(event),
         });
-        Ok(())
     }
 
     pub(super) fn read(
@@ -156,9 +130,8 @@ impl Ring {
         epoch: Uuid,
         registration: u64,
         generation: u64,
-        input_generation: u64,
         query: &CheckQuery,
-    ) -> Result<EmitPage, EventsError> {
+    ) -> EmitPage {
         self.prune(Instant::now());
         let scope = format!("{epoch}:{registration}:{generation}:");
         let boundary = self
@@ -173,21 +146,11 @@ impl Ring {
             has_more: false,
         };
         let Some(cursor) = query.cursor.as_deref() else {
-            return Ok(page);
+            return page;
         };
         let position = cursor
             .strip_prefix(&page.scope)
             .and_then(|pos| pos.parse::<u64>().ok());
-        if position.is_none()
-            && let Some((prior_generation, prior_position)) = cursor
-                .strip_prefix(&format!("{epoch}:{registration}:"))
-                .and_then(|rest| rest.split_once(':'))
-            && let Ok(prior_generation) = prior_generation.parse::<u64>()
-            && prior_generation < generation
-            && prior_position.parse::<u64>().is_ok()
-        {
-            return Err(schema_changed(input_generation > prior_generation));
-        }
         page.truncated = position.is_none_or(|pos| pos < boundary || pos > self.head);
         page.position = position
             .filter(|pos| *pos >= boundary && *pos <= self.head)
@@ -214,20 +177,19 @@ impl Ring {
                 if page.records.len() == query.max_events || old(record) {
                     break;
                 }
-                page.records
-                    .push((record.position, record.bytes, record.event.clone()));
+                page.records.push((record.position, record.event.clone()));
                 remaining.next();
             }
         }
         page.has_more = remaining.peek().is_some();
-        Ok(page)
+        page
     }
 }
 
 pub(super) struct EmitPage {
     scope: String,
     position: u64,
-    records: Vec<(u64, usize, Arc<EventOccurrence>)>,
+    records: Vec<(u64, Arc<EventOccurrence>)>,
     truncated: bool,
     has_more: bool,
 }
@@ -235,20 +197,20 @@ pub(super) struct EmitPage {
 impl EmitPage {
     pub(super) fn finish(
         self,
-        context: &EventContext,
+        context: &RequestContext<RoleServer>,
         args: &JsonObject,
         descriptor: &Descriptor,
-    ) -> Result<PollResult, EventsError> {
+        item_cursors: bool,
+    ) -> PollResult {
         let Self {
             scope,
             mut position,
             records,
             truncated,
-            mut has_more,
+            has_more,
         } = self;
         let mut events = Vec::new();
-        let mut bytes = 0;
-        for (next, mut size, event) in records {
+        for (next, event) in records {
             if descriptor
                 .matches
                 .as_ref()
@@ -258,26 +220,19 @@ impl EmitPage {
                 continue;
             }
             let mut event = (*event).clone();
-            if let Some(transform) = &descriptor.transform {
-                let transformed = transform(context, &event, args)?;
-                event.data = (descriptor.normalize_payload)(transformed)?;
-                size = event_bytes(&event)?.ok_or_else(|| limit("eventBytes", MAX_BATCH_BYTES))?;
-            }
-            if bytes + size > MAX_BATCH_BYTES {
-                has_more = true;
-                break;
-            }
-            bytes += size;
             position = next;
+            if item_cursors {
+                event.cursor = Some(format!("{scope}{position}"));
+            }
             events.push(event);
         }
-        Ok(poll_result(
+        poll_result(
             events,
             format!("{scope}{position}"),
             truncated,
             has_more,
             DEFAULT_POLL_MS,
-        ))
+        )
     }
 }
 
@@ -296,19 +251,14 @@ mod tests {
             max_bytes: MAX_BATCH_BYTES,
         };
         let event = EventOccurrence::new("id", "event", Utc::now(), JsonObject::new());
-        ring.append(event.clone(), event_bytes(&event).unwrap().unwrap())
-            .unwrap();
+        ring.append(event.clone(), event_bytes(&event).unwrap().unwrap());
         tokio::time::advance(RETENTION).await;
-        let gap = ring.read(epoch, 1, 1, 1, &query).unwrap();
+        let gap = ring.read(epoch, 1, 1, &query);
         assert!(gap.truncated && !gap.has_more && gap.records.is_empty());
         query.cursor = Some(format!("{}{}", gap.scope, gap.position));
-        assert!(!ring.read(epoch, 1, 1, 1, &query).unwrap().truncated);
-        assert!(
-            ring.read(Uuid::new_v4(), 1, 1, 1, &query)
-                .unwrap()
-                .truncated
-        );
+        assert!(!ring.read(epoch, 1, 1, &query).truncated);
+        assert!(ring.read(Uuid::new_v4(), 1, 1, &query).truncated);
         query.cursor = Some(format!("{epoch}:1:1:99999999"));
-        assert!(ring.read(epoch, 1, 1, 1, &query).unwrap().truncated);
+        assert!(ring.read(epoch, 1, 1, &query).truncated);
     }
 }

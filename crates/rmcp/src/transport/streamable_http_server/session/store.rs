@@ -25,8 +25,8 @@ pub type EventStoreError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// events must be committed before [`EventStore::store_event`] returns so the
 /// returned ID is safe to send to a client.
 ///
-/// Modern long-lived requests such as `subscriptions/listen` are never
-/// persisted and are cancelled when the client disconnects.
+/// Modern `subscriptions/listen` and SDK `events/stream` requests are not
+/// persisted and are cancelled on disconnect.
 #[async_trait::async_trait]
 pub trait EventStore: Send + Sync + 'static {
     /// Persist an event and return the opaque ID clients should receive.

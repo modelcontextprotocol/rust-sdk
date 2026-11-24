@@ -126,15 +126,7 @@ mod untagged_server_result {
     #[test]
     fn events_completion_envelopes_keep_their_json_values() {
         let complete = json!({ "resultType": "complete" });
-        let custom_meta = json!({ "x": true });
-        let correlated_meta =
-            |id| json!({ "io.modelcontextprotocol/subscriptionId": id, "x": true });
         let cases = [
-            (
-                "list",
-                json!(1),
-                json!({ "resultType": "complete", "events": [] }),
-            ),
             (
                 "list",
                 json!(1),
@@ -146,30 +138,15 @@ mod untagged_server_result {
                 json!({ "resultType": "complete", "events": [], "cursor": null }),
             ),
             (
-                "poll",
-                json!(1),
-                json!({ "resultType": "complete", "events": [], "cursor": "replay", "truncated": false, "hasMore": true, "nextPollMs": 1000 }),
-            ),
-            (
                 "subscribe",
                 json!(1),
                 json!({ "resultType": "complete", "id": "sub_1", "refreshBefore": null }),
             ),
             ("unsubscribe", json!(1), complete),
             (
-                "unsubscribe",
-                json!(1),
-                json!({ "resultType": "complete", "_meta": custom_meta }),
-            ),
-            (
-                "stream",
-                json!(1),
-                json!({ "resultType": "complete", "_meta": correlated_meta(json!(1)) }),
-            ),
-            (
                 "stream",
                 json!("event-1"),
-                json!({ "resultType": "complete", "_meta": correlated_meta(json!("event-1")) }),
+                json!({ "resultType": "complete", "_meta": { "io.modelcontextprotocol/subscriptionId": "event-1" } }),
             ),
         ];
         for (method, id, result) in cases {

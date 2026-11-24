@@ -1,20 +1,31 @@
-//! Explicit client access to a discovered Events catalog and one-shot polling.
+//! Explicit client access to a discovered Events catalog, polls, and subscriptions.
 
-use std::collections::HashSet;
-#[cfg(feature = "transport-streamable-http-client")]
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::{
     EXTENSION, LIST, POLL,
-    wire::{EventsError, ListEventsResult, PollParams, PollResult},
+    wire::{
+        DeliveryMode, EventsError, ListEventsResult, PollParams, PollResult, not_found, unsupported,
+    },
 };
 use crate::{
     Peer, RoleClient, ServiceError,
-    model::{ClientRequest, CustomRequest, ProtocolVersion, ServerResult},
+    model::{ClientRequest, CustomRequest, JsonObject, ProtocolVersion, ServerResult},
+    service::PeerRequestOptions,
 };
+
+const REQUEST_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+mod subscription;
+#[cfg(feature = "events-webhook-receiver")]
+mod webhook;
+pub use subscription::{EventSubscription, EventUpdate, SubscriptionOptions};
 
 /// A client for a peer that advertised the Events Beta via modern discovery.
 ///
@@ -22,15 +33,13 @@ use crate::{
 /// discovery). Invoking these methods never opts a legacy peer into Events.
 pub struct EventsClient {
     peer: Peer<RoleClient>,
-    #[cfg(feature = "transport-streamable-http-client")]
-    catalog: tokio::sync::Mutex<Catalog>,
+    catalog: Arc<tokio::sync::Mutex<HashMap<String, CatalogEntry>>>,
 }
 
-#[cfg(feature = "transport-streamable-http-client")]
-#[derive(Default)]
-struct Catalog {
-    routes: Option<HashMap<String, Arc<crate::model::JsonObject>>>,
-    missing: HashSet<String>,
+#[derive(Clone)]
+struct CatalogEntry {
+    delivery: Vec<DeliveryMode>,
+    input_schema: Arc<JsonObject>,
 }
 
 impl std::fmt::Debug for EventsClient {
@@ -50,18 +59,15 @@ impl EventsClient {
     pub fn new(peer: Peer<RoleClient>) -> Self {
         Self {
             peer,
-            #[cfg(feature = "transport-streamable-http-client")]
-            catalog: tokio::sync::Mutex::new(Catalog::default()),
+            catalog: Arc::default(),
         }
     }
 
-    /// List one catalog page. If pagination becomes stale, restart at `None`.
-    /// Relisting from the first page clears routing schemas and remembered misses.
+    /// List one catalog page. Starting a new list invalidates cached routing schemas.
     pub async fn list_page(&self, cursor: Option<&str>) -> Result<ListEventsResult, EventsError> {
         self.require_advertisement()?;
-        #[cfg(feature = "transport-streamable-http-client")]
         if cursor.is_none() {
-            *self.catalog.lock().await = Catalog::default();
+            self.invalidate_catalog().await;
         }
         self.request_page(cursor).await
     }
@@ -75,126 +81,92 @@ impl EventsClient {
             request.extensions.insert(RoutingSchema(None));
             request
         };
-        let page: ListEventsResult = self.request(request).await?;
-        #[cfg(feature = "transport-streamable-http-client")]
-        let page = filter_annotations(page);
-        let mut names = HashSet::new();
-        if !page.events.iter().all(|event| names.insert(&event.name)) {
-            return Err(EventsError::UnexpectedResponse);
-        }
-        Ok(page)
+        decode_result(self.request(request).await?)
     }
 
-    /// Poll once, without scheduling, buffering, or advancing the caller's
-    /// checkpoint. Persist the result cursor only after consuming the batch.
-    /// A null cursor starts at the current head; never persist null for replay.
-    /// A timestamp the SDK cannot represent fails the whole page with
-    /// [`EventsError::UnexpectedResponse`], without returning a checkpoint.
-    ///
-    /// With Streamable HTTP support compiled, the first poll lists the
-    /// catalog to resolve routing schemas. A missing name refreshes it once
-    /// and is remembered until an explicit relist or a header-mismatch retry.
+    /// Poll once. Persist a non-null cursor only after consuming the batch.
     pub async fn poll(&self, params: PollParams) -> Result<PollResult, EventsError> {
         self.require_advertisement()?;
-        #[cfg(feature = "transport-streamable-http-client")]
-        {
-            let name = params.name.clone();
-            let schema = self.schema(&name, false).await?;
-            let request = routed_poll(&params, schema)?;
-            let result = self.request(request).await;
-            if matches!(&result, Err(EventsError::HeaderMismatch(_))) {
-                let schema = self.schema(&name, true).await?;
-                let request = routed_poll(&params, schema)?;
-                return self.request(request).await;
-            }
-            result
-        }
-        #[cfg(not(feature = "transport-streamable-http-client"))]
-        self.request(poll_request(&params)?).await
+        let body = encode_params(&params)?;
+        self.with_route(&params.name, |entry| {
+            let request = route(POLL, body.clone(), entry.input_schema);
+            async move { decode_result(self.request(request).await?) }
+        })
+        .await
     }
 
     fn require_advertisement(&self) -> Result<(), EventsError> {
-        if self.peer.used_discovery()
-            && self.peer.peer_info().is_some_and(|peer| {
-                peer.protocol_version >= ProtocolVersion::V_2026_07_28
-                    && peer
-                        .capabilities
-                        .extensions
-                        .as_ref()
-                        .is_some_and(|extensions| extensions.contains_key(EXTENSION))
-            })
-        {
+        if self.peer.peer_info().is_some_and(|peer| {
+            peer.protocol_version >= ProtocolVersion::V_2026_07_28
+                && peer
+                    .capabilities
+                    .extensions
+                    .as_ref()
+                    .is_some_and(|extensions| extensions.contains_key(EXTENSION))
+        }) {
             Ok(())
         } else {
             Err(EventsError::MethodNotFound)
         }
     }
 
-    async fn request<T: DeserializeOwned>(&self, request: CustomRequest) -> Result<T, EventsError> {
-        let result = self
-            .peer
-            .send_request(ClientRequest::CustomRequest(request))
+    async fn request(&self, request: CustomRequest) -> Result<ServerResult, EventsError> {
+        self.peer
+            .send_request_with_option(
+                ClientRequest::CustomRequest(request),
+                PeerRequestOptions::with_timeout(REQUEST_BUDGET),
+            )
             .await
-            .map_err(|error| match error {
-                ServiceError::McpError(error) => EventsError::from(error),
-                error => EventsError::Service(Box::new(error)),
-            })?;
-        let ServerResult::CustomResult(result) = result else {
-            return Err(EventsError::UnexpectedResponse);
-        };
-        serde_json::from_value(result.0).map_err(|_| EventsError::UnexpectedResponse)
+            .map_err(from_service)?
+            .await_response()
+            .await
+            .map_err(from_service)
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
-    async fn schema(
+    async fn invalidate_catalog(&self) {
+        self.catalog.lock().await.clear();
+    }
+
+    async fn with_route<T, F: std::future::Future<Output = Result<T, EventsError>>>(
+        &self,
+        name: &str,
+        request: impl Fn(CatalogEntry) -> F,
+    ) -> Result<T, EventsError> {
+        match request(self.descriptor_cached(name, false).await?).await {
+            Err(EventsError::HeaderMismatch(_)) => {
+                request(self.descriptor_cached(name, true).await?).await
+            }
+            result => result,
+        }
+    }
+
+    async fn descriptor_cached(
         &self,
         name: &str,
         refresh: bool,
-    ) -> Result<Arc<crate::model::JsonObject>, EventsError> {
+    ) -> Result<CatalogEntry, EventsError> {
         let mut cached = self.catalog.lock().await;
-        if refresh {
-            *cached = Catalog::default();
+        if refresh || !cached.contains_key(name) {
+            cached.clear();
+            *cached = self.load_catalog().await?;
         }
-        if !cached.missing.contains(name) {
-            if let Some(schema) = cached.routes.as_ref().and_then(|routes| routes.get(name)) {
-                return Ok(schema.clone());
-            }
-            // Clear stale routing on a failed refresh too.
-            cached.routes = None;
-            let catalog = match self.drain_pages().await {
-                Err(EventsError::InvalidParams(_)) => self.drain_pages().await?,
-                result => result?,
-            };
-            let schema = catalog.get(name).cloned();
-            if schema.is_none() {
-                cached.missing.insert(name.to_owned());
-            }
-            cached.routes = Some(catalog);
-            if let Some(schema) = schema {
-                return Ok(schema);
-            }
-        }
-        Err(EventsError::NotFound {
-            kind: Some("event".into()),
-        })
+        cached.get(name).cloned().ok_or_else(not_found)
     }
 
-    #[cfg(feature = "transport-streamable-http-client")]
-    async fn drain_pages(
-        &self,
-    ) -> Result<HashMap<String, Arc<crate::model::JsonObject>>, EventsError> {
+    async fn load_catalog(&self) -> Result<HashMap<String, CatalogEntry>, EventsError> {
         let mut catalog = HashMap::new();
         let mut seen = HashSet::new();
         let mut cursor = None;
         loop {
             let page = self.request_page(cursor.as_deref()).await?;
             for descriptor in page.events {
-                if catalog
-                    .insert(descriptor.name, descriptor.input_schema)
-                    .is_some()
-                {
-                    return Err(EventsError::UnexpectedResponse);
-                }
+                catalog.insert(
+                    descriptor.name,
+                    CatalogEntry {
+                        delivery: descriptor.delivery,
+                        input_schema: descriptor.input_schema,
+                    },
+                );
             }
             let Some(next) = page.next_cursor else {
                 return Ok(catalog);
@@ -207,38 +179,36 @@ impl EventsClient {
     }
 }
 
-fn poll_request(params: &impl Serialize) -> Result<CustomRequest, EventsError> {
-    let params: Value = serde_json::to_value(params)
-        .map_err(|_| EventsError::InvalidParams("invalid poll parameters".into()))?;
-    Ok(CustomRequest::new(POLL, Some(params)))
+fn from_service(error: ServiceError) -> EventsError {
+    match error {
+        ServiceError::McpError(error) => EventsError::from(error),
+        error => EventsError::Service(Box::new(error)),
+    }
 }
 
-#[cfg(feature = "transport-streamable-http-client")]
-fn routed_poll(
-    params: &PollParams,
-    schema: Arc<crate::model::JsonObject>,
-) -> Result<CustomRequest, EventsError> {
-    crate::transport::common::mcp_headers::validate_event_header_arguments(
-        params.arguments.as_ref(),
-        &schema,
-    )
-    .map_err(EventsError::InvalidParams)?;
-    let mut request = poll_request(params)?;
-    request.extensions.insert(RoutingSchema(Some(schema)));
-    Ok(request)
+fn decode_result<T: DeserializeOwned>(result: ServerResult) -> Result<T, EventsError> {
+    let ServerResult::CustomResult(result) = result else {
+        return Err(EventsError::UnexpectedResponse);
+    };
+    serde_json::from_value(result.0).map_err(|_| EventsError::UnexpectedResponse)
 }
 
-#[cfg(feature = "transport-streamable-http-client")]
-fn filter_annotations(mut page: ListEventsResult) -> ListEventsResult {
-    page.events.retain(|descriptor| {
-        if let Err(reason) = crate::transport::common::mcp_headers::validate_param_header_annotations(&descriptor.input_schema) {
-            tracing::warn!(event = %descriptor.name, "rejecting invalid x-mcp-header annotations: {reason}");
-            false
-        } else {
-            true
-        }
-    });
-    page
+fn encode_params(params: &impl Serialize) -> Result<Value, EventsError> {
+    serde_json::to_value(params)
+        .map_err(|_| EventsError::InvalidParams("invalid Events parameters".into()))
+}
+
+fn route(method: &str, params: Value, schema: Arc<JsonObject>) -> CustomRequest {
+    let request = CustomRequest::new(method, Some(params));
+    #[cfg(feature = "transport-streamable-http-client")]
+    let request = {
+        let mut request = request;
+        request.extensions.insert(RoutingSchema(Some(schema)));
+        request
+    };
+    #[cfg(not(feature = "transport-streamable-http-client"))]
+    let _ = schema;
+    request
 }
 
 #[cfg(all(test, feature = "transport-streamable-http-client"))]
@@ -253,7 +223,7 @@ mod tests {
                 "inputSchema": {"properties": {"scope": {"type": field, "x-mcp-header": annotation}}}
             })
         };
-        let page = serde_json::from_value(json!({
+        let result: ListEventsResult = serde_json::from_value(json!({
             "resultType": "complete", "nextCursor": "next",
             "events": [
                 event("valid", "string", "Scope"),
@@ -263,7 +233,6 @@ mod tests {
             ]
         }))
         .unwrap();
-        let result = filter_annotations(page);
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].name, "valid");
         assert_eq!(result.next_cursor.as_deref(), Some("next"));

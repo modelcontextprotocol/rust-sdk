@@ -776,8 +776,6 @@ pub(crate) enum PeerSinkMessage<R: ServiceRole> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClientRequestMetadata {
-    #[cfg(all(feature = "events", feature = "client"))]
-    discovered: bool,
     pub protocol_version: ProtocolVersion,
     pub client_info: Implementation,
     pub client_capabilities: ClientCapabilities,
@@ -1032,6 +1030,16 @@ impl<R: ServiceRole> Peer<R> {
         self.subscription_channels_write().remove(id);
     }
 
+    #[cfg(all(test, feature = "events", feature = "client", feature = "server"))]
+    pub(crate) async fn reserve_outbound_capacity(&self) -> impl Drop + '_ {
+        self.tx.reserve_many(self.tx.max_capacity()).await.unwrap()
+    }
+
+    #[cfg(all(test, feature = "events", feature = "client", feature = "server"))]
+    pub(crate) fn has_subscription_channels(&self) -> bool {
+        !self.subscription_channels_read().is_empty()
+    }
+
     fn subscription_channels_read(
         &self,
     ) -> std::sync::RwLockReadGuard<'_, SubscriptionChannelMap<R::PeerNot>> {
@@ -1138,13 +1146,6 @@ impl<R: ServiceRole> Peer<R> {
     #[cfg(feature = "server")]
     pub(crate) fn request_metadata_required(&self) -> bool {
         self.inline_protocol_version.get().is_some()
-    }
-
-    #[cfg(all(feature = "events", feature = "client"))]
-    pub(crate) fn used_discovery(&self) -> bool {
-        self.client_request_metadata
-            .get()
-            .is_some_and(|metadata| metadata.discovered)
     }
 
     pub fn is_transport_closed(&self) -> bool {
@@ -1416,7 +1417,7 @@ where
 /// Without the `local` feature this is `tokio::spawn` (requires `Future: Send + 'static`).
 /// With `local` it uses `tokio::task::spawn_local` (requires only `Future: 'static`).
 #[cfg(not(feature = "local"))]
-fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+pub(crate) fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -1425,7 +1426,7 @@ where
 }
 
 #[cfg(feature = "local")]
-fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+pub(crate) fn spawn_service_task<F>(future: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: Future + 'static,
     F::Output: 'static,
@@ -1655,10 +1656,7 @@ where
                     notification,
                     responder,
                 }) => {
-                    // Fence correlated frames without a live local request. A frame
-                    // already handed off may finish; aborting could split the write.
-                    // A new request reusing the ID lifts the fence, which is safe only
-                    // because the previous response has already made the round trip.
+                    // Drop queued subscription frames after cancellation.
                     if let Some(id) = R::outbound_subscription_id(&notification)
                         && !local_ct_pool.contains_key(&id)
                     {

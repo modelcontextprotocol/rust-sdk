@@ -1,4 +1,4 @@
-//! Register application event sources and serve the Events catalog and polls.
+//! Register application event sources and serve the Events catalog, polls, and push streams.
 
 #[cfg(feature = "local")]
 use std::rc::Rc as Shared;
@@ -20,30 +20,28 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use super::{
-    EXTENSION, LIST, POLL,
+    EXTENSION, LIST, POLL, STREAM,
     wire::{
-        Completion, DEFAULT_POLL_MS, DeliveryMode, EventDescriptor, EventOccurrence, EventsError,
-        ListEventsResult, PollParams, PollResult,
+        DEFAULT_POLL_MS, DeliveryMode, EventDescriptor, EventOccurrence, EventsError,
+        ListEventsResult, PollParams, PollResult, not_found, unsupported,
     },
 };
 use crate::{
     RoleServer,
     handler::server::common::{schema_for_output, schema_for_type},
-    model::{CustomRequest, CustomResult, JsonObject, ServerCapabilities},
+    model::{CustomRequest, CustomResult, JsonObject, ResultType, ServerCapabilities},
     service::{MaybeSend, MaybeSendFuture, RequestContext, SubscriptionSink},
 };
 
 mod emit;
+mod push;
 pub use emit::EmitHandle;
 use emit::{EmitPage, Ring};
+#[cfg(feature = "events-webhook")]
+pub use webhook::WebhookEgress;
 
-const MAX_SOURCES: usize = 128;
-const PAGE_SIZE: usize = 32;
 const MAX_BATCH: usize = 64;
 const MAX_BATCH_BYTES: usize = 256 * 1024;
-
-/// The MCP request context, including cancellation (`ct`) and middleware extensions.
-pub type EventContext = RequestContext<RoleServer>;
 
 macro_rules! hook {
     ($name:ident = $($signature:tt)+) => {
@@ -54,11 +52,11 @@ macro_rules! hook {
     };
 }
 hook!(ValidateArguments = Fn(&JsonObject) -> Result<(), EventsError>);
-hook!(NormalizePayload = Fn(JsonObject) -> Result<JsonObject, EventsError>);
-hook!(Authorize = Fn(EventContext, JsonObject, DeliveryMode) -> HookFuture<Result<(), EventsError>>);
-hook!(Matches = Fn(&EventContext, &EventOccurrence, &JsonObject) -> bool);
-hook!(Transform = Fn(&EventContext, &EventOccurrence, &JsonObject) -> Result<JsonObject, EventsError>);
-hook!(Check = Fn(EventContext, JsonObject, CheckQuery) -> HookFuture<Result<CheckedBatch, EventsError>>);
+hook!(Authorize = Fn(RequestContext<RoleServer>, JsonObject, DeliveryMode) -> HookFuture<Result<(), EventsError>>);
+hook!(Matches = Fn(&RequestContext<RoleServer>, &EventOccurrence, &JsonObject) -> bool);
+hook!(Check = Fn(RequestContext<RoleServer>, JsonObject, CheckQuery) -> HookFuture<Result<CheckedBatch, EventsError>>);
+#[cfg(feature = "events-webhook")]
+mod webhook;
 #[cfg(not(feature = "local"))]
 type HookFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 #[cfg(feature = "local")]
@@ -69,10 +67,8 @@ type HookFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 pub struct Descriptor {
     wire: EventDescriptor,
     validate_arguments: Shared<ValidateArguments>,
-    normalize_payload: Shared<NormalizePayload>,
     authorize: Option<Shared<Authorize>>,
     matches: Option<Shared<Matches>>,
-    transform: Option<Shared<Transform>>,
 }
 
 impl fmt::Debug for Descriptor {
@@ -85,9 +81,7 @@ impl fmt::Debug for Descriptor {
 }
 
 impl Descriptor {
-    /// Generate schemas from `Args`' deserialize and `Payload`'s serialize
-    /// contracts. Validate arguments without changing them. Deserialize and
-    /// reserialize each payload to preserve its advertised representation.
+    /// Generate argument and payload schemas and validate incoming arguments.
     pub fn typed<Args, Payload>(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -95,7 +89,7 @@ impl Descriptor {
     ) -> Self
     where
         Args: schemars::JsonSchema + DeserializeOwned + 'static,
-        Payload: schemars::JsonSchema + DeserializeOwned + Serialize + 'static,
+        Payload: schemars::JsonSchema + 'static,
     {
         Self {
             wire: EventDescriptor::new(
@@ -110,48 +104,28 @@ impl Descriptor {
                     .map(|_| ())
                     .map_err(|_| invalid("argument schema validation failed"))
             }),
-            normalize_payload: Shared::new(|value| {
-                let typed = serde_json::from_value::<Payload>(Value::Object(value))
-                    .map_err(|_| invalid("payload schema validation failed"))?;
-                match serde_json::to_value(typed) {
-                    Ok(Value::Object(object)) => Ok(object),
-                    _ => Err(invalid("payload must serialize to an object")),
-                }
-            }),
             authorize: None,
             matches: None,
-            transform: None,
         }
     }
 
-    /// Supply wire schemas and separate validators responsible for enforcing
-    /// those schemas. Do not annotate sensitive arguments as HTTP headers.
+    /// Supply wire schemas and an argument validator.
     pub fn raw(
         descriptor: EventDescriptor,
         validate_arguments: impl Fn(&JsonObject) -> Result<(), EventsError> + MaybeSend + 'static,
-        validate_payload: impl Fn(&JsonObject) -> Result<(), EventsError> + MaybeSend + 'static,
     ) -> Self {
         Self {
             wire: descriptor,
             validate_arguments: Shared::new(validate_arguments),
-            normalize_payload: Shared::new(move |value| {
-                validate_payload(&value)?;
-                Ok(value)
-            }),
             authorize: None,
             matches: None,
-            transform: None,
         }
     }
 
-    /// Check permissions using the existing request context before reading the
-    /// source. Return [`EventsError::Forbidden`] to deny access, or another
-    /// error for a failure such as an unavailable authorization backend.
-    /// Omitting this hook means allow-all; authenticated deployments must
-    /// supply it for every event type that needs a permission check.
+    /// Check access before reading a source. Omitting the hook means allow-all.
     pub fn authorize<F, Fut>(mut self, authorize: F) -> Self
     where
-        F: Fn(EventContext, JsonObject, DeliveryMode) -> Fut + MaybeSend + 'static,
+        F: Fn(RequestContext<RoleServer>, JsonObject, DeliveryMode) -> Fut + MaybeSend + 'static,
         Fut: Future<Output = Result<(), EventsError>> + MaybeSendFuture + 'static,
     {
         self.authorize = Some(Shared::new(move |ctx, args, mode| {
@@ -164,33 +138,17 @@ impl Descriptor {
     /// The hook borrows the request context, occurrence, and arguments.
     pub fn matches(
         mut self,
-        matches: impl Fn(&EventContext, &EventOccurrence, &JsonObject) -> bool + MaybeSend + 'static,
+        matches: impl Fn(&RequestContext<RoleServer>, &EventOccurrence, &JsonObject) -> bool
+        + MaybeSend
+        + 'static,
     ) -> Self {
         self.matches = Some(Shared::new(matches));
         self
     }
 
-    /// Replace an emit occurrence's payload after matching. The SDK validates
-    /// the replacement and preserves the original event ID and position.
-    pub fn transform(
-        mut self,
-        transform: impl Fn(
-            &EventContext,
-            &EventOccurrence,
-            &JsonObject,
-        ) -> Result<JsonObject, EventsError>
-        + MaybeSend
-        + 'static,
-    ) -> Self {
-        self.transform = Some(Shared::new(transform));
-        self
-    }
-
     fn validate_source(&self, source: &Source) -> Result<(), EventsError> {
-        if matches!(source, Source::Check(_))
-            && (self.matches.is_some() || self.transform.is_some())
-        {
-            return Err(invalid("matches and transform require an emit source"));
+        if matches!(source, Source::Check(_)) && self.matches.is_some() {
+            return Err(invalid("matches requires an emit source"));
         }
         Ok(())
     }
@@ -206,20 +164,17 @@ pub enum Replacement {
     Breaking,
 }
 
-/// Bounded read requested from an application-owned replay source.
+/// Bounded read requested from a replay source.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CheckQuery {
     /// Position to resume strictly after; `None` means return an empty batch at the current head.
     pub cursor: Option<String>,
-    /// Earliest eligible event timestamp, when replay is age-limited.
+    /// Earliest eligible timestamp during age-limited replay.
     pub age_floor: Option<DateTime<Utc>>,
     /// Maximum number of items to return.
     pub max_events: usize,
-    /// Maximum sum of compact JSON occurrence sizes, excluding item cursors.
-    ///
-    /// Keep batches within this budget, or supply safe item cursors so the
-    /// SDK can return a partial page when the batch exceeds it.
+    /// Maximum compact JSON bytes in a batch.
     pub max_bytes: usize,
 }
 
@@ -230,9 +185,7 @@ pub struct CheckedBatch {
     /// Only on a gap: a fresh replay position before the first eligible item.
     /// The SDK returns an empty truncated page at this position.
     pub start: Option<String>,
-    /// Occurrences in order. A cursor on an item must resume strictly after
-    /// that item without skipping any later item. Poll strips item cursors
-    /// from the wire, but uses them to cut oversized batches safely.
+    /// Occurrences in order, with optional replay cursors after each item.
     pub events: Vec<EventOccurrence>,
     /// End of scan, not necessarily the position of the last event.
     pub end: String,
@@ -255,11 +208,9 @@ impl CheckedBatch {
     }
 }
 
-/// Opt-in catalog and sources shared by handler instances.
+/// Catalog and event sources shared by server handlers.
 ///
-/// An omitted authorizer means allow-all. Authenticated deployments MUST
-/// supply [`Descriptor::authorize`] for every event type that needs a
-/// permission check. The SDK cannot detect application authentication.
+/// Active push streams may close without a final result when the service shuts down.
 #[derive(Clone)]
 pub struct EventsServer(Shared<Registry>);
 
@@ -273,6 +224,8 @@ struct Registry {
     epoch: Uuid,
     state: Mutex<State>,
     changes: Notify,
+    #[cfg(feature = "events-webhook")]
+    webhooks: Option<Box<webhook::Dispatcher>>,
 }
 
 #[derive(Default)]
@@ -287,6 +240,7 @@ struct Entry {
     generation: u64,
     input_generation: u64,
     source: Source,
+    emitted: Option<Shared<Notify>>,
 }
 
 enum Source {
@@ -303,24 +257,10 @@ fn invalid(reason: impl Into<String>) -> EventsError {
     EventsError::InvalidParams(reason.into())
 }
 
-fn not_found() -> EventsError {
-    EventsError::NotFound {
-        kind: Some("event".into()),
-    }
-}
-
 fn limit(name: &str, max: usize) -> EventsError {
     EventsError::ResourceExhausted {
         limit: name.into(),
         max: Some(max as u64),
-    }
-}
-
-fn unsupported(value: &str) -> EventsError {
-    EventsError::Unsupported {
-        feature: "deliveryMode".into(),
-        value: Some(json!(value)),
-        reason: None,
     }
 }
 
@@ -361,21 +301,20 @@ impl EventsServer {
             epoch: Uuid::new_v4(),
             state: Mutex::new(State::default()),
             changes: Notify::new(),
+            #[cfg(feature = "events-webhook")]
+            webhooks: None,
         }))
     }
 
-    /// Register a bounded check that owns its cursor format and age seeking.
-    /// A null request cursor must return an empty batch at the current head.
-    /// Descriptors with match or transform hooks must use [`Self::register_emit`].
-    /// Omitting [`Descriptor::authorize`] means allow-all; install it wherever
-    /// authenticated permissions need checking.
+    /// Register a source that supplies its own cursors and honors the query bounds.
+    /// Return the current head for a null cursor.
     pub fn register_check<F, Fut>(
         &self,
         descriptor: Descriptor,
         check: F,
     ) -> Result<(), EventsError>
     where
-        F: Fn(EventContext, JsonObject, CheckQuery) -> Fut + MaybeSend + 'static,
+        F: Fn(RequestContext<RoleServer>, JsonObject, CheckQuery) -> Fut + MaybeSend + 'static,
         Fut: Future<Output = Result<CheckedBatch, EventsError>> + MaybeSendFuture + 'static,
     {
         self.insert(
@@ -388,16 +327,15 @@ impl EventsServer {
     }
 
     fn insert(&self, descriptor: Descriptor, source: Source) -> Result<u64, EventsError> {
-        validate_descriptor(&descriptor)?;
+        validate_enabled_descriptor(&descriptor, self.webhooks_enabled())?;
         descriptor.validate_source(&source)?;
         let mut state = self.0.state();
         if state.entries.contains_key(&descriptor.wire.name) {
             return Err(invalid("duplicate event name"));
         }
-        if state.entries.len() >= MAX_SOURCES {
-            return Err(limit("eventTypes", MAX_SOURCES));
-        }
         let generation = state.revision + 1;
+        let emitted = (matches!(&source, Source::Emit(_)) && self.notifies_emits(&descriptor))
+            .then(|| Shared::new(Notify::new()));
         state.entries.insert(
             descriptor.wire.name.clone(),
             Entry {
@@ -406,17 +344,16 @@ impl EventsServer {
                 generation,
                 input_generation: generation,
                 source,
+                emitted,
             },
         );
         self.0.changed(&mut state);
         Ok(generation)
     }
 
-    /// Replace an existing descriptor and invalidate catalog pages.
-    /// Application-owned check cursors remain under the source's control.
-    /// Breaking replacement invalidates SDK emit cursors and clears history.
+    /// Replace a descriptor. Breaking changes end subscriptions and reset emit history.
     pub fn replace(&self, descriptor: Descriptor, change: Replacement) -> Result<(), EventsError> {
-        validate_descriptor(&descriptor)?;
+        validate_enabled_descriptor(&descriptor, self.webhooks_enabled())?;
         let mut state = self.0.state();
         let generation = state.revision + 1;
         let entry = state
@@ -433,6 +370,11 @@ impl EventsServer {
                 *ring = Ring::default();
             }
         }
+        if self.notifies_emits(&descriptor) && matches!(&entry.source, Source::Emit(_)) {
+            entry
+                .emitted
+                .get_or_insert_with(|| Shared::new(Notify::new()));
+        }
         let previous = std::mem::replace(&mut entry.descriptor, Shared::new(descriptor));
         self.0.changed(&mut state);
         drop(state);
@@ -440,7 +382,7 @@ impl EventsServer {
         Ok(())
     }
 
-    /// Remove an existing event and invalidate catalog pages.
+    /// Remove an event type and terminate its subscriptions.
     pub fn remove(&self, name: &str) -> Result<(), EventsError> {
         let mut state = self.0.state();
         let removed = state.entries.remove(name).ok_or_else(not_found)?;
@@ -448,13 +390,6 @@ impl EventsServer {
         drop(state);
         drop(removed);
         Ok(())
-    }
-
-    pub(crate) fn advertise(&self, capabilities: &mut ServerCapabilities) {
-        capabilities.extensions.get_or_insert_default().insert(
-            EXTENSION.into(),
-            JsonObject::from_iter([("listChanged".into(), json!(true))]),
-        );
     }
 
     pub(crate) fn revision(&self) -> u64 {
@@ -488,37 +423,25 @@ impl EventsServer {
             .map_err(|_| invalid("invalid catalog parameters"))?
             .unwrap_or_default();
         let state = self.0.state();
-        let offset = match params.cursor {
-            None => 0,
-            Some(cursor) => {
-                let prefix = format!("{}:{}:", self.0.epoch, state.revision);
-                cursor
-                    .strip_prefix(&prefix)
-                    .and_then(|offset| offset.parse::<usize>().ok())
-                    .filter(|offset| {
-                        *offset > 0 && *offset < state.entries.len() && *offset % PAGE_SIZE == 0
-                    })
-                    .ok_or_else(|| invalid("invalid or stale catalog page cursor"))?
-            }
-        };
+        if params.cursor.is_some() {
+            return Err(invalid("invalid catalog cursor"));
+        }
         let events = state
             .entries
             .values()
-            .skip(offset)
-            .take(PAGE_SIZE)
             .map(|entry| {
                 let mut wire = entry.descriptor.wire.clone();
-                wire.delivery.retain(|mode| *mode == DeliveryMode::Poll);
+                wire.delivery.retain(|mode| match mode {
+                    DeliveryMode::Webhook => self.webhooks_enabled(),
+                    _ => true,
+                });
                 wire
             })
             .collect();
-        let next = offset + PAGE_SIZE;
-        let next_cursor = (next < state.entries.len())
-            .then(|| format!("{}:{}:{next}", self.0.epoch, state.revision));
         Ok(ListEventsResult {
-            result_type: Completion::Complete,
+            result_type: ResultType::COMPLETE,
             events,
-            next_cursor,
+            next_cursor: None,
             meta: None,
         })
     }
@@ -526,7 +449,7 @@ impl EventsServer {
     pub(crate) async fn dispatch(
         &self,
         request: CustomRequest,
-        context: EventContext,
+        context: RequestContext<RoleServer>,
     ) -> Result<CustomResult, EventsError> {
         let method = request.method.as_str();
         if method == LIST {
@@ -535,9 +458,21 @@ impl EventsServer {
         if !super::named_method(method) {
             return Err(EventsError::MethodNotFound);
         }
-        let raw = request
-            .params
-            .ok_or_else(|| invalid("missing event parameters"))?;
+        let ct = context.ct.clone();
+        tokio::select! {
+            biased;
+            () = ct.cancelled() => Err(source_error("Events request cancelled")),
+            result = self.dispatch_named(method, request.params, context) => result,
+        }
+    }
+
+    async fn dispatch_named(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, EventsError> {
+        let raw = params.ok_or_else(|| invalid("missing event parameters"))?;
         let name = raw
             .get("name")
             .and_then(Value::as_str)
@@ -550,7 +485,7 @@ impl EventsServer {
             )
         });
         #[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
-        crate::transport::streamable_http_server::tower::validate_event_routing(
+        validate_event_routing(
             &context,
             method,
             &raw,
@@ -559,28 +494,57 @@ impl EventsServer {
                 .as_ref()
                 .map(|(descriptor, _, _)| descriptor.wire.input_schema.as_ref()),
         )?;
+        #[cfg(feature = "events-webhook")]
+        if matches!(
+            method,
+            super::webhook::SUBSCRIBE | super::webhook::UNSUBSCRIBE
+        ) && let Some(dispatcher) = &self.0.webhooks
+        {
+            let principal = dispatcher.principal(&context)?;
+            return self
+                .dispatch_webhook(method, raw, context, principal, registered)
+                .await;
+        }
         let (descriptor, registration, generation) = registered.ok_or_else(not_found)?;
+        if method == STREAM {
+            let params =
+                serde_json::from_value(raw).map_err(|_| invalid("invalid stream parameters"))?;
+            return self
+                .stream(params, context, descriptor, registration, generation)
+                .await;
+        }
         if method != POLL {
-            return Err(unsupported(if method == "events/stream" {
-                "push"
-            } else {
-                "webhook"
-            }));
+            return Err(unsupported(DeliveryMode::Webhook));
+        }
+        if !descriptor.wire.delivery.contains(&DeliveryMode::Poll) {
+            return Err(unsupported(DeliveryMode::Poll));
         }
         let params = serde_json::from_value(raw).map_err(|_| invalid("invalid poll parameters"))?;
-        encode(
-            self.poll(params, context, descriptor, registration, generation)
-                .await?,
-        )
+        encode(self.poll(params, context, descriptor).await?)
+    }
+
+    fn webhooks_enabled(&self) -> bool {
+        #[cfg(feature = "events-webhook")]
+        {
+            self.0.webhooks.is_some()
+        }
+        #[cfg(not(feature = "events-webhook"))]
+        {
+            false
+        }
+    }
+
+    fn notifies_emits(&self, descriptor: &Descriptor) -> bool {
+        let delivery = &descriptor.wire.delivery;
+        delivery.contains(&DeliveryMode::Push)
+            || (self.webhooks_enabled() && delivery.contains(&DeliveryMode::Webhook))
     }
 
     async fn poll(
         &self,
         params: PollParams,
-        context: EventContext,
+        context: RequestContext<RoleServer>,
         descriptor: Shared<Descriptor>,
-        registration: u64,
-        generation: u64,
     ) -> Result<PollResult, EventsError> {
         let max_events = params
             .max_events
@@ -589,21 +553,11 @@ impl EventsServer {
         if max_events == 0 {
             return Err(invalid("maxEvents must be positive"));
         }
-        let floor = params
-            .cursor
-            .as_ref()
-            .and(params.max_age_ms)
-            .and_then(|age| i64::try_from(age).ok())
-            .and_then(chrono::TimeDelta::try_milliseconds)
-            .and_then(|age| Utc::now().checked_sub_signed(age));
+        let floor = age_floor(params.cursor.as_deref(), params.max_age_ms);
         let args = params.arguments.unwrap_or_default();
         (descriptor.validate_arguments)(&args)?;
         if let Some(authorize) = &descriptor.authorize {
-            tokio::select! {
-                biased;
-                _ = context.ct.cancelled() => return Err(source_error("event authorizer cancelled")),
-                allowed = authorize(context.clone(), args.clone(), DeliveryMode::Poll) => allowed?,
-            }
+            authorize(context.clone(), args.clone(), DeliveryMode::Poll).await?;
         }
         let query = CheckQuery {
             cursor: params.cursor,
@@ -614,41 +568,72 @@ impl EventsServer {
         let (current, read) = {
             let mut state = self.0.state();
             let entry = state.entries.get_mut(&params.name).ok_or_else(not_found)?;
-            ensure_current(entry, registration, generation)?;
             let read = match &mut entry.source {
                 Source::Check(check) => Read::Check(check.clone()),
                 Source::Emit(ring) => Read::Emit(ring.read(
                     self.0.epoch,
                     entry.registration,
                     entry.generation,
-                    entry.input_generation,
                     &query,
-                )?),
+                )),
             };
             (entry.descriptor.clone(), read)
         };
-        // The request was authorized against its initial policy snapshot. An
-        // additive update of its schema does not invalidate that authorization.
         if !Shared::ptr_eq(&current, &descriptor) {
             (current.validate_arguments)(&args)?;
+            if let Some(authorize) = &current.authorize {
+                authorize(context.clone(), args.clone(), DeliveryMode::Poll).await?;
+            }
         }
         let check = match read {
             Read::Check(check) => check,
-            Read::Emit(page) => return page.finish(&context, &args, &current),
+            Read::Emit(page) => return Ok(page.finish(&context, &args, &current, false)),
         };
-        let batch = tokio::select! {
-            biased;
-            _ = context.ct.cancelled() => return Err(source_error("event check cancelled")),
-            batch = check(context.clone(), args, query.clone()) => batch?,
-        };
-        let current = {
-            let state = self.0.state();
-            let entry = state.entries.get(&params.name).ok_or_else(not_found)?;
-            ensure_current(entry, registration, generation)?;
-            entry.descriptor.clone()
-        };
-        checked_result(batch, &query, &params.name, &current)
+        let batch = check(context, args, query.clone()).await?;
+        checked_result(batch, &query, false)
     }
+}
+
+pub(crate) fn set_advertisement(
+    events: Option<&EventsServer>,
+    capabilities: &mut ServerCapabilities,
+    modern: bool,
+) {
+    if events.is_none() {
+        return;
+    }
+    if modern {
+        capabilities.extensions.get_or_insert_default().insert(
+            EXTENSION.into(),
+            JsonObject::from_iter([("listChanged".into(), json!(true))]),
+        );
+    } else if let Some(extensions) = &mut capabilities.extensions {
+        extensions.remove(EXTENSION);
+        if extensions.is_empty() {
+            capabilities.extensions = None;
+        }
+    }
+}
+
+#[cfg(all(feature = "transport-streamable-http-server", not(feature = "local")))]
+fn validate_event_routing(
+    context: &RequestContext<RoleServer>,
+    method: &str,
+    params: &Value,
+    name: &str,
+    schema: Option<&JsonObject>,
+) -> Result<(), EventsError> {
+    if let Some(parts) = context.extensions.get::<http::request::Parts>() {
+        crate::transport::common::mcp_headers::validate_routing_headers(
+            &parts.headers,
+            method,
+            Some(params),
+            Some(name),
+            schema,
+        )
+        .map_err(EventsError::HeaderMismatch)?;
+    }
+    Ok(())
 }
 
 fn ensure_current(entry: &Entry, registration: u64, generation: u64) -> Result<(), EventsError> {
@@ -661,20 +646,26 @@ fn ensure_current(entry: &Entry, registration: u64, generation: u64) -> Result<(
     }
 }
 
+#[cfg(test)]
 fn validate_descriptor(descriptor: &Descriptor) -> Result<(), EventsError> {
+    validate_enabled_descriptor(descriptor, false)
+}
+
+fn validate_enabled_descriptor(
+    descriptor: &Descriptor,
+    webhooks_enabled: bool,
+) -> Result<(), EventsError> {
     if descriptor.wire.name.is_empty() {
         return Err(invalid("empty event name"));
     }
-    for (idx, mode) in descriptor.wire.delivery.iter().enumerate() {
-        if descriptor.wire.delivery[..idx].contains(mode) {
-            return Err(invalid("duplicate delivery mode"));
-        }
-    }
-    if !descriptor.wire.delivery.contains(&DeliveryMode::Poll) {
+    if !descriptor.wire.delivery.iter().any(|mode| match mode {
+        DeliveryMode::Webhook => webhooks_enabled,
+        _ => true,
+    }) {
         return Err(EventsError::Unsupported {
             feature: "deliveryMode".into(),
             value: Some(json!(descriptor.wire.delivery)),
-            reason: Some("this source requires poll delivery".into()),
+            reason: Some("this source requires an enabled delivery mode".into()),
         });
     }
     crate::transport::common::mcp_headers::validate_param_header_annotations(
@@ -691,6 +682,14 @@ fn encode(result: impl Serialize) -> Result<CustomResult, EventsError> {
 
 fn source_error(message: &'static str) -> EventsError {
     EventsError::Remote(Box::new(crate::ErrorData::internal_error(message, None)))
+}
+
+fn age_floor(cursor: Option<&str>, max_age_ms: Option<u64>) -> Option<DateTime<Utc>> {
+    cursor
+        .and(max_age_ms)
+        .and_then(|age| i64::try_from(age).ok())
+        .and_then(chrono::TimeDelta::try_milliseconds)
+        .and_then(|age| Utc::now().checked_sub_signed(age))
 }
 
 // None means the occurrence cannot fit the poll byte budget.
@@ -724,77 +723,48 @@ fn event_bytes(event: &EventOccurrence) -> Result<Option<usize>, EventsError> {
 }
 
 fn checked_result(
-    batch: CheckedBatch,
+    mut batch: CheckedBatch,
     query: &CheckQuery,
-    name: &str,
-    descriptor: &Descriptor,
+    item_cursors: bool,
 ) -> Result<PollResult, EventsError> {
-    let invalid_batch = || source_error("event check violated its replay contract");
     let next = batch.next_poll_ms.unwrap_or(DEFAULT_POLL_MS);
-    if batch.end.is_empty() || batch.events.len() > query.max_events {
-        return Err(invalid_batch());
-    }
-    let Some(cursor) = query.cursor.as_deref() else {
-        if batch.start.is_some() || !batch.events.is_empty() || batch.has_more {
-            return Err(invalid_batch());
-        }
+    if query.cursor.is_none() {
         return Ok(poll_result(Vec::new(), batch.end, false, false, next));
-    };
-    let start = batch.start.as_deref().unwrap_or(cursor);
-    if batch
-        .start
-        .as_ref()
-        .is_some_and(|start| start.is_empty() || start == cursor)
-        || ((batch.has_more || !batch.events.is_empty()) && batch.end == start)
-        || (batch.start.is_some() && batch.end == cursor)
-    {
-        return Err(invalid_batch());
-    }
-    let mut events = Vec::new();
-    let mut bytes = 0;
-    let mut cut = None;
-    let mut overflow = false;
-    for mut event in batch.events {
-        if event.event_id.is_empty()
-            || event.name != name
-            || query.age_floor.is_some_and(|floor| event.timestamp < floor)
-        {
-            return Err(invalid_batch());
-        }
-        let position = event.cursor.take();
-        if position
-            .as_ref()
-            .is_some_and(|position| position.is_empty() || position == start)
-        {
-            return Err(invalid_batch());
-        }
-        if batch.start.is_some() || overflow {
-            continue;
-        }
-        event.data = (descriptor.normalize_payload)(event.data)?;
-        let Some(size) = event_bytes(&event)?.filter(|size| bytes + size <= query.max_bytes) else {
-            overflow = true;
-            continue;
-        };
-        bytes += size;
-        events.push(event);
-        if let Some(position) = position {
-            cut = Some((events.len(), position));
-        }
     }
     if let Some(start) = batch.start {
         let more = batch.has_more || start != batch.end;
         return Ok(poll_result(Vec::new(), start, true, more, next));
     }
-    if overflow {
-        let (keep, position) = cut.ok_or_else(|| limit("pollBytes", query.max_bytes))?;
-        if position == batch.end {
-            return Err(invalid_batch());
+    let mut bytes = 0;
+    let mut cut = None;
+    for (index, event) in batch.events.iter().enumerate() {
+        let size = event_bytes(event)?.unwrap_or(usize::MAX);
+        if index == query.max_events || size > query.max_bytes - bytes {
+            let (keep, cursor) = cut
+                .filter(|(_, cursor)| query.cursor.as_ref() != Some(cursor) && *cursor != batch.end)
+                .ok_or_else(|| limit("pollBytes", query.max_bytes))?;
+            batch.events.truncate(keep);
+            batch.end = cursor;
+            batch.has_more = true;
+            break;
         }
-        events.truncate(keep);
-        return Ok(poll_result(events, position, false, true, next));
+        bytes += size;
+        if let Some(cursor) = &event.cursor {
+            cut = Some((index + 1, cursor.clone()));
+        }
     }
-    Ok(poll_result(events, batch.end, false, batch.has_more, next))
+    if !item_cursors {
+        for event in &mut batch.events {
+            event.cursor = None;
+        }
+    }
+    Ok(poll_result(
+        batch.events,
+        batch.end,
+        false,
+        batch.has_more,
+        next,
+    ))
 }
 
 fn poll_result(
@@ -805,7 +775,7 @@ fn poll_result(
     next_poll_ms: u64,
 ) -> PollResult {
     PollResult {
-        result_type: Completion::Complete,
+        result_type: ResultType::COMPLETE,
         events,
         cursor: Some(cursor),
         truncated,
@@ -819,107 +789,9 @@ fn poll_result(
 mod tests {
     use super::*;
 
-    fn contract() -> Descriptor {
-        Descriptor::typed::<JsonObject, JsonObject>("sample", "", [DeliveryMode::Poll])
-    }
-
-    fn event(name: &str, id: &str, time: DateTime<Utc>) -> EventOccurrence {
-        EventOccurrence::new(id, name, time, JsonObject::new())
-    }
-
-    #[test]
-    fn rejects_invalid_check_contracts() {
-        let now = Utc::now();
-        let descriptor = contract();
-        let mut query = CheckQuery {
-            cursor: None,
-            age_floor: None,
-            max_events: 1,
-            max_bytes: MAX_BATCH_BYTES,
-        };
-        let empty = CheckedBatch::new("end");
-        for batch in [
-            CheckedBatch::new(""),
-            CheckedBatch {
-                start: Some("gap".into()),
-                ..empty.clone()
-            },
-            CheckedBatch {
-                has_more: true,
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![event("sample", "id", now)],
-                ..empty.clone()
-            },
-        ] {
-            assert!(checked_result(batch, &query, "sample", &descriptor).is_err());
-        }
-        query.cursor = Some("start".into());
-        query.age_floor = Some(now);
-        let invalid_position = |position: &str| {
-            let mut event = event("sample", "id", now);
-            event.cursor = Some(position.into());
-            event
-        };
-        for batch in [
-            CheckedBatch {
-                start: Some("".into()),
-                ..empty.clone()
-            },
-            CheckedBatch {
-                start: Some("start".into()),
-                ..empty.clone()
-            },
-            CheckedBatch {
-                start: Some("gap".into()),
-                end: "start".into(),
-                ..empty.clone()
-            },
-            CheckedBatch {
-                has_more: true,
-                ..CheckedBatch::new("start")
-            },
-            CheckedBatch {
-                events: vec![event("sample", "id", now)],
-                ..CheckedBatch::new("start")
-            },
-            CheckedBatch {
-                events: vec![event("sample", "id", now), event("sample", "id2", now)],
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![event("other", "id", now)],
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![event("sample", "", now)],
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![event(
-                    "sample",
-                    "id",
-                    now - chrono::TimeDelta::milliseconds(1),
-                )],
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![invalid_position("start")],
-                ..empty.clone()
-            },
-            CheckedBatch {
-                events: vec![invalid_position("")],
-                ..empty.clone()
-            },
-        ] {
-            assert!(checked_result(batch, &query, "sample", &descriptor).is_err());
-        }
-    }
-
     #[test]
     fn truncated_check_page_exposes_safe_start_before_events() {
-        let query = CheckQuery {
+        let mut query = CheckQuery {
             cursor: Some("old".into()),
             age_floor: None,
             max_events: 1,
@@ -927,25 +799,24 @@ mod tests {
         };
         let mut batch = CheckedBatch::new("end");
         batch.start = Some("gap".into());
-        batch.events.push(event("sample", "id", Utc::now()));
-        let result = checked_result(batch, &query, "sample", &contract()).unwrap();
+        batch.events.push(EventOccurrence::new(
+            "id",
+            "sample",
+            Utc::now(),
+            JsonObject::new(),
+        ));
+        let result = checked_result(batch.clone(), &query, false).unwrap();
         assert!(result.truncated && result.has_more);
         assert!(result.events.is_empty());
         assert_eq!(result.cursor.as_deref(), Some("gap"));
+        query.cursor = None;
+        let result = checked_result(batch, &query, false).unwrap();
+        assert!(!result.truncated && !result.has_more && result.events.is_empty());
+        assert_eq!(result.cursor.as_deref(), Some("end"));
     }
 
     #[test]
-    fn normalize_typed_payloads_and_reject_invalid_annotations_without_http() {
-        #[derive(Deserialize, Serialize, schemars::JsonSchema)]
-        struct Payload {
-            x: f64,
-        }
-        let descriptor =
-            Descriptor::typed::<JsonObject, Payload>("sample", "", [DeliveryMode::Poll]);
-        let data = json!({"x":1,"extra":true}).as_object().unwrap().clone();
-        let normalized = (descriptor.normalize_payload)(data).unwrap();
-        assert!(normalized["x"].as_f64().is_some());
-        assert!(!normalized.contains_key("extra"));
+    fn rejects_invalid_annotations_without_http() {
         let schema = json!({"properties":{"x":{"type":"string","x-mcp-header":"not a token"}}});
         let descriptor = Descriptor::raw(
             EventDescriptor::new(
@@ -955,7 +826,6 @@ mod tests {
                 schema.as_object().unwrap().clone().into(),
                 Default::default(),
             ),
-            |_| Ok(()),
             |_| Ok(()),
         );
         assert!(matches!(

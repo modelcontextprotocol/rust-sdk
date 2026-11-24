@@ -139,9 +139,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     #[cfg(feature = "events")]
                     let response = {
                         let mut response = response;
-                        if self.events().is_some() {
-                            crate::events::clear_advertisement(&mut response.capabilities);
-                        }
+                        crate::events::server::set_advertisement(
+                            self.events(),
+                            &mut response.capabilities,
+                            false,
+                        );
                         response
                     };
                     ServerResult::InitializeResult(response)
@@ -151,13 +153,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     #[cfg(feature = "events")]
                     let response = {
                         let mut response = response;
-                        if let Some(events) = self.events() {
-                            if is_2026_07_28_or_later && requires_request_metadata {
-                                events.advertise(&mut response.capabilities);
-                            } else {
-                                crate::events::clear_advertisement(&mut response.capabilities);
-                            }
-                        }
+                        crate::events::server::set_advertisement(
+                            self.events(),
+                            &mut response.capabilities,
+                            is_2026_07_28_or_later && requires_request_metadata,
+                        );
                         response
                     };
                     ServerResult::DiscoverResult(response)
@@ -228,13 +228,11 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     #[cfg(feature = "events")]
                     let server_info = {
                         let mut info = server_info;
-                        if let Some(events) = events {
-                            if is_2026_07_28_or_later {
-                                events.advertise(&mut info.capabilities);
-                            } else {
-                                crate::events::clear_advertisement(&mut info.capabilities);
-                            }
-                        }
+                        crate::events::server::set_advertisement(
+                            events,
+                            &mut info.capabilities,
+                            is_2026_07_28_or_later,
+                        );
                         info
                     };
                     let advertised = requested.supported_by(&server_info.capabilities);

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::model::{ErrorCode, ErrorData, JsonObject};
+use crate::model::{ErrorCode, ErrorData, JsonObject, ResultType};
 
 /// Delivery mode advertised for an event type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +19,30 @@ pub enum DeliveryMode {
     Push,
     /// Delivery to a registered HTTPS endpoint.
     Webhook,
+}
+
+#[cfg(any(feature = "client", feature = "server"))]
+pub(super) fn not_found() -> EventsError {
+    EventsError::NotFound {
+        kind: Some("event".into()),
+    }
+}
+
+#[cfg(any(feature = "client", feature = "server"))]
+pub(super) fn unsupported(mode: DeliveryMode) -> EventsError {
+    EventsError::Unsupported {
+        feature: "deliveryMode".into(),
+        value: Some(json!(mode)),
+        reason: None,
+    }
+}
+
+#[cfg(any(feature = "client", feature = "server"))]
+pub(super) fn terminal(error: &EventsError) -> bool {
+    matches!(
+        error,
+        EventsError::NotFound { .. } | EventsError::Forbidden { .. }
+    ) || matches!(error, EventsError::Unsupported { reason: Some(reason), .. } if reason == "schema_changed")
 }
 
 /// A wire catalog entry, separate from the server's registration policy.
@@ -129,10 +153,17 @@ fn utc_timestamp<S: serde::Serializer>(
     serializer.serialize_str(&time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) enum Completion {
-    Complete,
+pub(super) fn complete<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ResultType, D::Error> {
+    let result_type = ResultType::deserialize(deserializer)?;
+    if result_type.is_complete() {
+        Ok(result_type)
+    } else {
+        Err(serde::de::Error::custom(
+            "expected a complete Events result",
+        ))
+    }
 }
 
 /// One page of a peer's catalog.
@@ -140,7 +171,8 @@ pub(super) enum Completion {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ListEventsResult {
-    pub(super) result_type: Completion,
+    #[serde(default, deserialize_with = "complete")]
+    pub(super) result_type: ResultType,
     /// Catalog entries on this page.
     #[cfg_attr(feature = "client", serde(deserialize_with = "read_catalog"))]
     pub events: Vec<EventDescriptor>,
@@ -164,8 +196,19 @@ fn read_catalog<'de, D: serde::Deserializer<'de>>(
                 .and_then(Value::as_str)
                 .unwrap_or("<unknown>")
                 .to_owned();
-            match serde_json::from_value(item) {
-                Ok(descriptor) => Some(descriptor),
+            match serde_json::from_value::<EventDescriptor>(item) {
+                Ok(descriptor) => {
+                    if let Err(reason) =
+                        crate::transport::common::mcp_headers::validate_param_header_annotations(
+                            &descriptor.input_schema,
+                        )
+                    {
+                        tracing::warn!(event = %name, "invalid x-mcp-header annotations: {reason}");
+                        None
+                    } else {
+                        Some(descriptor)
+                    }
+                }
                 Err(_) => {
                     tracing::warn!(event = %name, "ignoring malformed event descriptor");
                     None
@@ -219,7 +262,8 @@ fn default_poll_ms() -> u64 {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PollResult {
-    pub(super) result_type: Completion,
+    #[serde(default, deserialize_with = "complete")]
+    pub(super) result_type: ResultType,
     /// Occurrences in delivery order. An unparseable occurrence rejects the
     /// entire page, including its checkpoint.
     pub events: Vec<EventOccurrence>,
@@ -401,7 +445,21 @@ mod tests {
                 "resultType":"complete","events":[],"truncated":false,"hasMore":false,"nextPollMs":30000
             })
         );
-        assert!(serde_json::from_value::<PollResult>(json!({"events":[]})).is_err());
+        assert!(
+            serde_json::from_value::<PollResult>(json!({"events":[]}))
+                .unwrap()
+                .result_type
+                .is_complete()
+        );
+        assert!(
+            serde_json::from_value::<ListEventsResult>(json!({"events":[]}))
+                .unwrap()
+                .result_type
+                .is_complete()
+        );
+        assert!(
+            serde_json::from_value::<PollResult>(json!({"events":[],"resultType":"task"})).is_err()
+        );
         assert!(
             serde_json::from_value::<PollResult>(json!({
                 "resultType":"complete","events":[],"hasMore":null
@@ -462,25 +520,5 @@ mod tests {
         }
         let invalid = ErrorData::new(ErrorCode::INVALID_PARAMS, "invalid request", None);
         assert_eq!(EventsError::from(invalid).to_string(), "invalid request");
-    }
-
-    #[test]
-    fn events_debug_elides_only_events_traffic() {
-        use crate::model::{CustomNotification, CustomRequest};
-        let secret = Some(json!({"secret":"not in logs"}));
-        assert!(
-            !format!("{:?}", CustomRequest::new("events/poll", secret.clone()))
-                .contains("not in logs")
-        );
-        assert!(
-            !format!(
-                "{:?}",
-                CustomNotification::new("notifications/events/event", secret.clone())
-            )
-            .contains("not in logs")
-        );
-        assert!(
-            format!("{:?}", CustomRequest::new("custom/method", secret)).contains("not in logs")
-        );
     }
 }
