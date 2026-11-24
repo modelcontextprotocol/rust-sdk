@@ -222,13 +222,13 @@ mod tests {
 
         router.tool_router.disable_route("my_tool");
         assert!(matches!(
-            recv_notification(&mut rx).await,
+            recv_notification(&mut rx.messages).await,
             ServerNotification::ToolListChangedNotification(_)
         ));
 
         router.tool_router.enable_route("my_tool");
         assert!(matches!(
-            recv_notification(&mut rx).await,
+            recv_notification(&mut rx.messages).await,
             ServerNotification::ToolListChangedNotification(_)
         ));
     }

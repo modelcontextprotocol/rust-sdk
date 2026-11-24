@@ -783,11 +783,6 @@ pub(crate) struct ClientRequestMetadata {
     pub client_capabilities: ClientCapabilities,
 }
 
-struct PeerRuntimeInfo<I> {
-    runtime: tokio::runtime::Handle,
-    info: std::sync::RwLock<Option<Arc<I>>>,
-}
-
 /// An interface to fetch the remote client or server
 ///
 /// For general purpose, call [`Peer::send_request`] or [`Peer::send_notification`] to send message to remote peer.
@@ -795,10 +790,11 @@ struct PeerRuntimeInfo<I> {
 /// To create a cancellable request, call [`Peer::send_request_with_option`].
 pub struct Peer<R: ServiceRole> {
     tx: mpsc::Sender<PeerSinkMessage<R>>,
+    deferred_cancellations: mpsc::UnboundedSender<PeerSinkMessage<R>>,
     request_id_provider: Arc<dyn RequestIdProvider>,
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
-    runtime_info: Arc<PeerRuntimeInfo<R::PeerInfo>>,
+    peer_info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     inline_protocol_version: Arc<OnceLock<ProtocolVersion>>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
@@ -813,10 +809,11 @@ where
     fn clone(&self) -> Peer<R> {
         Self {
             tx: self.tx.clone(),
+            deferred_cancellations: self.deferred_cancellations.clone(),
             request_id_provider: self.request_id_provider.clone(),
             progress_token_provider: self.progress_token_provider.clone(),
             progress_timeout_watchers: self.progress_timeout_watchers.clone(),
-            runtime_info: self.runtime_info.clone(),
+            peer_info: self.peer_info.clone(),
             client_request_metadata: self.client_request_metadata.clone(),
             inline_protocol_version: self.inline_protocol_version.clone(),
             subscription_channels: self.subscription_channels.clone(),
@@ -835,7 +832,10 @@ impl<R: ServiceRole> std::fmt::Debug for Peer<R> {
     }
 }
 
-type ProxyOutbound<R> = mpsc::Receiver<PeerSinkMessage<R>>;
+pub(crate) struct ProxyOutbound<R: ServiceRole> {
+    pub(crate) messages: mpsc::Receiver<PeerSinkMessage<R>>,
+    deferred_cancellations: mpsc::UnboundedReceiver<PeerSinkMessage<R>>,
+}
 
 #[derive(Debug, Default)]
 #[non_exhaustive]
@@ -886,23 +886,25 @@ impl<R: ServiceRole> Peer<R> {
         peer_info: Option<R::PeerInfo>,
     ) -> (Peer<R>, ProxyOutbound<R>) {
         let (tx, rx) = mpsc::channel(Self::CLIENT_CHANNEL_BUFFER_SIZE);
+        let (deferred_cancellations, cancellation_rx) = mpsc::unbounded_channel();
         (
             Self {
                 tx,
+                deferred_cancellations,
                 request_id_provider,
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
-                runtime_info: Arc::new(PeerRuntimeInfo {
-                    runtime: tokio::runtime::Handle::current(),
-                    info: std::sync::RwLock::new(peer_info.map(Arc::new)),
-                }),
+                peer_info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
                 client_request_metadata: Default::default(),
                 inline_protocol_version: Default::default(),
                 subscription_channels: Default::default(),
                 #[cfg(feature = "client")]
                 response_cache: Default::default(),
             },
-            rx,
+            ProxyOutbound {
+                messages: rx,
+                deferred_cancellations: cancellation_rx,
+            },
         )
     }
     pub async fn send_notification(&self, notification: R::Not) -> Result<(), ServiceError> {
@@ -1063,12 +1065,17 @@ impl<R: ServiceRole> Peer<R> {
             notification: notification.into(),
             responder,
         };
-        if let Err(mpsc::error::TrySendError::Full(message)) = self.tx.try_send(message) {
-            let tx = self.tx.clone();
-            spawn_service_queue_task(&self.runtime_info.runtime, async move {
-                // A closed receiver means there is no service left to notify.
-                let _ = tx.send(message).await;
-            });
+        match self.tx.try_send(message) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(message)) => {
+                // Only in-flight requests reach this queue, at most once each.
+                if self.deferred_cancellations.send(message).is_err() {
+                    tracing::debug!("dropping cancellation: service closed");
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("dropping cancellation: service closed");
+            }
         }
     }
 
@@ -1097,8 +1104,7 @@ impl<R: ServiceRole> Peer<R> {
 
     /// Snapshot of the peer's handshake info.
     pub fn peer_info(&self) -> Option<Arc<R::PeerInfo>> {
-        self.runtime_info
-            .info
+        self.peer_info
             .read()
             .expect("peer info lock poisoned")
             .clone()
@@ -1106,11 +1112,7 @@ impl<R: ServiceRole> Peer<R> {
 
     /// Stores the peer's handshake info, overwriting any previous value.
     pub fn set_peer_info(&self, info: R::PeerInfo) {
-        *self
-            .runtime_info
-            .info
-            .write()
-            .expect("peer info lock poisoned") = Some(Arc::new(info));
+        *self.peer_info.write().expect("peer info lock poisoned") = Some(Arc::new(info));
     }
 
     #[cfg(feature = "client")]
@@ -1431,14 +1433,17 @@ where
     tokio::task::spawn_local(future)
 }
 
-/// Spawn a Send-only queue operation on the service runtime. Unlike handler
-/// tasks, this can start from a synchronous drop outside Tokio or its LocalSet
-/// because it carries only the sender and a wire message, even with `local`.
-fn spawn_service_queue_task(
-    runtime: &tokio::runtime::Handle,
-    future: impl Future<Output = ()> + Send + 'static,
+/// Forward deferred cancellations in order, waiting fairly for outbound capacity.
+async fn drain_deferred_cancellations<R: ServiceRole>(
+    tx: &mpsc::Sender<PeerSinkMessage<R>>,
+    mut rx: mpsc::UnboundedReceiver<PeerSinkMessage<R>>,
 ) {
-    runtime.spawn(future);
+    while let Some(message) = rx.recv().await {
+        if tx.send(message).await.is_err() {
+            tracing::debug!("dropping deferred cancellation: service closed");
+            break;
+        }
+    }
 }
 
 /// Run the service loop over `transport`.
@@ -1452,7 +1457,7 @@ fn serve_inner<R, S, T>(
     service: S,
     transport: T,
     peer: Peer<R>,
-    mut peer_rx: tokio::sync::mpsc::Receiver<PeerSinkMessage<R>>,
+    outbound: ProxyOutbound<R>,
     initial_messages: VecDeque<RxJsonRpcMessage<R>>,
     ct: CancellationToken,
 ) -> RunningService<R, S>
@@ -1485,6 +1490,12 @@ where
     let peer_return: Peer<R> = peer.clone();
     let current_span = tracing::Span::current();
     let handle = spawn_service_task(async move {
+        let ProxyOutbound {
+            messages: mut peer_rx,
+            deferred_cancellations,
+        } = outbound;
+        let mut cancellation_drain =
+            Box::pin(drain_deferred_cancellations(&peer.tx, deferred_cancellations));
         let mut transport = transport.into_transport();
         let mut batch_messages = initial_messages;
         let mut send_task_set = tokio::task::JoinSet::<SendTaskResult>::new();
@@ -1538,6 +1549,7 @@ where
                             continue
                         }
                     }
+                    _ = &mut cancellation_drain => break QuitReason::Closed,
                     m = send_task_set.join_next(), if !send_task_set.is_empty() => {
                         let Some(result) = m else {
                             continue
@@ -1643,16 +1655,14 @@ where
                     notification,
                     responder,
                 }) => {
-                    // Fence correlated notifications once the request is cancelled or
-                    // finished. A frame already handed to the writer may finish
-                    // intact; interrupting that write could split the frame.
-                    // The fence keys on request ID, not generation. The protocol
-                    // permits reuse only after the response is received, so a
-                    // frame already at handoff cannot outlast that round trip.
-                    // Uncorrelated notifications skip the cancellation-pool lookup.
+                    // Fence correlated frames without a live local request. A frame
+                    // already handed off may finish; aborting could split the write.
+                    // A new request reusing the ID lifts the fence, which is safe only
+                    // because the previous response has already made the round trip.
                     if let Some(id) = R::outbound_subscription_id(&notification)
                         && !local_ct_pool.contains_key(&id)
                     {
+                        tracing::debug!(%id, "dropping fenced subscription notification: no live local request");
                         let _ = responder.send(Ok(()));
                         continue;
                     }
@@ -1879,6 +1889,10 @@ where
             }
         };
 
+        // No more outbound requests or cancellations will be forwarded.
+        drop(cancellation_drain);
+        drop(peer_rx);
+
         // Drain in-flight handler responses before closing the transport.
         // When stdin EOF or cancellation arrives, spawned handler tasks may still
         // be finishing. We need to:
@@ -1955,6 +1969,68 @@ mod outbound_backpressure_tests {
         ToolListChangedNotification,
     };
 
+    #[tokio::test(start_paused = true)]
+    async fn deferred_cancellations_drain_in_order_after_a_full_queue() {
+        let (peer, outbound) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32Provider::default()), None);
+        let ProxyOutbound {
+            mut messages,
+            deferred_cancellations,
+        } = outbound;
+        let mut handles = Vec::new();
+        for _ in 0..64 {
+            let request = SubscriptionsListenRequest::new(SubscriptionsListenRequestParams::new(
+                SubscriptionFilter::default(),
+            ));
+            let handle = peer
+                .send_request_with_option(request.into(), PeerRequestOptions::no_options())
+                .await
+                .unwrap();
+            handles.push(handle);
+        }
+
+        let reserved = peer.tx.reserve_many(peer.tx.capacity()).await.unwrap();
+        for handle in &handles {
+            peer.try_cancel_request(handle.id.clone(), None);
+        }
+        assert_eq!(deferred_cancellations.len(), handles.len());
+
+        let mut drain = std::pin::pin!(drain_deferred_cancellations(
+            &peer.tx,
+            deferred_cancellations
+        ));
+        assert!(futures::poll!(&mut drain).is_pending());
+        drop(reserved);
+
+        let receive = async {
+            for handle in &handles {
+                let expected = &handle.id;
+                let Some(PeerSinkMessage::Request { id, .. }) = messages.recv().await else {
+                    panic!("expected queued request {expected} before any cancellation");
+                };
+                assert_eq!(&id, expected);
+            }
+            for handle in handles {
+                let expected = handle.id;
+                let Some(PeerSinkMessage::Notification { notification, .. }) =
+                    messages.recv().await
+                else {
+                    panic!("expected deferred cancellation for {expected}");
+                };
+                let notification: CancelledNotification = notification.try_into().unwrap();
+                assert_eq!(notification.params.request_id, Some(expected));
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = receive => {}
+                () = &mut drain => panic!("cancellation drain exited early"),
+            }
+        })
+        .await
+        .expect("deferred cancellations did not drain");
+    }
+
     #[tokio::test]
     async fn dropped_listen_open_under_backpressure_leaves_no_registration() {
         let (peer, _outbound) =
@@ -1989,8 +2065,13 @@ mod outbound_backpressure_tests {
     }
 
     #[cfg(all(feature = "server", feature = "transport-io"))]
-    #[tokio::test(start_paused = true)]
-    async fn dropped_listen_under_backpressure_cancels_stdio_handler() {
+    async fn listen_pair(
+        cancelled: CancellationToken,
+    ) -> (
+        RunningService<RoleClient, ()>,
+        Subscription,
+        tokio::task::JoinHandle<()>,
+    ) {
         use crate::{ClientLifecycleMode, ClientServiceExt, ServerHandler};
 
         struct ListenServer(CancellationToken);
@@ -2010,39 +2091,45 @@ mod outbound_backpressure_tests {
             }
         }
 
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        let server = tokio::task::spawn_local(async move {
+            ListenServer(cancelled)
+                .serve(server_io)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
+        });
+        let client = tokio::time::timeout(
+            Duration::from_secs(5),
+            ().serve_with_lifecycle(
+                client_io,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            ),
+        )
+        .await
+        .expect("stdio startup timed out")
+        .unwrap();
+        let subscription = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.listen(SubscriptionFilter::default()),
+        )
+        .await
+        .expect("listen acknowledgment timed out")
+        .unwrap();
+        (client, subscription, server)
+    }
+
+    #[cfg(all(feature = "server", feature = "transport-io"))]
+    #[tokio::test(start_paused = true)]
+    async fn dropped_listen_under_backpressure_cancels_stdio_handler() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let cancelled = CancellationToken::new();
-                let (server_io, client_io) = tokio::io::duplex(4096);
-                let handler = ListenServer(cancelled.clone());
-                let server = tokio::task::spawn_local(async move {
-                    handler
-                        .serve(server_io)
-                        .await
-                        .unwrap()
-                        .waiting()
-                        .await
-                        .unwrap();
-                });
-                let client = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    ().serve_with_lifecycle(
-                        client_io,
-                        ClientLifecycleMode::Discover {
-                            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-                        },
-                    ),
-                )
-                .await
-                .expect("stdio startup timed out")
-                .unwrap();
-                let subscription = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    client.listen(SubscriptionFilter::default()),
-                )
-                .await
-                .expect("listen acknowledgment timed out")
-                .unwrap();
+                let (client, subscription, server) = listen_pair(cancelled.clone()).await;
                 let reserved = client
                     .tx
                     .reserve_many(client.tx.max_capacity())
@@ -2064,6 +2151,25 @@ mod outbound_backpressure_tests {
                 server.await.unwrap();
             })
             .await;
+    }
+
+    #[cfg(all(feature = "server", feature = "transport-io"))]
+    #[test]
+    fn dropping_listen_after_runtime_shutdown_does_not_panic() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let local = tokio::task::LocalSet::new();
+        let (client, subscription, _server) =
+            local.block_on(&runtime, listen_pair(CancellationToken::new()));
+        drop(local);
+        drop(runtime);
+
+        assert!(client.tx.is_closed());
+        drop(subscription);
+        drop(client);
     }
 }
 
@@ -2090,7 +2196,8 @@ mod sep2260_marker_tests {
             Some(id) => ORIGINATING_REQUEST.scope(id, send).await.unwrap(),
             None => send.await.unwrap(),
         };
-        let PeerSinkMessage::Request { request, .. } = rx.recv().await.expect("sink message")
+        let PeerSinkMessage::Request { request, .. } =
+            rx.messages.recv().await.expect("sink message")
         else {
             panic!("expected a request sink message");
         };
