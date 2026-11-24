@@ -506,6 +506,7 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                 format!("{EVENT_STREAM_MIME_TYPE}, {JSON_MIME_TYPE}"),
             );
 
+        let session_was_attached = session_id.is_some();
         if let Some(session_id) = session_id {
             builder = builder.header(HEADER_SESSION_ID, session_id.as_ref());
         }
@@ -530,6 +531,10 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         if response.status() == StatusCode::METHOD_NOT_ALLOWED {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
+        }
+
+        if response.status() == StatusCode::NOT_FOUND && session_was_attached {
+            return Err(StreamableHttpError::SessionExpired);
         }
 
         if response.status() == StatusCode::UNAUTHORIZED
