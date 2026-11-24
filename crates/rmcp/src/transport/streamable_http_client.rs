@@ -91,49 +91,27 @@ fn request_version_headers(
     (version, headers)
 }
 
-/// Decides whether a session id survives version negotiation.
+/// Drops a session id at a version that has no sessions (SEP-2567, SEP-2575).
 ///
-/// SEP-2567 removes sessions and SEP-2575 removes the standalone GET endpoint at
-/// [`ProtocolVersion::STANDARD_HEADERS`], so at that version an `Mcp-Session-Id` and a GET
-/// stream are both artifacts of a pre-`2026-07-28` server shape. A legacy-shaped handshake
-/// can still answer with a session id while negotiating that version; the id is dropped
-/// rather than echoed, which also leaves every `spawn_common_stream` call site — each
-/// guarded on a session id being present — with no stream to open.
-///
-/// Dropping is deliberate rather than fatal: refusing to start would break clients against
-/// servers that work today, and the receive-side enforcement added for SEP-2260 still
-/// rejects anything that reaches the client over a stream it should not have. The caller
-/// keeps the original id for the shutdown `DELETE`, so a session the server really did
-/// create is still torn down.
+/// The worker keeps the original id for legacy-version requests and the shutdown `DELETE`.
 fn session_id_for_version(
-    session_id: Option<Arc<str>>,
-    negotiated_version: &ProtocolVersion,
+    session_id: Option<&Arc<str>>,
+    version: &ProtocolVersion,
 ) -> Option<Arc<str>> {
-    if negotiated_version < &ProtocolVersion::STANDARD_HEADERS {
-        return session_id;
-    }
-    if session_id.is_some() {
-        tracing::warn!(
-            version = negotiated_version.as_str(),
-            "server returned an Mcp-Session-Id while negotiating a version that has no sessions; \
-             the id will not be sent on requests and no standalone GET stream will be opened"
-        );
-    }
-    None
+    session_id
+        .filter(|_| version < &ProtocolVersion::STANDARD_HEADERS)
+        .cloned()
 }
 
-/// The session established by [`StreamableHttpClientWorker::perform_reinitialization`].
-///
-/// The two ids are the same id at different stages of [`session_id_for_version`], and they
-/// are deliberately not interchangeable: `cleanup_session_id` is what the server sent, kept
-/// so the shutdown `DELETE` still tears down a session the server really created, while
-/// `session_id` is what may be echoed on requests and used to open a standalone GET stream.
-/// At [`ProtocolVersion::STANDARD_HEADERS`] the latter is always `None`.
-struct Reinitialized {
-    session_id: Option<Arc<str>>,
-    cleanup_session_id: Option<Arc<str>>,
-    negotiated_version: ProtocolVersion,
-    protocol_headers: HashMap<HeaderName, HeaderValue>,
+/// Warns when a handshake returns a session id at a version that has no sessions.
+fn warn_on_sessionless_version(session_id: Option<&Arc<str>>, version: &ProtocolVersion) {
+    if session_id.is_some() && session_id_for_version(session_id, version).is_none() {
+        tracing::warn!(
+            version = version.as_str(),
+            "server returned an Mcp-Session-Id while negotiating a version that has no sessions; \
+             requests at that version omit the id and no standalone GET stream is opened"
+        );
+    }
 }
 
 fn cache_tools_from_response(
@@ -1162,14 +1140,10 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
     /// future remains `Send` without requiring `C: Sync`).  POSTs the saved
     /// initialize request without a session ID, extracts the new session ID and
     /// protocol version, sends `notifications/initialized`, and returns the new
-    /// session in a [`Reinitialized`].  The init result message is **not**
+    /// `(session_id, protocol_headers)` pair.  The init result message is **not**
     /// forwarded to the handler because the handler already processed the original
     /// initialization. If the server answers the initialize with a JSON-RPC error,
     /// returns an error without sending `notifications/initialized`.
-    ///
-    /// The handshake completes here, so [`session_id_for_version`] is applied here too:
-    /// the `initialized` notification is part of the new session and must not echo an id
-    /// the negotiated version has no sessions for.
     async fn perform_reinitialization(
         client: C,
         saved_init_request: ClientJsonRpcMessage,
@@ -1177,7 +1151,14 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         auth_header: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
         response_limits: StreamableHttpResponseLimits,
-    ) -> Result<Reinitialized, StreamableHttpError<C::Error>> {
+    ) -> Result<
+        (
+            Option<Arc<str>>,
+            ProtocolVersion,
+            HashMap<HeaderName, HeaderValue>,
+        ),
+        StreamableHttpError<C::Error>,
+    > {
         let (init_msg, new_session_id_str) = client
             .post_message_with_response_limits(
                 uri.clone(),
@@ -1194,13 +1175,11 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             return Err(StreamableHttpError::ReinitializationFailed(error.error));
         }
 
-        let cleanup_session_id: Option<Arc<str>> =
-            new_session_id_str.map(|s| Arc::from(s.as_str()));
+        let new_session_id: Option<Arc<str>> = new_session_id_str.map(|s| Arc::from(s.as_str()));
 
         let (negotiated_version, new_protocol_headers) =
             negotiate_version_headers(&init_msg, custom_headers);
-        let new_session_id =
-            session_id_for_version(cleanup_session_id.clone(), &negotiated_version);
+        warn_on_sessionless_version(new_session_id.as_ref(), &negotiated_version);
 
         let initialized_notification = ClientJsonRpcMessage::notification(
             ClientNotification::InitializedNotification(InitializedNotification {
@@ -1219,7 +1198,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .post_message_with_response_limits(
                 uri,
                 initialized_notification,
-                new_session_id.clone(),
+                session_id_for_version(new_session_id.as_ref(), &negotiated_version),
                 auth_header,
                 initialized_headers,
                 response_limits,
@@ -1227,12 +1206,7 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
             .await?
             .expect_accepted_or_json::<C::Error>()?;
 
-        Ok(Reinitialized {
-            session_id: new_session_id,
-            cleanup_session_id,
-            negotiated_version,
-            protocol_headers: new_protocol_headers,
-        })
+        Ok((new_session_id, negotiated_version, new_protocol_headers))
     }
 }
 
@@ -1354,7 +1328,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             auth_header: config.auth_header.clone(),
             protocol_headers: protocol_headers.clone(),
         });
-        session_id = session_id_for_version(session_id, &negotiated_version);
+        warn_on_sessionless_version(session_id.as_ref(), &negotiated_version);
 
         context.send_to_handler(message).await?;
         if is_legacy_startup {
@@ -1369,7 +1343,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 .post_message_with_response_limits(
                     config.uri.clone(),
                     initialized_notification.message,
-                    session_id.clone(),
+                    session_id_for_version(session_id.as_ref(), &negotiated_version),
                     config.auth_header.clone(),
                     initialized_headers,
                     config.response_limits(),
@@ -1414,11 +1388,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let mut barrier_in_flight = false;
         let max_concurrent_requests = config.max_concurrent_requests.max(1);
         let mut awaiting_fallback_initialized = false;
-        if let Some(session_id) = &session_id {
+        if let Some(session_id) = session_id_for_version(session_id.as_ref(), &negotiated_version) {
             Self::spawn_common_stream(
                 &mut streams,
                 self.client.clone(),
-                session_id.clone(),
+                session_id,
                 &config,
                 protocol_headers.clone(),
                 sse_worker_tx.clone(),
@@ -1457,12 +1431,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     ) => result.unwrap_or(Err(StreamableHttpError::SessionRecoveryTimeout)),
                 };
                 match recovery {
-                    Ok(Reinitialized {
-                        session_id: new_session_id,
-                        cleanup_session_id,
-                        negotiated_version: new_version,
-                        protocol_headers: new_headers,
-                    }) => {
+                    Ok((new_session_id, new_version, new_headers)) => {
                         streams.abort_all();
                         while streams.join_next().await.is_some() {}
                         request_stream_cancellations.clear();
@@ -1481,23 +1450,23 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         session_id = new_session_id;
                         negotiated_version = new_version;
                         protocol_headers = new_headers;
-                        // Built from the id as sent, not the gated one, so a session the
-                        // server really created is still torn down at shutdown.
-                        session_cleanup_info = cleanup_session_id.map(|sid| SessionCleanupInfo {
+                        session_cleanup_info = session_id.as_ref().map(|sid| SessionCleanupInfo {
                             client: self.client.clone(),
                             uri: config.uri.clone(),
-                            session_id: sid,
+                            session_id: sid.clone(),
                             auth_header: config.auth_header.clone(),
                             protocol_headers: protocol_headers.clone(),
                         });
                         // Do not send controls queued during recovery to the new session.
                         context.advance_control_generation();
                         session_cancellation = CancellationToken::new();
-                        if let Some(session_id) = &session_id {
+                        if let Some(session_id) =
+                            session_id_for_version(session_id.as_ref(), &negotiated_version)
+                        {
                             Self::spawn_common_stream(
                                 &mut streams,
                                 self.client.clone(),
-                                session_id.clone(),
+                                session_id,
                                 &config,
                                 protocol_headers.clone(),
                                 sse_worker_tx.clone(),
@@ -1644,7 +1613,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         &config,
                         send_request,
                         PostSession {
-                            id: session_id.clone(),
+                            id: session_id_for_version(session_id.as_ref(), &version),
                             headers,
                             version,
                             cancellation: session_cancellation.clone(),
@@ -1746,7 +1715,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 auth_header: config.auth_header.clone(),
                                 protocol_headers: protocol_headers.clone(),
                             });
-                        session_id = session_id_for_version(session_id, &negotiated_version);
+                        warn_on_sessionless_version(session_id.as_ref(), &negotiated_version);
                         context.send_to_handler(initialize_response).await?;
                         awaiting_fallback_initialized = true;
                         continue;
@@ -1768,11 +1737,6 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     );
                     if inline_version.is_some() {
                         negotiated_version = request_version.clone();
-                        // A per-request version replaces the negotiated one, so it can move
-                        // the transport onto a version that has no sessions. Gate here, above
-                        // the POST built below, so that request is the first one to go without
-                        // the id rather than the last one to carry it.
-                        session_id = session_id_for_version(session_id, &negotiated_version);
                         if let Ok(value) = HeaderValue::from_str(request_version.as_str()) {
                             protocol_headers
                                 .insert(HeaderName::from_static("mcp-protocol-version"), value);
@@ -1791,7 +1755,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         &config,
                         send_request,
                         PostSession {
-                            id: session_id.clone(),
+                            id: session_id_for_version(session_id.as_ref(), &request_version),
                             headers: request_headers,
                             version: request_version,
                             cancellation: session_cancellation.clone(),
@@ -1878,7 +1842,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             let stream_request_id = request_id;
                             let sse_stream = Self::response_sse_to_jsonrpc(
                                 stream,
-                                session_id.clone(),
+                                session_id_for_version(session_id.as_ref(), &version),
                                 self.client.clone(),
                                 config.uri.clone(),
                                 config.auth_header.clone(),
@@ -1930,11 +1894,13 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         && awaiting_fallback_initialized
                         && is_initialized_notification
                     {
-                        if let Some(session_id) = &session_id {
+                        if let Some(session_id) =
+                            session_id_for_version(session_id.as_ref(), &negotiated_version)
+                        {
                             Self::spawn_common_stream(
                                 &mut streams,
                                 self.client.clone(),
-                                session_id.clone(),
+                                session_id,
                                 &config,
                                 protocol_headers.clone(),
                                 sse_worker_tx.clone(),

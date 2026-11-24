@@ -25,9 +25,12 @@ use axum::{
     routing::any,
 };
 use rmcp::{
-    ClientLifecycleMode, ClientServiceExt,
-    model::{ClientConfig, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject},
-    service::PeerRequestOptions,
+    ClientLifecycleMode, ClientServiceExt, RoleClient, ServiceError,
+    model::{
+        ClientConfig, ClientRequest, ListToolsRequest, ProtocolVersion, RequestMetaObject,
+        ServerResult,
+    },
+    service::{PeerRequestOptions, RunningService},
     transport::{
         StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
     },
@@ -82,6 +85,11 @@ impl Recorder {
                 .front()
                 .expect("at least one handshake is scripted")
         }
+    }
+
+    /// Refuse the next `tools/list` with a 404, as a server does once it expires the session.
+    fn expire_session(&self) {
+        *self.expire_next_list.lock().expect("recorder poisoned") = true;
     }
 
     fn take_expiry(&self) -> bool {
@@ -275,7 +283,7 @@ async fn serve(recorder: &Recorder) -> (String, CancellationToken, tokio::task::
 async fn start_client(
     uri: String,
     startup: ClientLifecycleMode,
-) -> rmcp::service::RunningService<rmcp::RoleClient, ClientConfig> {
+) -> RunningService<RoleClient, ClientConfig> {
     let transport = StreamableHttpClientTransport::from_config(
         StreamableHttpClientTransportConfig::with_uri(uri),
     );
@@ -357,8 +365,23 @@ async fn connect_and_override_version(inline_version: ProtocolVersion) -> Record
         .await
         .expect("list tools on the negotiated version");
 
+    list_tools_at(&client, inline_version)
+        .await
+        .expect("the overriding list should be answered");
+
+    client.cancel().await.expect("cancel client");
+    ct.cancel();
+    let _ = server.await;
+    recorder
+}
+
+/// Send a `tools/list` that carries its own `_meta.protocolVersion`.
+async fn list_tools_at(
+    client: &RunningService<RoleClient, ClientConfig>,
+    version: ProtocolVersion,
+) -> Result<ServerResult, ServiceError> {
     let mut meta = RequestMetaObject::new();
-    meta.set_protocol_version(inline_version);
+    meta.set_protocol_version(version);
     client
         .send_request_with_option(
             ClientRequest::ListToolsRequest(ListToolsRequest {
@@ -368,16 +391,9 @@ async fn connect_and_override_version(inline_version: ProtocolVersion) -> Record
             }),
             PeerRequestOptions::default().with_meta(meta),
         )
-        .await
-        .expect("send the list that carries its own version")
+        .await?
         .await_response()
         .await
-        .expect("the overriding list should be answered");
-
-    client.cancel().await.expect("cancel client");
-    ct.cancel();
-    let _ = server.await;
-    recorder
 }
 
 /// A handshake that settled on a version without sessions: nothing the server volunteered
@@ -559,5 +575,40 @@ async fn a_request_that_moves_to_another_legacy_version_keeps_the_session() {
         lists[1].2.as_deref(),
         Some(SESSION_ID),
         "a move between legacy versions dropped a session id that version still has: {lists:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_request_back_on_a_legacy_version_carries_the_session_into_recovery() {
+    let recorder = Recorder::new((SESSION_ID, "2025-11-25"));
+    let (uri, ct, server) = serve(&recorder).await;
+    let client = start_client(uri, direct_startup()).await;
+
+    list_tools_at(&client, ProtocolVersion::V_2026_07_28)
+        .await
+        .expect("list tools on the version without sessions");
+    // Only a request that carries the id gets the 404 that starts session recovery.
+    recorder.expire_session();
+    let back_on_legacy = list_tools_at(&client, ProtocolVersion::V_2025_11_25).await;
+
+    client.cancel().await.expect("cancel client");
+    ct.cancel();
+    let _ = server.await;
+
+    let lists = recorder.list_requests();
+    assert_eq!(
+        lists[0].2, None,
+        "the list on the version without sessions echoed Mcp-Session-Id: {lists:?}"
+    );
+    assert_eq!(
+        lists.get(1).and_then(|(.., session)| session.as_deref()),
+        Some(SESSION_ID),
+        "the list back on a legacy version went out without the session id: {lists:?}"
+    );
+    back_on_legacy.expect("the expired-session 404 should lead to recovery and a retry");
+    assert_eq!(
+        lists.len(),
+        3,
+        "expected the modern list, the expired legacy one and its retry: {lists:?}"
     );
 }
