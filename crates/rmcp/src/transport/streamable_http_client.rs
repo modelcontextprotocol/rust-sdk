@@ -138,6 +138,8 @@ fn negotiate_version_headers(
 #[non_exhaustive]
 pub struct AuthRequiredError {
     pub www_authenticate_header: String,
+    /// The `DPoP-Nonce` response header, if the server sent one (RFC 9449 §9).
+    pub dpop_nonce: Option<String>,
 }
 
 impl AuthRequiredError {
@@ -145,7 +147,14 @@ impl AuthRequiredError {
     pub fn new(www_authenticate_header: String) -> Self {
         Self {
             www_authenticate_header,
+            dpop_nonce: None,
         }
+    }
+
+    /// Attach the `DPoP-Nonce` value the server sent with the challenge.
+    pub fn with_dpop_nonce(mut self, dpop_nonce: Option<String>) -> Self {
+        self.dpop_nonce = dpop_nonce;
+        self
     }
 }
 

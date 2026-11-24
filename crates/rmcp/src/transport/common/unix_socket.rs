@@ -17,7 +17,7 @@ use crate::{
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-                extract_scope_from_header, validate_custom_header,
+                dpop_nonce_from_headers, extract_scope_from_header, validate_custom_header,
             },
         },
         streamable_http_client::*,
@@ -267,9 +267,10 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                     ))
                 })?
                 .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
+            return Err(StreamableHttpError::AuthRequired(
+                AuthRequiredError::new(www_authenticate_header)
+                    .with_dpop_nonce(dpop_nonce_from_headers(response.headers())),
+            ));
         }
 
         if status == StatusCode::FORBIDDEN
@@ -543,9 +544,10 @@ impl StreamableHttpClient for UnixSocketHttpClient {
                     ))
                 })?
                 .to_string();
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header,
-            }));
+            return Err(StreamableHttpError::AuthRequired(
+                AuthRequiredError::new(www_authenticate_header)
+                    .with_dpop_nonce(dpop_nonce_from_headers(response.headers())),
+            ));
         }
 
         if response.status() == StatusCode::FORBIDDEN

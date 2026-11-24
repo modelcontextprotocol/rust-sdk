@@ -44,6 +44,21 @@ pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), Stri
     Ok(())
 }
 
+/// Lowercase `DPoP-Nonce` header name (RFC 9449 §8 and §9).
+#[cfg(feature = "client-side-sse")]
+pub(crate) const HEADER_DPOP_NONCE: &str = "dpop-nonce";
+
+/// Reads the `DPoP-Nonce` header (RFC 9449 §8 and §9) from a response.
+#[cfg(feature = "client-side-sse")]
+pub(crate) fn dpop_nonce_from_headers(headers: &http::HeaderMap) -> Option<String> {
+    headers
+        .get(HEADER_DPOP_NONCE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Extracts the `scope=` parameter from a `WWW-Authenticate` header value.
 /// Handles both quoted (`scope="files:read files:write"`) and unquoted (`scope=read:data`) forms.
 #[cfg(feature = "client-side-sse")]
