@@ -51,6 +51,10 @@ impl ServiceRole for RoleServer {
         }
     }
 
+    fn outbound_subscription_id(notification: &Self::Not) -> Option<RequestId> {
+        notification.get_meta().subscription_id()
+    }
+
     fn enforce_outbound_request(peer: &Peer<Self>) -> Result<(), ServiceError> {
         // Same order as `RequestContext::protocol_version`: the version the
         // current request names wins. Outside a handler, fall back to the version

@@ -18,17 +18,22 @@ use rmcp::{
     ClientHandler, ClientServiceExt, ServerHandler, ServiceExt,
     model::{
         ClientNotification, ClientRequest, DiscoverResult, GetMeta, Implementation,
-        NotificationMetaObject, PromptListChangedNotification, ProtocolVersion, ServerCapabilities,
+        ListToolsResult, NotificationMetaObject, PaginatedRequestParams,
+        PromptListChangedNotification, ProtocolVersion, RequestId, ServerCapabilities,
         ServerConfig, ServerNotification, ServerResult, SubscriptionFilter,
         SubscriptionsAcknowledgedNotification, SubscriptionsAcknowledgedNotificationParams,
-        SubscriptionsListenResult,
+        SubscriptionsListenResult, ToolListChangedNotification,
     },
     service::{
         NotificationContext, RequestContext, RoleClient, RoleServer, SubscriptionContext,
         SubscriptionEnd, SubscriptionSendError, SubscriptionSink,
     },
 };
-use tokio::sync::{Mutex, Notify};
+use serde_json::json;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::{Mutex, Notify},
+};
 
 struct ToolsOnlyServer;
 
@@ -360,6 +365,150 @@ impl ServerHandler for CancellationServer {
         self.cancelled.notify_one();
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct NotificationFenceServer {
+    send_active: Notify,
+}
+
+fn correlated_tool_list_changed(id: i64) -> ServerNotification {
+    let mut notification =
+        ServerNotification::ToolListChangedNotification(ToolListChangedNotification {
+            method: Default::default(),
+            extensions: Default::default(),
+        });
+    notification
+        .get_meta_mut()
+        .set_subscription_id(RequestId::Number(id));
+    notification
+}
+
+impl ServerHandler for NotificationFenceServer {
+    fn get_info(&self) -> ServerConfig {
+        ToolsOnlyServer.get_info()
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        if *context.sink().id() == RequestId::Number(1) {
+            // The serve loop removes the ID before it cancels this token.
+            context.cancelled().await;
+            let peer = &context.request_context().peer;
+            // Send through the peer, bypassing the sink's closed-state check,
+            // so the stale frame actually reaches the serve-loop queue.
+            peer.send_notification(correlated_tool_list_changed(1))
+                .await
+                .unwrap();
+            peer.notify_tool_list_changed().await.unwrap();
+            self.send_active.notify_one();
+        } else {
+            self.send_active.notified().await;
+            context.sink().notify_tool_list_changed().await.unwrap();
+        }
+        Ok(())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        // The client has already received the normal listen response for ID 2.
+        context
+            .peer
+            .send_notification(correlated_tool_list_changed(2))
+            .await
+            .unwrap();
+        Ok(ListToolsResult::default())
+    }
+}
+
+#[rstest::rstest]
+#[case::cancel_then_complete(true)]
+#[case::complete_without_cancellation(false)]
+#[tokio::test]
+async fn stdio_fences_inactive_subscriptions(#[case] cancel_first: bool) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (server_io, client_io) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            let handler = NotificationFenceServer::default();
+            if !cancel_first {
+                handler.send_active.notify_one();
+            }
+            handler.serve(server_io).await?.waiting().await?;
+            anyhow::Ok(())
+        });
+        let (read, mut write) = tokio::io::split(client_io);
+        let mut read = BufReader::new(read).lines();
+        let meta = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {"name":"test","version":"1.0"},
+            "io.modelcontextprotocol/clientCapabilities": {}
+        });
+        let send = |message: serde_json::Value| format!("{message}\n").into_bytes();
+        let decoded = |line: Option<String>| -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::from_str(&line.expect("server frame"))?)
+        };
+        const SUBSCRIPTION_ID: &str = "io.modelcontextprotocol/subscriptionId";
+
+        write
+            .write_all(&send(json!({
+                "jsonrpc":"2.0", "id":0, "method":"server/discover", "params":{"_meta":meta}
+            })))
+            .await?;
+        assert!(decoded(read.next_line().await?)?.get("result").is_some());
+
+        let listen_ids: &[_] = if cancel_first { &[1, 2] } else { &[2] };
+        for &id in listen_ids {
+            write
+                .write_all(&send(json!({
+                    "jsonrpc":"2.0", "id":id, "method":"subscriptions/listen",
+                    "params":{"_meta":meta, "notifications":{"toolsListChanged":true}}
+                })))
+                .await?;
+            let ack = decoded(read.next_line().await?)?;
+            assert_eq!(ack["method"], "notifications/subscriptions/acknowledged");
+            assert_eq!(ack["params"]["_meta"][SUBSCRIPTION_ID], id);
+        }
+
+        if cancel_first {
+            write
+                .write_all(&send(json!({
+                    "jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":1}
+                })))
+                .await?;
+            let uncorrelated = decoded(read.next_line().await?)?;
+            assert_eq!(uncorrelated["method"], "notifications/tools/list_changed");
+            assert!(uncorrelated["params"]["_meta"][SUBSCRIPTION_ID].is_null());
+        }
+        let active = decoded(read.next_line().await?)?;
+        assert_eq!(active["method"], "notifications/tools/list_changed");
+        assert_eq!(active["params"]["_meta"][SUBSCRIPTION_ID], 2);
+        let completed = decoded(read.next_line().await?)?;
+        assert_eq!(completed["id"], 2);
+        assert!(completed.get("result").is_some());
+
+        write
+            .write_all(&send(json!({
+                "jsonrpc":"2.0", "id":3, "method":"tools/list", "params":{"_meta":meta}
+            })))
+            .await?;
+        let tools = decoded(read.next_line().await?)?;
+        assert_eq!(tools["id"], 3, "expected tools/list response, got {tools}");
+        assert_eq!(tools["result"]["tools"], json!([]));
+
+        write.shutdown().await?;
+        server.await??;
+        Ok(())
+    })
+    .await?
 }
 
 #[derive(Clone)]

@@ -177,6 +177,10 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
         None
     }
     #[doc(hidden)]
+    fn outbound_subscription_id(_notification: &Self::Not) -> Option<RequestId> {
+        None
+    }
+    #[doc(hidden)]
     fn peer_cancels_subscriptions(_peer: &Peer<Self>) -> bool {
         false
     }
@@ -1603,6 +1607,19 @@ where
                     notification,
                     responder,
                 }) => {
+                    // Fence correlated notifications once the request is cancelled or
+                    // finished. A frame already handed to the writer may finish
+                    // intact; interrupting that write could split the frame.
+                    // The fence keys on request ID, not generation. The protocol
+                    // permits reuse only after the response is received, so a
+                    // frame already at handoff cannot outlast that round trip.
+                    // Uncorrelated notifications skip the cancellation-pool lookup.
+                    if let Some(id) = R::outbound_subscription_id(&notification)
+                        && !local_ct_pool.contains_key(&id)
+                    {
+                        let _ = responder.send(Ok(()));
+                        continue;
+                    }
                     // catch cancellation notification
                     let mut cancellation_param = None;
                     let notification = match notification.try_into() {

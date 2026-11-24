@@ -12,16 +12,19 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use futures::StreamExt;
+use http::{Request, StatusCode};
+use http_body_util::{BodyExt, Full};
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        ProgressNotificationParam, ServerCapabilities, ServerConfig,
+        ProgressNotificationParam, ServerCapabilities, ServerConfig, SubscriptionFilter,
     },
-    service::RequestContext,
+    service::{RequestContext, SubscriptionContext},
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService,
         session::{
@@ -32,6 +35,7 @@ use rmcp::{
 };
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tower_service::Service;
 
 #[derive(Clone, Default)]
 struct InMemorySessionStore(Arc<RwLock<HashMap<String, SessionState>>>);
@@ -103,6 +107,110 @@ impl EventStore for InMemoryEventStore {
             .collect::<Vec<_>>();
         Ok(Box::pin(futures::stream::iter(replay)))
     }
+}
+
+#[derive(Clone)]
+struct ListenServer {
+    cancelled: CancellationToken,
+}
+
+impl ServerHandler for ListenServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        context.sink().notify_tool_list_changed().await.unwrap();
+        context.cancelled().await;
+        self.cancelled.cancel();
+        Ok(())
+    }
+}
+
+#[rstest::rstest]
+#[case::sse(false)]
+#[case::json(true)]
+#[tokio::test]
+async fn modern_listen_bypasses_event_store_and_cancels_on_disconnect(
+    #[case] json_response: bool,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let event_store = Arc::new(InMemoryEventStore::default());
+        let cancelled = CancellationToken::new();
+        let handler = ListenServer {
+            cancelled: cancelled.clone(),
+        };
+        let mut service = StreamableHttpService::new(
+            move || Ok(handler.clone()),
+            Arc::new(LocalSessionManager::default().with_event_store(event_store.clone())),
+            StreamableHttpServerConfig::default()
+                .with_json_response(json_response)
+                .with_sse_keep_alive(None)
+                .with_sse_retry(Some(Duration::from_secs(1))),
+        );
+        let request = Request::post("/mcp")
+            .header("Host", "localhost")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", "2026-07-28")
+            .header("Mcp-Method", "subscriptions/listen")
+            .body(Full::new(bytes::Bytes::from_static(
+                br#"{
+                    "jsonrpc":"2.0",
+                    "id":1,
+                    "method":"subscriptions/listen",
+                    "params":{
+                        "notifications":{"toolsListChanged":true},
+                        "_meta":{
+                            "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                            "io.modelcontextprotocol/clientInfo":{"name":"test","version":"1.0"},
+                            "io.modelcontextprotocol/clientCapabilities":{}
+                        }
+                    }
+                }"#,
+            )))?;
+        let response = service.call(request).await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert!(!response.headers().contains_key("mcp-session-id"));
+
+        let mut body = response.into_body();
+        for method in [
+            "notifications/subscriptions/acknowledged",
+            "notifications/tools/list_changed",
+        ] {
+            let data = body
+                .frame()
+                .await
+                .expect("listen stream is open")?
+                .into_data()
+                .expect("SSE data frame");
+            let frame = std::str::from_utf8(&data)?;
+            assert!(frame.contains(method), "unexpected SSE frame: {frame}");
+            assert!(!frame.lines().any(|line| line.starts_with("id:")));
+            assert!(!frame.lines().any(|line| line.starts_with("retry:")));
+        }
+
+        // Dropping the Tower response body is the transport's disconnect signal.
+        assert!(!cancelled.is_cancelled());
+        drop(body);
+        cancelled.cancelled().await;
+        assert!(event_store.events.read().await.is_empty());
+        Ok(())
+    })
+    .await?
 }
 
 #[derive(Clone)]
