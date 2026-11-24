@@ -27,6 +27,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
 | `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`) | |
+| `events` | Enable MCP Events Beta discovery, catalog change notifications, and one-shot polling for the enabled roles (MCP 2026-07-28 or later) | |
 
 ### Transport features
 
