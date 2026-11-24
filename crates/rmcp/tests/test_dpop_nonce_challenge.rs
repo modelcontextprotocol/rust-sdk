@@ -1,5 +1,5 @@
 #![cfg(all(
-    feature = "transport-streamable-http-client",
+    feature = "client",
     feature = "transport-streamable-http-client-reqwest"
 ))]
 //! A 401 challenge's `DPoP-Nonce` header reaches `AuthRequiredError`.
@@ -21,8 +21,8 @@ fn ping() -> ClientJsonRpcMessage {
     )
 }
 
-/// A server whose `/nonce`, `/blank` and `/none` routes answer 401 with a
-/// `DPoP-Nonce` value, an empty one, and none.
+/// A server whose `/nonce`, `/blank`, `/invalid` and `/none` routes answer 401
+/// with a `DPoP-Nonce` value, an empty one, one with a space, and none.
 async fn challenge_server() -> String {
     fn challenge(nonce: Option<&'static str>) -> Response<Body> {
         let mut builder = Response::builder()
@@ -36,7 +36,11 @@ async fn challenge_server() -> String {
     let router = Router::new()
         .route("/nonce", any(|| async { challenge(Some("server-nonce")) }))
         .route("/blank", any(|| async { challenge(Some("")) }))
-        .route("/none", any(|| async { challenge(None) }));
+        .route("/none", any(|| async { challenge(None) }))
+        .route(
+            "/invalid",
+            any(|| async { challenge(Some("server nonce")) }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -91,6 +95,7 @@ async fn post_401_carries_the_server_nonce() {
     );
     assert_eq!(post_nonce(&base, "/blank").await, None);
     assert_eq!(post_nonce(&base, "/none").await, None);
+    assert_eq!(post_nonce(&base, "/invalid").await, None);
 }
 
 #[tokio::test]
@@ -104,9 +109,8 @@ async fn get_401_carries_the_server_nonce() {
     assert_eq!(get_nonce(&base, "/none").await, None);
 }
 
+#[cfg(all(unix, feature = "transport-streamable-http-client-unix-socket"))]
 mod unix_socket {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use rmcp::transport::UnixSocketHttpClient;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -118,14 +122,14 @@ mod unix_socket {
     const URI: &str = "http://localhost/mcp";
 
     /// Serves `count` connections, each answered with a 401 challenge that
-    /// carries `nonce` as `DPoP-Nonce` when given.
-    fn challenge_socket(count: usize, nonce: Option<&'static str>) -> std::path::PathBuf {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "rmcp-dpop-{}-{}.sock",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
+    /// carries `nonce` as `DPoP-Nonce` when given. The socket lives in `dir`, which
+    /// is removed when it drops, including when an assertion panics.
+    fn challenge_socket(
+        dir: &tempfile::TempDir,
+        count: usize,
+        nonce: Option<&'static str>,
+    ) -> std::path::PathBuf {
+        let path = dir.path().join("mcp.sock");
         let listener = UnixListener::bind(&path).unwrap();
         tokio::spawn(async move {
             for _ in 0..count {
@@ -165,7 +169,8 @@ mod unix_socket {
     }
 
     async fn nonces(nonce: Option<&'static str>) -> (Option<String>, Option<String>) {
-        let path = challenge_socket(2, nonce);
+        let dir = tempfile::tempdir().unwrap();
+        let path = challenge_socket(&dir, 2, nonce);
         let client = UnixSocketHttpClient::new(path.to_str().unwrap(), URI);
         let posted = match client
             .post_message(Arc::from(URI), ping(), None, None, HashMap::new())
@@ -183,7 +188,6 @@ mod unix_socket {
             Ok(_) => panic!("expected an auth challenge"),
             Err(error) => panic!("expected an auth challenge, got {error:?}"),
         };
-        let _ = std::fs::remove_file(path);
         (posted, streamed)
     }
 

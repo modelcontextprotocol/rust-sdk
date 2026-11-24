@@ -152,10 +152,52 @@ impl AuthRequiredError {
     }
 
     /// Attach the `DPoP-Nonce` value the server sent with the challenge.
-    pub fn with_dpop_nonce(mut self, dpop_nonce: Option<String>) -> Self {
-        self.dpop_nonce = dpop_nonce;
+    ///
+    /// Surrounding spaces and tabs are removed. A value that is empty, longer
+    /// than [`MAX_DPOP_NONCE_BYTES`], or not made of `NQCHAR`s
+    /// (RFC 9449 §8.1) is discarded, and `dpop_nonce` is set to `None`.
+    pub fn with_dpop_nonce(mut self, dpop_nonce: impl AsRef<str>) -> Self {
+        self.dpop_nonce = valid_dpop_nonce(dpop_nonce.as_ref()).map(str::to_owned);
         self
     }
+}
+
+/// The longest `DPoP-Nonce` value an [`AuthRequiredError`] keeps. A client
+/// echoes the nonce in every DPoP proof, so this stops a server from inflating
+/// the client's request headers.
+pub const MAX_DPOP_NONCE_BYTES: usize = 256;
+
+/// `nonce = 1*NQCHAR`, `NQCHAR = %x21 / %x23-5B / %x5D-7E` (RFC 9449 §8.1).
+fn valid_dpop_nonce(value: &str) -> Option<&str> {
+    let value = value.trim_matches([' ', '\t']);
+    let is_nqchar = |byte: u8| matches!(byte, 0x21 | 0x23..=0x5B | 0x5D..=0x7E);
+    (!value.is_empty() && value.len() <= MAX_DPOP_NONCE_BYTES && value.bytes().all(is_nqchar))
+        .then_some(value)
+}
+
+/// The error for a 401 response that carries a `WWW-Authenticate` challenge,
+/// with the `DPoP-Nonce` header if the server sent one. Returns `None` for any
+/// other response.
+pub(crate) fn auth_required_error<E: std::error::Error + Send + Sync + 'static>(
+    status: StatusCode,
+    headers: &http::HeaderMap,
+) -> Option<StreamableHttpError<E>> {
+    if status != StatusCode::UNAUTHORIZED {
+        return None;
+    }
+    let Ok(challenge) = headers.get(http::header::WWW_AUTHENTICATE)?.to_str() else {
+        return Some(StreamableHttpError::UnexpectedServerResponse(Cow::from(
+            "invalid www-authenticate header value",
+        )));
+    };
+    let mut error = AuthRequiredError::new(challenge.to_owned());
+    if let Some(nonce) = headers
+        .get(super::common::http_header::HEADER_DPOP_NONCE)
+        .and_then(|value| value.to_str().ok())
+    {
+        error = error.with_dpop_nonce(nonce);
+    }
+    Some(StreamableHttpError::AuthRequired(error))
 }
 
 #[derive(Debug, Error)]
@@ -316,6 +358,15 @@ impl<E: std::error::Error + Send + Sync + 'static> StreamableHttpError<E> {
         match self {
             Self::AuthRequired(error) => Some(&error.www_authenticate_header),
             Self::InsufficientScope(error) => Some(&error.www_authenticate_header),
+            _ => None,
+        }
+    }
+
+    /// The `DPoP-Nonce` the server sent with a 401 challenge
+    /// ([`AuthRequired`](Self::AuthRequired)), if any (RFC 9449 §9).
+    pub fn dpop_nonce(&self) -> Option<&str> {
+        match self {
+            Self::AuthRequired(error) => error.dpop_nonce.as_deref(),
             _ => None,
         }
     }
@@ -2875,5 +2926,56 @@ mod tests {
 
         assert_eq!(matched_id, Some(string_id));
         assert_eq!(pending, HashSet::from([NumberOrString::Number(1)]));
+    }
+
+    #[rstest::rstest]
+    #[case::token("server-nonce", Some("server-nonce"))]
+    #[case::all_nqchar_ranges("!#[]~", Some("!#[]~"))]
+    #[case::padded(" \tserver-nonce\t ", Some("server-nonce"))]
+    #[case::empty("", None)]
+    #[case::blank(" \t ", None)]
+    #[case::interior_space("server nonce", None)]
+    #[case::interior_tab("server\tnonce", None)]
+    #[case::quote("server\"nonce", None)]
+    #[case::backslash("server\\nonce", None)]
+    #[case::non_ascii("server-nonc\u{e9}", None)]
+    #[case::control("server\u{7f}nonce", None)]
+    fn with_dpop_nonce_keeps_only_nqchar_values(#[case] value: &str, #[case] kept: Option<&str>) {
+        let error = AuthRequiredError::new("DPoP".to_string()).with_dpop_nonce(value);
+        assert_eq!(error.dpop_nonce.as_deref(), kept);
+    }
+
+    #[test]
+    fn with_dpop_nonce_caps_the_length() {
+        let at_limit = "n".repeat(MAX_DPOP_NONCE_BYTES);
+        let error = AuthRequiredError::new("DPoP".to_string()).with_dpop_nonce(&at_limit);
+        assert_eq!(error.dpop_nonce.as_deref(), Some(at_limit.as_str()));
+        let error = error.with_dpop_nonce(format!("{at_limit}n"));
+        assert_eq!(error.dpop_nonce, None);
+    }
+
+    #[test]
+    fn auth_required_error_reads_the_challenge_and_nonce() {
+        use http::header::WWW_AUTHENTICATE;
+
+        use super::super::common::http_header::HEADER_DPOP_NONCE;
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert(WWW_AUTHENTICATE, HeaderValue::from_static("DPoP"));
+        assert!(auth_required_error::<std::io::Error>(StatusCode::FORBIDDEN, &headers).is_none());
+
+        headers.insert(HEADER_DPOP_NONCE, HeaderValue::from_static("server-nonce"));
+        let error = auth_required_error::<std::io::Error>(StatusCode::UNAUTHORIZED, &headers)
+            .expect("a 401 with a challenge is an auth error");
+        assert_eq!(error.dpop_nonce(), Some("server-nonce"));
+        let StreamableHttpError::AuthRequired(error) = error else {
+            panic!("expected AuthRequired, got {error:?}");
+        };
+        assert_eq!(error.www_authenticate_header, "DPoP");
+
+        headers.remove(WWW_AUTHENTICATE);
+        assert!(
+            auth_required_error::<std::io::Error>(StatusCode::UNAUTHORIZED, &headers).is_none()
+        );
     }
 }

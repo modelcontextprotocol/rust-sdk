@@ -17,7 +17,7 @@ use crate::{
             client_side_sse::{DEFAULT_MAX_SSE_EVENT_SIZE, bounded_sse_stream},
             http_header::{
                 EVENT_STREAM_MIME_TYPE, HEADER_LAST_EVENT_ID, HEADER_SESSION_ID, JSON_MIME_TYPE,
-                dpop_nonce_from_headers, extract_scope_from_header, validate_custom_header,
+                extract_scope_from_header, validate_custom_header,
             },
         },
         streamable_http_client::*,
@@ -256,21 +256,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
 
         let status = response.status();
 
-        if status == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(
-                AuthRequiredError::new(www_authenticate_header)
-                    .with_dpop_nonce(dpop_nonce_from_headers(response.headers())),
-            ));
+        if let Some(error) = auth_required_error(status, response.headers()) {
+            return Err(error);
         }
 
         if status == StatusCode::FORBIDDEN
@@ -533,21 +520,8 @@ impl StreamableHttpClient for UnixSocketHttpClient {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
 
-        if response.status() == StatusCode::UNAUTHORIZED
-            && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
-        {
-            let www_authenticate_header = header
-                .to_str()
-                .map_err(|_| {
-                    StreamableHttpError::UnexpectedServerResponse(Cow::from(
-                        "invalid www-authenticate header value",
-                    ))
-                })?
-                .to_string();
-            return Err(StreamableHttpError::AuthRequired(
-                AuthRequiredError::new(www_authenticate_header)
-                    .with_dpop_nonce(dpop_nonce_from_headers(response.headers())),
-            ));
+        if let Some(error) = auth_required_error(response.status(), response.headers()) {
+            return Err(error);
         }
 
         if response.status() == StatusCode::FORBIDDEN

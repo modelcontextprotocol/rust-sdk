@@ -1,6 +1,8 @@
 pub const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 pub const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 pub const HEADER_MCP_PROTOCOL_VERSION: &str = "MCP-Protocol-Version";
+/// RFC 9449 §8 and §9.
+pub const HEADER_DPOP_NONCE: &str = "DPoP-Nonce";
 pub const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 pub const JSON_MIME_TYPE: &str = "application/json";
 
@@ -42,21 +44,6 @@ pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), Stri
         return Err(name.to_string());
     }
     Ok(())
-}
-
-/// Lowercase `DPoP-Nonce` header name (RFC 9449 §8 and §9).
-#[cfg(feature = "client-side-sse")]
-pub(crate) const HEADER_DPOP_NONCE: &str = "dpop-nonce";
-
-/// Reads the `DPoP-Nonce` header (RFC 9449 §8 and §9) from a response.
-#[cfg(feature = "client-side-sse")]
-pub(crate) fn dpop_nonce_from_headers(headers: &http::HeaderMap) -> Option<String> {
-    headers
-        .get(HEADER_DPOP_NONCE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 /// Extracts the `scope=` parameter from a `WWW-Authenticate` header value.
