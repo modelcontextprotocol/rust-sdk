@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
-const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:8001/mcp/`));
+const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:8001/mcp`));
 
 const client = new Client(
   {
