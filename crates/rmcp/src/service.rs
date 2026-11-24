@@ -781,6 +781,11 @@ pub(crate) struct ClientRequestMetadata {
     pub client_capabilities: ClientCapabilities,
 }
 
+struct PeerRuntimeInfo<I> {
+    runtime: tokio::runtime::Handle,
+    info: std::sync::RwLock<Option<Arc<I>>>,
+}
+
 /// An interface to fetch the remote client or server
 ///
 /// For general purpose, call [`Peer::send_request`] or [`Peer::send_notification`] to send message to remote peer.
@@ -791,7 +796,7 @@ pub struct Peer<R: ServiceRole> {
     request_id_provider: Arc<dyn RequestIdProvider>,
     progress_token_provider: Arc<dyn ProgressTokenProvider>,
     progress_timeout_watchers: ProgressTimeoutWatchers,
-    info: Arc<std::sync::RwLock<Option<Arc<R::PeerInfo>>>>,
+    runtime_info: Arc<PeerRuntimeInfo<R::PeerInfo>>,
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     inline_protocol_version: Arc<OnceLock<ProtocolVersion>>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
@@ -809,7 +814,7 @@ where
             request_id_provider: self.request_id_provider.clone(),
             progress_token_provider: self.progress_token_provider.clone(),
             progress_timeout_watchers: self.progress_timeout_watchers.clone(),
-            info: self.info.clone(),
+            runtime_info: self.runtime_info.clone(),
             client_request_metadata: self.client_request_metadata.clone(),
             inline_protocol_version: self.inline_protocol_version.clone(),
             subscription_channels: self.subscription_channels.clone(),
@@ -885,7 +890,10 @@ impl<R: ServiceRole> Peer<R> {
                 request_id_provider,
                 progress_token_provider: Arc::new(AtomicU32ProgressTokenProvider::default()),
                 progress_timeout_watchers: Default::default(),
-                info: Arc::new(std::sync::RwLock::new(peer_info.map(Arc::new))),
+                runtime_info: Arc::new(PeerRuntimeInfo {
+                    runtime: tokio::runtime::Handle::current(),
+                    info: std::sync::RwLock::new(peer_info.map(Arc::new)),
+                }),
                 client_request_metadata: Default::default(),
                 inline_protocol_version: Default::default(),
                 subscription_channels: Default::default(),
@@ -956,6 +964,14 @@ impl<R: ServiceRole> Peer<R> {
         request
             .get_meta_mut()
             .set_progress_token(progress_token.clone());
+        // Reserve capacity before registering anything. Once either route is
+        // installed, enqueue the request without yielding so a dropped opening
+        // future cannot leave state behind without returning a handle.
+        let permit = self
+            .tx
+            .reserve()
+            .await
+            .map_err(|_| ServiceError::TransportClosed)?;
         let (responder, receiver) = tokio::sync::oneshot::channel();
         let progress_reset_rx = if options.reset_timeout_on_progress && options.timeout.is_some() {
             let (sender, receiver) = mpsc::channel(1);
@@ -971,25 +987,11 @@ impl<R: ServiceRole> Peer<R> {
             self.subscription_channels_write()
                 .insert(id.clone(), channel);
         }
-        if self
-            .tx
-            .send(PeerSinkMessage::Request {
-                request,
-                id: id.clone(),
-                responder,
-            })
-            .await
-            .is_err()
-        {
-            if progress_reset_rx.is_some() {
-                self.progress_timeout_watchers
-                    .write()
-                    .await
-                    .remove(&progress_token);
-            }
-            self.unregister_subscription(&id);
-            return Err(ServiceError::TransportClosed);
-        }
+        permit.send(PeerSinkMessage::Request {
+            request,
+            id: id.clone(),
+            responder,
+        });
         Ok(RequestHandle {
             id,
             rx: receiver,
@@ -1055,10 +1057,17 @@ impl<R: ServiceRole> Peer<R> {
             extensions: Default::default(),
         };
         let (responder, _receiver) = tokio::sync::oneshot::channel();
-        let _ = self.tx.try_send(PeerSinkMessage::Notification {
+        let message = PeerSinkMessage::Notification {
             notification: notification.into(),
             responder,
-        });
+        };
+        if let Err(mpsc::error::TrySendError::Full(message)) = self.tx.try_send(message) {
+            let tx = self.tx.clone();
+            spawn_service_queue_task(&self.runtime_info.runtime, async move {
+                // A closed receiver means there is no service left to notify.
+                let _ = tx.send(message).await;
+            });
+        }
     }
 
     async fn notify_progress_timeout_watcher(&self, progress_token: &ProgressToken) {
@@ -1086,12 +1095,20 @@ impl<R: ServiceRole> Peer<R> {
 
     /// Snapshot of the peer's handshake info.
     pub fn peer_info(&self) -> Option<Arc<R::PeerInfo>> {
-        self.info.read().expect("peer info lock poisoned").clone()
+        self.runtime_info
+            .info
+            .read()
+            .expect("peer info lock poisoned")
+            .clone()
     }
 
     /// Stores the peer's handshake info, overwriting any previous value.
     pub fn set_peer_info(&self, info: R::PeerInfo) {
-        *self.info.write().expect("peer info lock poisoned") = Some(Arc::new(info));
+        *self
+            .runtime_info
+            .info
+            .write()
+            .expect("peer info lock poisoned") = Some(Arc::new(info));
     }
 
     #[cfg(feature = "client")]
@@ -1403,6 +1420,16 @@ where
     F::Output: 'static,
 {
     tokio::task::spawn_local(future)
+}
+
+/// Spawn a Send-only queue operation on the service runtime. Unlike handler
+/// tasks, this can start from a synchronous drop outside Tokio or its LocalSet
+/// because it carries only the sender and a wire message, even with `local`.
+fn spawn_service_queue_task(
+    runtime: &tokio::runtime::Handle,
+    future: impl Future<Output = ()> + Send + 'static,
+) {
+    runtime.spawn(future);
 }
 
 /// Run the service loop over `transport`.
@@ -1908,6 +1935,126 @@ where
         handle: Some(handle),
         cancellation_token: ct.clone(),
         dg: ct.drop_guard(),
+    }
+}
+
+#[cfg(all(test, feature = "client"))]
+mod outbound_backpressure_tests {
+    use super::*;
+    use crate::model::{
+        SubscriptionFilter, SubscriptionsListenRequest, SubscriptionsListenRequestParams,
+        ToolListChangedNotification,
+    };
+
+    #[tokio::test]
+    async fn dropped_listen_open_under_backpressure_leaves_no_registration() {
+        let (peer, _outbound) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32Provider::default()), None);
+        let reserved = peer.tx.reserve_many(peer.tx.max_capacity()).await.unwrap();
+        let request = SubscriptionsListenRequest::new(SubscriptionsListenRequestParams::new(
+            SubscriptionFilter::default(),
+        ));
+        let mut opening = Box::pin(peer.send_subscription_request(
+            request.into(),
+            PeerRequestOptions::with_timeout(Duration::from_secs(1)).reset_timeout_on_progress(),
+            1,
+        ));
+        assert!(futures::poll!(&mut opening).is_pending());
+        drop(opening);
+        drop(reserved);
+
+        let mut late: ServerNotification = ToolListChangedNotification {
+            method: Default::default(),
+            extensions: Default::default(),
+        }
+        .into();
+        late.get_meta_mut()
+            .set_subscription_id(RequestId::Number(0));
+        let id = late.get_meta().subscription_id().expect("correlated frame");
+        assert!(
+            peer.subscription_sender(&id).is_none(),
+            "late notification still has a subscription route for {id}"
+        );
+        assert!(peer.subscription_channels_read().is_empty());
+        assert!(peer.progress_timeout_watchers.read().await.is_empty());
+    }
+
+    #[cfg(all(feature = "server", feature = "transport-io"))]
+    #[tokio::test(start_paused = true)]
+    async fn dropped_listen_under_backpressure_cancels_stdio_handler() {
+        use crate::{ClientLifecycleMode, ClientServiceExt, ServerHandler};
+
+        struct ListenServer(CancellationToken);
+
+        impl ServerHandler for ListenServer {
+            fn accepted_subscription_filter(
+                &self,
+                requested: &SubscriptionFilter,
+            ) -> Option<SubscriptionFilter> {
+                Some(requested.clone())
+            }
+
+            async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+                context.cancelled().await;
+                self.0.cancel();
+                Ok(())
+            }
+        }
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let cancelled = CancellationToken::new();
+                let (server_io, client_io) = tokio::io::duplex(4096);
+                let handler = ListenServer(cancelled.clone());
+                let server = tokio::task::spawn_local(async move {
+                    handler
+                        .serve(server_io)
+                        .await
+                        .unwrap()
+                        .waiting()
+                        .await
+                        .unwrap();
+                });
+                let client = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    ().serve_with_lifecycle(
+                        client_io,
+                        ClientLifecycleMode::Discover {
+                            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                        },
+                    ),
+                )
+                .await
+                .expect("stdio startup timed out")
+                .unwrap();
+                let subscription = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    client.listen(SubscriptionFilter::default()),
+                )
+                .await
+                .expect("listen acknowledgment timed out")
+                .unwrap();
+                let reserved = client
+                    .tx
+                    .reserve_many(client.tx.max_capacity())
+                    .await
+                    .unwrap();
+                assert!(!cancelled.is_cancelled());
+
+                // Saturate capacity through the entire drop, even if the service
+                // loop runs. Drop outside the runtime as a synchronous caller may.
+                std::thread::spawn(move || drop(subscription))
+                    .join()
+                    .unwrap();
+                drop(reserved);
+
+                tokio::time::timeout(Duration::from_secs(5), cancelled.cancelled())
+                    .await
+                    .expect("dropping the listen did not cancel the stdio handler");
+                client.cancel().await.unwrap();
+                server.await.unwrap();
+            })
+            .await;
     }
 }
 
