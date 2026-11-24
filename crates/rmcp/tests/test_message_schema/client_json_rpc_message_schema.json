@@ -294,7 +294,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": true
     },
     "ClientResult": {
       "anyOf": [
