@@ -29,6 +29,8 @@ use url::Host;
 
 use crate::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 
+#[cfg(feature = "auth-dpop")]
+pub mod dpop;
 #[cfg(feature = "auth-enterprise-managed")]
 pub mod enterprise;
 mod metadata_resolver;

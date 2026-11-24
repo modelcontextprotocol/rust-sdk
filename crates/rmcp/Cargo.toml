@@ -19,6 +19,7 @@ exhaustive_enums = "warn"
 features = [
   "auth",
   "auth-client-credentials-jwt",
+  "auth-dpop",
   "auth-enterprise-managed",
   "base64",
   "client",
@@ -65,6 +66,9 @@ pastey = { version = "0.2.0", optional = true }
 oauth2 = { version = "5.0", optional = true, default-features = false }
 # JWT signing for client credentials (private_key_jwt)
 jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
+# DPoP proof keys (SEP-1932, RFC 9449)
+p256 = { version = "0.13", optional = true, default-features = false, features = ["ecdsa", "std"] }
+rand_core = { version = "0.6", optional = true, features = ["getrandom"] }
 
 # for auto generate schema
 schemars = { version = "1.0", optional = true, features = ["chrono04"] }
@@ -219,6 +223,8 @@ tower = ["dep:tower-service"]
 auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
 auth-enterprise-managed = ["auth", "base64"]
+# DPoP sender-constrained tokens (SEP-1932, RFC 9449)
+auth-dpop = ["auth", "base64", "uuid", "dep:http", "dep:p256", "dep:rand_core"]
 schemars = ["dep:schemars"]
 
 [dev-dependencies]
