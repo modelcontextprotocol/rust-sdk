@@ -373,6 +373,28 @@ mod test {
     }
 
     #[test]
+    fn test_doc_comment_description_with_other_attributes() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            /// Description before the attributes
+            #[allow(unused)]
+            #[doc(hidden)]
+            fn test_function(&self) -> Result<(), Error> {
+                Ok(())
+            }
+        };
+        let result = tool(attr, input)?;
+
+        let result_str = result.to_string();
+        assert!(
+            result_str.contains("Some (\"Description before the attributes\" . into ())"),
+            "{result_str}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_explicit_description_priority() -> syn::Result<()> {
         let attr = quote! {
             description = "Explicit description has priority"

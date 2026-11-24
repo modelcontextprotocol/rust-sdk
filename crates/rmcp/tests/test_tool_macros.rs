@@ -67,6 +67,11 @@ impl Server {
 
     #[tool(description = concat!("part-a-", "part-b"))]
     async fn concat_description_tool(&self) {}
+
+    /// Description from a doc comment.
+    #[tool]
+    #[allow(clippy::unused_async)]
+    async fn doc_before_attribute_tool(&self) {}
 }
 
 const CONST_TOOL_DESCRIPTION: &str = "Description from a const";
@@ -78,6 +83,15 @@ fn test_description_accepts_const_and_concat_exprs() {
 
     let tool = Server::concat_description_tool_tool_attr();
     assert_eq!(tool.description.as_deref(), Some("part-a-part-b"));
+}
+
+#[test]
+fn test_doc_comment_description_survives_a_following_attribute() {
+    let tool = Server::doc_before_attribute_tool_tool_attr();
+    assert_eq!(
+        tool.description.as_deref(),
+        Some("Description from a doc comment.")
+    );
 }
 
 /// Generic service trait.

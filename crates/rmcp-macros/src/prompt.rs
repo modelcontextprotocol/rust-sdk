@@ -220,6 +220,29 @@ mod test {
     }
 
     #[test]
+    fn test_doc_comment_description_with_other_attributes() -> syn::Result<()> {
+        let attr = quote! {};
+        let input = quote! {
+            /// Description before the attributes
+            #[allow(unused)]
+            #[doc(hidden)]
+            fn test_prompt(&self) -> Result<String> {
+                Ok("Test".to_string())
+            }
+        };
+        let result = prompt(attr, input)?;
+
+        let result_str = result.to_string();
+        assert!(
+            result_str
+                .contains("Some :: < String > (\"Description before the attributes\" . into ())"),
+            "{result_str}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_doc_include_description() -> syn::Result<()> {
         let attr = quote! {}; // No explicit description
         let input = quote! {
