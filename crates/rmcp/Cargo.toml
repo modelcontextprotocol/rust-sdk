@@ -555,6 +555,16 @@ path = "tests/test_unix_socket_response_limits.rs"
 required-features = ["transport-streamable-http-client-unix-socket"]
 
 [[test]]
+name = "test_dpop_client"
+required-features = [
+  "auth-dpop",
+  "client",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+]
+path = "tests/test_dpop_client.rs"
+
+[[test]]
 name = "test_dpop_nonce_challenge"
 required-features = ["client", "transport-streamable-http-client-reqwest"]
 path = "tests/test_dpop_nonce_challenge.rs"

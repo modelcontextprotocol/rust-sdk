@@ -2671,12 +2671,12 @@ impl AuthorizationManager {
 
     /// Request DPoP-bound access tokens (SEP-1932, RFC 9449).
     ///
-    /// Every token request then carries a DPoP proof signed by `signer`. A
-    /// server that ignores the proof issues a Bearer token, which is sent as
-    /// before. A token with `token_type` `DPoP` is never sent as Bearer:
-    /// [`AuthClient`] and [`prepare_request`](Self::prepare_request) return an
-    /// error for it. Sending DPoP-bound tokens to the resource server is not
-    /// supported yet.
+    /// Every token request then carries a DPoP proof signed by `signer`. When
+    /// the authorization server issues a token with `token_type` `DPoP`,
+    /// [`AuthClient`] sends it with the `DPoP` scheme and a proof on each
+    /// request. A server that ignores the proof issues a Bearer token, which
+    /// is sent as before. [`prepare_request`](Self::prepare_request) sends
+    /// only Bearer, so it returns an error for a DPoP-bound token.
     ///
     /// Tokens are bound to the signer's key, so keep the same key for as long
     /// as the stored credentials are used.

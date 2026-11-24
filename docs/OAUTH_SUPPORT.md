@@ -16,6 +16,7 @@ This document describes the OAuth 2.1 authorization implementation for Model Con
 - Authorized HTTP Client implementation
 - Injectable OAuth HTTP client for custom network environments
 - Opt-in EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients
+- Opt-in DPoP sender-constrained tokens (SEP-1932 / RFC 9449) behind the `auth-dpop` feature
 
 ## Usage Guide
 
@@ -312,8 +313,9 @@ The exchange profile has these requirements and limits:
   it, the resource authorization server picks the access token's audience, and the
   SDK only rejects a mismatched `resource` echoed in the exchange response. Scope
   may be omitted or narrowed.
-- RAR (`authorization_details`) and DPoP are not supported. Nonempty authorization
-  details are rejected at both exchange stages.
+- RAR (`authorization_details`) is not supported, and enterprise-managed exchanges
+  do not send DPoP proofs. Nonempty authorization details are rejected at both
+  exchange stages.
 - Redemption consumes the SDK's ID-JAG handle and does not retry automatically.
   This is an SDK safety choice, not a protocol requirement that ID-JAGs be single-use.
 
@@ -422,6 +424,58 @@ settings. For custom proxy, CA, or remote-execution policy, implement
 `OAuthHttpClient`; use separate adapters for the IdP and resource AS when their
 network policies differ.
 
+## DPoP sender-constrained tokens (SEP-1932)
+
+The `auth-dpop` feature (which includes `auth`) adds the client side of the
+[DPoP profile for MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1932),
+built on [RFC 9449](https://datatracker.ietf.org/doc/html/rfc9449). It is off by
+default.
+
+To use it, call `AuthorizationManager::set_dpop_signer` with a signer, for example
+`Es256DpopSigner::generate()`, before requesting tokens:
+
+```rust ignore
+use std::sync::Arc;
+
+use rmcp::transport::auth::dpop::Es256DpopSigner;
+
+manager.set_dpop_signer(Arc::new(Es256DpopSigner::generate()));
+```
+
+Then:
+
+- Every token request (authorization code, refresh, and client credentials with a
+  secret or a private key JWT) carries a `DPoP` proof. When the authorization server
+  answers `use_dpop_nonce`, the request is sent once more with a proof that carries
+  the server's nonce. A private key JWT retry gets a new client assertion, so its
+  `jti` is not replayed.
+- A token issued with `token_type` `DPoP` is sent by `AuthClient` as
+  `Authorization: DPoP <token>` with a fresh proof that binds the method, the URL
+  and the token (`ath`). A token issued as `Bearer` is sent as before, even when a
+  signer is set.
+- When the MCP server answers 401 with a `DPoP-Nonce` header that differs from the
+  nonce the request carried, the request is retried once with that nonce. The
+  resource server nonce is learned from 401 responses only. Nonces are kept per
+  origin, so the authorization server and the MCP server do not share one.
+- A stored DPoP-bound token is never sent as Bearer. Without a signer, requests fail
+  with an error that asks for one.
+- With a signer set, a token the caller passes to the transport is checked against
+  the stored credentials. The stored token itself is sent with its stored type. A
+  different token is refused while a DPoP-bound token is stored, because it may be
+  an old copy of that token. Otherwise it is sent as Bearer. Without a signer, a
+  caller-supplied token is sent as Bearer, as before.
+- `Es256DpopSigner` keeps its key in memory and does not persist it. A token is
+  bound to the key, so it stops working when the process exits. For tokens that
+  outlive the process, implement `DpopSigner` over a persistent key; ES256
+  signatures must be the 64-byte `r || s` form, not DER.
+
+Limits of this feature:
+
+- The authorization request does not send `dpop_jkt`.
+- There is no resource-server verifier.
+- `AuthorizationManager::prepare_request` only sends Bearer tokens. It returns an
+  error for a DPoP-bound token; use `AuthClient`.
+
 ## Complete Examples
 
 - **Authorization Code client**: [`examples/clients/src/auth/oauth_client.rs`](../examples/clients/src/auth/oauth_client.rs)
@@ -479,6 +533,7 @@ Use the concrete scopes your provider returned in the token response, not the on
 - All tokens are securely stored in memory (custom credential stores supported)
 - Automatic token refresh reduces user intervention
 - Server metadata validation warns on non-compliant configurations but proceeds where relatively safe
+- **DPoP-bound tokens are never sent as Bearer, and the DPoP key stays in memory**: see [DPoP sender-constrained tokens](#dpop-sender-constrained-tokens-sep-1932). A `DPoP` token without a signer is not sent at all, and the built-in `Es256DpopSigner` key is not persisted
 
 ## Troubleshooting
 
@@ -503,3 +558,5 @@ If you encounter authorization issues, check the following:
 - [RFC 9728: OAuth 2.0 Protected Resource Metadata](https://datatracker.ietf.org/doc/html/rfc9728)
 - [RFC 7636: Proof Key for Code Exchange (PKCE)](https://datatracker.ietf.org/doc/html/rfc7636)
 - [RFC 6749 §6: Refreshing an Access Token](https://www.rfc-editor.org/rfc/rfc6749#section-6)
+- [RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)](https://datatracker.ietf.org/doc/html/rfc9449)
+- [SEP-1932: DPoP profile for MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1932)
