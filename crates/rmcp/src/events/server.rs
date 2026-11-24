@@ -33,6 +33,10 @@ use crate::{
     service::{MaybeSend, MaybeSendFuture, RequestContext, SubscriptionSink},
 };
 
+mod emit;
+pub use emit::EmitHandle;
+use emit::{EmitPage, Ring};
+
 const MAX_SOURCES: usize = 128;
 const PAGE_SIZE: usize = 32;
 const MAX_BATCH: usize = 64;
@@ -52,6 +56,8 @@ macro_rules! hook {
 hook!(ValidateArguments = Fn(&JsonObject) -> Result<(), EventsError>);
 hook!(NormalizePayload = Fn(JsonObject) -> Result<JsonObject, EventsError>);
 hook!(Authorize = Fn(EventContext, JsonObject, DeliveryMode) -> HookFuture<Result<(), EventsError>>);
+hook!(Matches = Fn(&EventContext, &EventOccurrence, &JsonObject) -> bool);
+hook!(Transform = Fn(&EventContext, &EventOccurrence, &JsonObject) -> Result<JsonObject, EventsError>);
 hook!(Check = Fn(EventContext, JsonObject, CheckQuery) -> HookFuture<Result<CheckedBatch, EventsError>>);
 #[cfg(not(feature = "local"))]
 type HookFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -65,6 +71,8 @@ pub struct Descriptor {
     validate_arguments: Shared<ValidateArguments>,
     normalize_payload: Shared<NormalizePayload>,
     authorize: Option<Shared<Authorize>>,
+    matches: Option<Shared<Matches>>,
+    transform: Option<Shared<Transform>>,
 }
 
 impl fmt::Debug for Descriptor {
@@ -111,6 +119,8 @@ impl Descriptor {
                 }
             }),
             authorize: None,
+            matches: None,
+            transform: None,
         }
     }
 
@@ -129,6 +139,8 @@ impl Descriptor {
                 Ok(value)
             }),
             authorize: None,
+            matches: None,
+            transform: None,
         }
     }
 
@@ -146,6 +158,41 @@ impl Descriptor {
             Box::pin(authorize(ctx, args, mode))
         }));
         self
+    }
+
+    /// Filter occurrences from an emit source without changing their positions.
+    /// The hook borrows the request context, occurrence, and arguments.
+    pub fn matches(
+        mut self,
+        matches: impl Fn(&EventContext, &EventOccurrence, &JsonObject) -> bool + MaybeSend + 'static,
+    ) -> Self {
+        self.matches = Some(Shared::new(matches));
+        self
+    }
+
+    /// Replace an emit occurrence's payload after matching. The SDK validates
+    /// the replacement and preserves the original event ID and position.
+    pub fn transform(
+        mut self,
+        transform: impl Fn(
+            &EventContext,
+            &EventOccurrence,
+            &JsonObject,
+        ) -> Result<JsonObject, EventsError>
+        + MaybeSend
+        + 'static,
+    ) -> Self {
+        self.transform = Some(Shared::new(transform));
+        self
+    }
+
+    fn validate_source(&self, source: &Source) -> Result<(), EventsError> {
+        if matches!(source, Source::Check(_))
+            && (self.matches.is_some() || self.transform.is_some())
+        {
+            return Err(invalid("matches and transform require an emit source"));
+        }
+        Ok(())
     }
 }
 
@@ -244,6 +291,12 @@ struct Entry {
 
 enum Source {
     Check(Shared<Check>),
+    Emit(Ring),
+}
+
+enum Read {
+    Check(Shared<Check>),
+    Emit(EmitPage),
 }
 
 fn invalid(reason: impl Into<String>) -> EventsError {
@@ -313,6 +366,7 @@ impl EventsServer {
 
     /// Register a bounded check that owns its cursor format and age seeking.
     /// A null request cursor must return an empty batch at the current head.
+    /// Descriptors with match or transform hooks must use [`Self::register_emit`].
     /// Omitting [`Descriptor::authorize`] means allow-all; install it wherever
     /// authenticated permissions need checking.
     pub fn register_check<F, Fut>(
@@ -335,6 +389,7 @@ impl EventsServer {
 
     fn insert(&self, descriptor: Descriptor, source: Source) -> Result<u64, EventsError> {
         validate_descriptor(&descriptor)?;
+        descriptor.validate_source(&source)?;
         let mut state = self.0.state();
         if state.entries.contains_key(&descriptor.wire.name) {
             return Err(invalid("duplicate event name"));
@@ -359,6 +414,7 @@ impl EventsServer {
 
     /// Replace an existing descriptor and invalidate catalog pages.
     /// Application-owned check cursors remain under the source's control.
+    /// Breaking replacement invalidates SDK emit cursors and clears history.
     pub fn replace(&self, descriptor: Descriptor, change: Replacement) -> Result<(), EventsError> {
         validate_descriptor(&descriptor)?;
         let mut state = self.0.state();
@@ -367,11 +423,15 @@ impl EventsServer {
             .entries
             .get_mut(&descriptor.wire.name)
             .ok_or_else(not_found)?;
+        descriptor.validate_source(&entry.source)?;
         if change == Replacement::Breaking {
             if entry.descriptor.wire.input_schema != descriptor.wire.input_schema {
                 entry.input_generation = generation;
             }
             entry.generation = generation;
+            if let Source::Emit(ring) = &mut entry.source {
+                *ring = Ring::default();
+            }
         }
         let previous = std::mem::replace(&mut entry.descriptor, Shared::new(descriptor));
         self.0.changed(&mut state);
@@ -545,23 +605,36 @@ impl EventsServer {
                 allowed = authorize(context.clone(), args.clone(), DeliveryMode::Poll) => allowed?,
             }
         }
-        let (current, check) = {
-            let state = self.0.state();
-            let entry = state.entries.get(&params.name).ok_or_else(not_found)?;
+        let query = CheckQuery {
+            cursor: params.cursor,
+            age_floor: floor,
+            max_events,
+            max_bytes: MAX_BATCH_BYTES,
+        };
+        let (current, read) = {
+            let mut state = self.0.state();
+            let entry = state.entries.get_mut(&params.name).ok_or_else(not_found)?;
             ensure_current(entry, registration, generation)?;
-            let Source::Check(check) = &entry.source;
-            (entry.descriptor.clone(), check.clone())
+            let read = match &mut entry.source {
+                Source::Check(check) => Read::Check(check.clone()),
+                Source::Emit(ring) => Read::Emit(ring.read(
+                    self.0.epoch,
+                    entry.registration,
+                    entry.generation,
+                    entry.input_generation,
+                    &query,
+                )?),
+            };
+            (entry.descriptor.clone(), read)
         };
         // The request was authorized against its initial policy snapshot. An
         // additive update of its schema does not invalidate that authorization.
         if !Shared::ptr_eq(&current, &descriptor) {
             (current.validate_arguments)(&args)?;
         }
-        let query = CheckQuery {
-            cursor: params.cursor,
-            age_floor: floor,
-            max_events,
-            max_bytes: MAX_BATCH_BYTES,
+        let check = match read {
+            Read::Check(check) => check,
+            Read::Emit(page) => return page.finish(&context, &args, &current),
         };
         let batch = tokio::select! {
             biased;

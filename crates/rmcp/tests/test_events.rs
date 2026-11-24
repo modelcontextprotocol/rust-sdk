@@ -26,6 +26,21 @@ use serde_json::{Value, json};
 
 const EXTENSION: &str = "io.modelcontextprotocol/events";
 
+fn raw_descriptor(name: &str, input: JsonObject, payload: JsonObject) -> Descriptor {
+    use rmcp::events::wire::EventDescriptor;
+    Descriptor::raw(
+        EventDescriptor::new(
+            name,
+            "",
+            vec![DeliveryMode::Poll],
+            input.into(),
+            payload.into(),
+        ),
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+}
+
 fn object(value: Value) -> JsonObject {
     value.as_object().unwrap().clone()
 }
@@ -166,6 +181,300 @@ macro_rules! events_test {
         }
     }
 }
+
+events_test!(emit_additive_replace_during_validation, {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use rmcp::events::wire::EventDescriptor;
+    let runtime = EventsServer::new();
+    let registry = runtime.clone();
+    let revalidated = Arc::new(AtomicUsize::new(0));
+    let probe = revalidated.clone();
+    let wire = EventDescriptor::new(
+        "emit",
+        "",
+        vec![DeliveryMode::Poll],
+        Default::default(),
+        Default::default(),
+    );
+    let previous = wire.clone();
+    let emit = runtime
+        .register_emit(Descriptor::raw(
+            wire,
+            |_| Ok(()),
+            move |_| {
+                let probe = probe.clone();
+                registry.replace(
+                    Descriptor::raw(
+                        previous.clone(),
+                        |_| Ok(()),
+                        move |_| {
+                            probe.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        },
+                    ),
+                    Replacement::Additive,
+                )
+            },
+        ))
+        .unwrap();
+    let client = exchange(
+        App {
+            events: Some(runtime),
+            ..App::default()
+        },
+        modern(),
+    )
+    .await;
+    let events = EventsClient::new(client.peer().clone());
+    let mut poll = PollParams::new("emit");
+    poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
+    emit.emit(Some("kept".into()), Utc::now(), JsonObject::new())
+        .unwrap();
+    assert_eq!(revalidated.load(Ordering::SeqCst), 1);
+    assert_eq!(events.poll(poll).await.unwrap().events[0].event_id, "kept");
+    client.cancel().await.unwrap();
+});
+
+events_test!(
+    emit_byte_eviction_breaking_replacement_and_reregistration,
+    {
+        let runtime = EventsServer::new();
+        let emit = runtime
+            .register_emit(raw_descriptor("emit", JsonObject::new(), JsonObject::new()))
+            .unwrap();
+        let client = exchange(
+            App {
+                events: Some(runtime.clone()),
+                ..App::default()
+            },
+            modern(),
+        )
+        .await;
+        let events = EventsClient::new(client.peer().clone());
+        let mut poll = PollParams::new("emit");
+        poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
+        for index in 1..=3 {
+            emit.emit(
+                Some(index.to_string()),
+                Utc::now(),
+                object(json!({"blob":"x".repeat(100 * 1024)})),
+            )
+            .unwrap();
+        }
+        let gap = events.poll(poll.clone()).await.unwrap();
+        assert!(gap.truncated && gap.has_more && gap.events.is_empty());
+        poll.cursor = gap.cursor;
+        let batch = events.poll(poll.clone()).await.unwrap();
+        assert_eq!(
+            batch
+                .events
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["2", "3"]
+        );
+        poll.cursor = batch.cursor;
+        let input = object(json!({"type":"object"}));
+        runtime
+            .replace(
+                raw_descriptor("emit", input.clone(), JsonObject::new()),
+                Replacement::Breaking,
+            )
+            .unwrap();
+        assert!(
+            matches!(events.poll(poll.clone()).await, Err(EventsError::Unsupported { feature, reason, .. })
+        if feature == "inputSchema" && reason.as_deref() == Some("schema_changed"))
+        );
+        poll.cursor = events.poll(PollParams::new("emit")).await.unwrap().cursor;
+        runtime
+            .replace(
+                raw_descriptor("emit", input, object(json!({"type":"object"}))),
+                Replacement::Breaking,
+            )
+            .unwrap();
+        assert!(
+            matches!(events.poll(poll.clone()).await, Err(EventsError::Unsupported { feature, reason, .. })
+        if feature == "payloadSchema" && reason.as_deref() == Some("schema_changed"))
+        );
+        runtime.remove("emit").unwrap();
+        assert!(matches!(
+            events.poll(poll.clone()).await,
+            Err(EventsError::NotFound { .. })
+        ));
+        assert!(matches!(
+            emit.emit(None, Utc::now(), JsonObject::new()),
+            Err(EventsError::NotFound { .. })
+        ));
+        let new = runtime.register_emit(descriptor("emit")).unwrap();
+        assert!(matches!(
+            emit.emit(None, Utc::now(), JsonObject::new()),
+            Err(EventsError::NotFound { .. })
+        ));
+        new.emit(Some("new".into()), Utc::now(), JsonObject::new())
+            .unwrap();
+        let gap = events.poll(poll.clone()).await.unwrap();
+        assert!(gap.truncated && gap.has_more);
+        poll.cursor = gap.cursor;
+        assert_eq!(events.poll(poll).await.unwrap().events[0].event_id, "new");
+        client.cancel().await.unwrap();
+    }
+);
+
+events_test!(emit_transform_byte_cut_and_failure_preserve_cursor, {
+    let runtime = EventsServer::new();
+    let selected = descriptor("emit")
+        .matches(|_, event, _| event.event_id != "filtered")
+        .transform(|_, event, args| {
+            if event.event_id == "2" && args.contains_key("fail") {
+                return Err(EventsError::InvalidParams("transform fixture".into()));
+            }
+            Ok(object(json!({"blob":"x".repeat(100 * 1024)})))
+        });
+    assert!(matches!(
+        runtime.register_check(selected.clone(), |_, _, _| ready(Ok(CheckedBatch::new(
+            "head"
+        )))),
+        Err(EventsError::InvalidParams(_))
+    ));
+    let emit = runtime.register_emit(selected).unwrap();
+    let client = exchange(
+        App {
+            events: Some(runtime),
+            ..App::default()
+        },
+        modern(),
+    )
+    .await;
+    let events = EventsClient::new(client.peer().clone());
+    let mut poll = PollParams::new("emit");
+    poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
+    emit.emit(Some("filtered".into()), Utc::now(), JsonObject::new())
+        .unwrap();
+    let quiet = events.poll(poll.clone()).await.unwrap();
+    assert!(quiet.events.is_empty());
+    assert_ne!(quiet.cursor, poll.cursor);
+    poll.cursor = quiet.cursor;
+    for index in 1..=3 {
+        emit.emit(Some(index.to_string()), Utc::now(), JsonObject::new())
+            .unwrap();
+    }
+    poll.arguments = Some(object(json!({"fail":true})));
+    assert!(
+        matches!(events.poll(poll.clone()).await, Err(EventsError::InvalidParams(reason)) if reason == "transform fixture")
+    );
+    poll.arguments = None;
+    let first = events.poll(poll.clone()).await.unwrap();
+    assert_eq!(
+        first
+            .events
+            .iter()
+            .map(|event| event.event_id.as_str())
+            .collect::<Vec<_>>(),
+        ["1", "2"]
+    );
+    assert!(first.has_more);
+    poll.cursor = first.cursor;
+    let last = events.poll(poll).await.unwrap();
+    assert_eq!(last.events[0].event_id, "3");
+    assert!(!last.has_more);
+    client.cancel().await.unwrap();
+});
+
+events_test!(oversized_transformed_occurrence_does_not_advance_replay, {
+    let runtime = EventsServer::new();
+    let emit = runtime
+        .register_emit(
+            descriptor("emit").transform(|_: &EventContext, event, args| {
+                if args.contains_key("enlarge") {
+                    Ok(object(json!({"blob":"x".repeat(256 * 1024 + 1)})))
+                } else {
+                    Ok(event.data.clone())
+                }
+            }),
+        )
+        .unwrap();
+    let client = exchange(
+        App {
+            events: Some(runtime),
+            ..App::default()
+        },
+        modern(),
+    )
+    .await;
+    let events = EventsClient::new(client.peer().clone());
+    let mut poll = PollParams::new("emit");
+    poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
+    emit.emit(Some("kept".into()), Utc::now(), JsonObject::new())
+        .unwrap();
+    poll.arguments = Some(object(json!({"enlarge":true})));
+    assert!(matches!(
+        events.poll(poll.clone()).await,
+        Err(EventsError::ResourceExhausted { limit, max: Some(262_144) }) if limit == "eventBytes"
+    ));
+    poll.arguments = None;
+    let result = events.poll(poll.clone()).await.unwrap();
+    assert_eq!(result.events[0].event_id, "kept");
+    assert_ne!(result.cursor, poll.cursor);
+    client.cancel().await.unwrap();
+});
+
+events_test!(
+    emit_age_gap_never_skips_earlier_items_and_count_limit_evicts,
+    {
+        let runtime = EventsServer::new();
+        let emit = runtime.register_emit(descriptor("emit")).unwrap();
+        let client = exchange(
+            App {
+                events: Some(runtime),
+                ..App::default()
+            },
+            modern(),
+        )
+        .await;
+        let events = EventsClient::new(client.peer().clone());
+        let mut poll = PollParams::new("emit");
+        poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
+        let initial = poll.cursor.clone();
+        let now = Utc::now();
+        for (id, time) in [
+            ("first", now),
+            ("old", now - chrono::TimeDelta::hours(2)),
+            ("last", now),
+        ] {
+            emit.emit(Some(id.into()), time, JsonObject::new()).unwrap();
+        }
+        poll.max_age_ms = Some(3_600_000);
+        poll.max_events = Some(1);
+        let first = events.poll(poll.clone()).await.unwrap();
+        assert_eq!(first.events[0].event_id, "first");
+        assert!(first.has_more && !first.truncated);
+        poll.cursor = first.cursor;
+        let gap = events.poll(poll.clone()).await.unwrap();
+        assert!(gap.events.is_empty() && gap.truncated && gap.has_more);
+        poll.cursor = gap.cursor;
+        assert_eq!(
+            events.poll(poll.clone()).await.unwrap().events[0].event_id,
+            "last"
+        );
+        for i in 0..260 {
+            emit.emit(Some(format!("ring-{i}")), now, JsonObject::new())
+                .unwrap();
+        }
+        poll.cursor = initial;
+        let gap = events.poll(poll.clone()).await.unwrap();
+        assert!(gap.truncated && gap.has_more);
+        poll.cursor = gap.cursor;
+        assert_eq!(
+            events.poll(poll).await.unwrap().events[0].event_id,
+            "ring-4"
+        );
+        client.cancel().await.unwrap();
+    }
+);
 
 events_test!(runtime_off_preserves_app_advertisement_and_handlers, {
     let client = exchange(
