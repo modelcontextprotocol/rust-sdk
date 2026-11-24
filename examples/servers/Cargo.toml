@@ -4,6 +4,9 @@ version = "0.1.5"
 edition = "2024"
 publish = false
 
+[features]
+events = ["rmcp/events"]
+
 [dependencies]
 rmcp = { workspace = true, features = [
     "server",
@@ -128,3 +131,8 @@ path = "src/subscriptions_streamhttp.rs"
 [[example]]
 name = "servers_skills_stdio"
 path = "src/skills_stdio.rs"
+
+[[example]]
+name = "servers_events_stdio"
+path = "src/events_stdio.rs"
+required-features = ["events"]

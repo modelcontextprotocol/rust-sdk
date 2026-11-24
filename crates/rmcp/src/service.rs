@@ -776,6 +776,8 @@ pub(crate) enum PeerSinkMessage<R: ServiceRole> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClientRequestMetadata {
+    #[cfg(all(feature = "events", feature = "client"))]
+    discovered: bool,
     pub protocol_version: ProtocolVersion,
     pub client_info: Implementation,
     pub client_capabilities: ClientCapabilities,
@@ -1134,6 +1136,13 @@ impl<R: ServiceRole> Peer<R> {
     #[cfg(feature = "server")]
     pub(crate) fn request_metadata_required(&self) -> bool {
         self.inline_protocol_version.get().is_some()
+    }
+
+    #[cfg(all(feature = "events", feature = "client"))]
+    pub(crate) fn used_discovery(&self) -> bool {
+        self.client_request_metadata
+            .get()
+            .is_some_and(|metadata| metadata.discovered)
     }
 
     pub fn is_transport_closed(&self) -> bool {

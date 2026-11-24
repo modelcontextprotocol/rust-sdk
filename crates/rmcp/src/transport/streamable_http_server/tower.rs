@@ -1065,6 +1065,44 @@ fn validate_standard_headers(
     Ok(())
 }
 
+/// Events resolves the installed registry entry once inside validated dispatch.
+/// Check its routing fields against the actual HTTP request without recreating
+/// a handler or imposing Events routing on app-owned custom requests.
+#[cfg(all(feature = "events", feature = "server"))]
+pub(crate) fn validate_event_routing(
+    context: &RequestContext<RoleServer>,
+    method: &str,
+    params: &serde_json::Value,
+    name: &str,
+    schema: Option<&JsonObject>,
+) -> Result<(), crate::events::wire::EventsError> {
+    use crate::events::wire::EventsError;
+    if let Some(parts) = context.extensions.get::<http::request::Parts>() {
+        if let Some(schema) = schema {
+            let arguments = match params.get("arguments") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Object(object)) => Some(object),
+                _ => {
+                    return Err(EventsError::InvalidParams(
+                        "arguments must be an object".into(),
+                    ));
+                }
+            };
+            mcp_headers::validate_event_header_arguments(arguments, schema)
+                .map_err(EventsError::InvalidParams)?;
+        }
+        mcp_headers::validate_routing_headers::<true>(
+            &parts.headers,
+            method,
+            Some(params),
+            Some(name),
+            schema,
+        )
+        .map_err(EventsError::HeaderMismatch)?;
+    }
+    Ok(())
+}
+
 fn forbidden_response(message: impl Into<String>) -> BoxResponse {
     Response::builder()
         .status(http::StatusCode::FORBIDDEN)

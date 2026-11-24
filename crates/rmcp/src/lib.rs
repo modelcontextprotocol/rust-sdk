@@ -5,6 +5,9 @@
 mod error;
 pub use error::{ErrorData, RmcpError};
 
+#[cfg(feature = "events")]
+pub mod events;
+
 /// Basic data types in MCP specification
 pub mod model;
 #[cfg(any(feature = "client", feature = "server"))]

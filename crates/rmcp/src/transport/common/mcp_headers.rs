@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 
+#[cfg(any(feature = "client-side-sse", feature = "server-side-http"))]
 use super::http_header::{
     BASE64_HEADER_PREFIX, BASE64_HEADER_SUFFIX, HEADER_MCP_METHOD, HEADER_MCP_NAME,
     HEADER_MCP_PARAM_PREFIX,
@@ -55,6 +56,53 @@ fn primitive_to_string(value: &Value) -> Option<String> {
     }
 }
 
+#[cfg(feature = "events")]
+fn event_integer(value: &str) -> Option<i64> {
+    const MAX_SAFE: i64 = (1 << 53) - 1;
+    if let Ok(number) = value.parse::<i64>() {
+        return (-MAX_SAFE..=MAX_SAFE).contains(&number).then_some(number);
+    }
+
+    // Compare decimal encodings exactly. Binary64 rounding could allow a
+    // fractional header/body value to impersonate a nearby safe integer.
+    let negative = value.starts_with('-');
+    let value = value.strip_prefix(['-', '+']).unwrap_or(value);
+    let (mantissa, exponent) = match value.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, i64::from(exponent.parse::<i32>().ok()?)),
+        None => (value, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = whole.bytes().chain(fraction.bytes());
+    if whole.is_empty() || !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    if digits.clone().all(|digit| digit == b'0') {
+        return Some(0);
+    }
+    let shift = exponent - i64::try_from(fraction.len()).ok()?;
+    let remove = usize::try_from(shift.saturating_neg().max(0)).ok()?;
+    let retain = (whole.len() + fraction.len()).checked_sub(remove)?;
+    let append = u32::try_from(shift.max(0)).ok()?;
+    if append > 15 || !digits.clone().skip(retain).all(|digit| digit == b'0') {
+        return None;
+    }
+    let magnitude = digits
+        .take(retain)
+        .try_fold(0i64, |number, digit| {
+            number.checked_mul(10)?.checked_add(i64::from(digit - b'0'))
+        })?
+        .checked_mul(10i64.pow(append))?;
+    (magnitude <= MAX_SAFE).then_some(if negative { -magnitude } else { magnitude })
+}
+
+fn routing_value<const EVENTS: bool>(value: &Value) -> Option<String> {
+    #[cfg(feature = "events")]
+    if EVENTS && let Value::Number(number) = value {
+        return event_integer(&number.to_string()).map(|number| number.to_string());
+    }
+    primitive_to_string(value)
+}
+
 /// True if `value` must be Base64-wrapped to survive as an HTTP header value:
 /// leading/trailing space or tab, control/non-ASCII characters, or a value that
 /// already looks like the `=?base64?...?=` sentinel.
@@ -77,7 +125,10 @@ fn requires_base64(value: &str) -> bool {
 }
 
 /// RFC 9110 §5.6.2 token character.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(
+    feature = "client-side-sse",
+    all(feature = "events", feature = "server")
+))]
 fn is_tchar(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
@@ -159,7 +210,10 @@ fn value_at<'a>(arguments: &'a Value, path: &[&str]) -> Option<&'a Value> {
 /// applied only to primitive (`string`/`integer`/`boolean`) properties reached
 /// from the root through `properties` keys alone. Returns the offending reason
 /// on the first violation.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(
+    feature = "client-side-sse",
+    all(feature = "events", feature = "server")
+))]
 pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Result<(), String> {
     if input_schema.contains_key("x-mcp-header") {
         return Err("x-mcp-header must annotate a property, not the schema root".to_owned());
@@ -203,7 +257,10 @@ pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Re
 ///
 /// `on_chain` says whether `schema` is the root or a property reached from it
 /// through `properties` keys alone.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(
+    feature = "client-side-sse",
+    all(feature = "events", feature = "server")
+))]
 fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
     schema.iter().any(|(key, value)| match key.as_str() {
         "x-mcp-header" => !on_chain,
@@ -218,7 +275,10 @@ fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
 }
 
 /// Like [`has_off_chain_annotation`] for each value of a name-to-schema map.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(
+    feature = "client-side-sse",
+    all(feature = "events", feature = "server")
+))]
 fn schema_map_has_off_chain_annotation(map: &Value, on_chain: bool) -> bool {
     map.as_object().is_some_and(|map| {
         map.values()
@@ -226,7 +286,10 @@ fn schema_map_has_off_chain_annotation(map: &Value, on_chain: bool) -> bool {
     })
 }
 
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(
+    feature = "client-side-sse",
+    all(feature = "events", feature = "server")
+))]
 fn subschema_has_off_chain_annotation(value: &Value, on_chain: bool) -> bool {
     match value {
         Value::Object(schema) => has_off_chain_annotation(schema, on_chain),
@@ -235,6 +298,47 @@ fn subschema_has_off_chain_annotation(value: &Value, on_chain: bool) -> bool {
             .any(|item| subschema_has_off_chain_annotation(item, false)),
         _ => false,
     }
+}
+
+#[cfg(all(
+    feature = "events",
+    any(
+        feature = "transport-streamable-http-client",
+        feature = "transport-streamable-http-server"
+    )
+))]
+pub(crate) fn validate_event_header_arguments(
+    arguments: Option<&JsonObject>,
+    schema: &JsonObject,
+) -> Result<(), String> {
+    let Some(arguments) = arguments else {
+        return Ok(());
+    };
+    for annotation in property_annotations(schema) {
+        let Some((first, rest)) = annotation.path.split_first() else {
+            continue;
+        };
+        let Some(value) = arguments
+            .get(*first)
+            .and_then(|value| value_at(value, rest))
+            .filter(|value| !value.is_null())
+        else {
+            continue;
+        };
+        let valid = match annotation.schema.get("type").and_then(Value::as_str) {
+            Some("string") => value.is_string(),
+            Some("integer") => value.is_number() && routing_value::<true>(value).is_some(),
+            Some("boolean") => value.is_boolean(),
+            _ => false,
+        };
+        if !valid {
+            return Err(format!(
+                "invalid annotated argument `{}`",
+                annotation.path.join(".")
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Wraps a value as `=?base64?<b64>?=` when it cannot travel as a bare header value.
@@ -276,6 +380,26 @@ pub(crate) fn standard_request_headers(
     request: &Value,
     tool_schema: Option<&JsonObject>,
 ) -> Vec<(http::HeaderName, http::HeaderValue)> {
+    standard_request_headers_inner::<false>(request, tool_schema)
+}
+
+#[cfg(all(
+    feature = "events",
+    feature = "client",
+    feature = "transport-streamable-http-client"
+))]
+pub(crate) fn events_request_headers(
+    request: &Value,
+    schema: &JsonObject,
+) -> Vec<(http::HeaderName, http::HeaderValue)> {
+    standard_request_headers_inner::<true>(request, Some(schema))
+}
+
+#[cfg(feature = "client-side-sse")]
+fn standard_request_headers_inner<const EVENTS: bool>(
+    request: &Value,
+    schema: Option<&JsonObject>,
+) -> Vec<(http::HeaderName, http::HeaderValue)> {
     use http::{HeaderName, HeaderValue};
 
     let mut out = Vec::new();
@@ -294,19 +418,27 @@ pub(crate) fn standard_request_headers(
     };
 
     push(HEADER_MCP_METHOD, method);
-    if let Some(name) = extract_name(method, params) {
+    let name = if EVENTS {
+        params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    } else {
+        extract_name(method, params)
+    };
+    if let Some(name) = name {
         push(HEADER_MCP_NAME, &encode_header_value(&name));
     }
 
-    if method == "tools/call"
-        && let (Some(schema), Some(arguments)) =
-            (tool_schema, params.and_then(|p| p.get("arguments")))
+    if (method == "tools/call" || EVENTS)
+        && let (Some(schema), Some(arguments)) = (schema, params.and_then(|p| p.get("arguments")))
     {
         for (path, header) in param_header_annotations(schema) {
             let Some(arg) = value_at(arguments, &path) else {
                 continue;
             };
-            let Some(encoded) = primitive_to_string(arg).map(|s| encode_header_value(&s)) else {
+            let Some(encoded) = routing_value::<EVENTS>(arg).map(|s| encode_header_value(&s))
+            else {
                 continue;
             };
             push(&format!("{HEADER_MCP_PARAM_PREFIX}{header}"), &encoded);
@@ -340,7 +472,24 @@ pub(crate) fn validate_request_headers(
         Some(_) => {}
     }
 
-    if let Some(expected) = extract_name(method, params) {
+    validate_routing_headers::<false>(
+        headers,
+        method,
+        params,
+        extract_name(method, params).as_deref(),
+        tool_schema.filter(|_| method == "tools/call"),
+    )
+}
+
+#[cfg(feature = "server-side-http")]
+pub(crate) fn validate_routing_headers<const EVENTS: bool>(
+    headers: &http::HeaderMap,
+    method: &str,
+    params: Option<&Value>,
+    name: Option<&str>,
+    schema: Option<&JsonObject>,
+) -> Result<(), String> {
+    if let Some(expected) = name {
         match header_str(headers, HEADER_MCP_NAME)? {
             None => return Err(format!("missing required Mcp-Name header for `{method}`")),
             Some(raw) => {
@@ -355,16 +504,18 @@ pub(crate) fn validate_request_headers(
         }
     }
 
-    if method == "tools/call"
-        && let Some(schema) = tool_schema
-    {
+    if let Some(schema) = schema {
         let arguments = params.and_then(|p| p.get("arguments"));
         for (path, header) in param_header_annotations(schema) {
             let prop = path.join(".");
             let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
             let header_value = header_str(headers, &full)?;
             let arg = arguments.and_then(|a| value_at(a, &path));
-            let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
+            let arg = arg.filter(|v| !v.is_null());
+            let body_value = arg.and_then(routing_value::<EVENTS>);
+            if EVENTS && arg.is_some() && body_value.is_none() {
+                return Err(format!("invalid annotated argument `{prop}`"));
+            }
 
             match (header_value, body_value) {
                 (None, None) => {}
@@ -379,7 +530,15 @@ pub(crate) fn validate_request_headers(
                 (Some(raw), Some(expected)) => {
                     let decoded = decode_header_value(raw)
                         .ok_or_else(|| format!("{full} header is not valid Base64"))?;
-                    if decoded != expected {
+                    #[cfg(feature = "events")]
+                    let matches = if EVENTS && arg.is_some_and(Value::is_number) {
+                        event_integer(&decoded) == event_integer(&expected)
+                    } else {
+                        decoded == expected
+                    };
+                    #[cfg(not(feature = "events"))]
+                    let matches = decoded == expected;
+                    if !matches {
                         return Err(format!(
                             "{full} header `{decoded}` does not match body value `{expected}`"
                         ));
@@ -420,6 +579,23 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[cfg(feature = "events")]
+    #[test]
+    fn event_integer_headers_use_safe_decimal_values() {
+        assert_eq!(event_integer("42"), Some(42));
+        assert_eq!(event_integer("42.0"), Some(42));
+        assert_eq!(
+            event_integer("9007199254740991"),
+            Some(9_007_199_254_740_991)
+        );
+        assert_eq!(event_integer("9007199254740992"), None);
+        assert_eq!(event_integer("42.3"), None);
+        assert_eq!(event_integer("42.000000000000000001"), None);
+        assert_eq!(event_integer("9007199254740990.5"), None);
+        assert_eq!(event_integer("-420.000e-1"), Some(-42));
+        assert_eq!(routing_value::<true>(&json!(4.0)).as_deref(), Some("4"));
+    }
 
     fn schema_with(properties: serde_json::Value) -> JsonObject {
         json!({ "type": "object", "properties": properties })

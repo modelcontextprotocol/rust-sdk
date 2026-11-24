@@ -6,6 +6,14 @@ version = "0.1.5"
 edition = "2024"
 publish = false
 
+[features]
+events = ["rmcp/events"]
+
+[[example]]
+name = "clients_events_stdio"
+path = "src/events_stdio.rs"
+required-features = ["events"]
+
 [dependencies]
 rmcp = { workspace = true, features = [
     "client",

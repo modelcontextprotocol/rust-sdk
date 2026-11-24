@@ -353,6 +353,8 @@ impl ServiceRole for RoleClient {
             return;
         }
         peer.set_client_request_metadata(ClientRequestMetadata {
+            #[cfg(feature = "events")]
+            discovered: false,
             protocol_version: server_info.protocol_version.clone(),
             client_info: info.client_info.clone(),
             client_capabilities: info.capabilities.clone(),
@@ -678,6 +680,12 @@ impl Subscription {
                 .resource_subscriptions
                 .as_ref()
                 .is_some_and(|uris| uris.contains(&update.params.uri)),
+            #[cfg(feature = "events")]
+            ServerNotification::CustomNotification(notification)
+                if notification.method == crate::events::LIST_CHANGED =>
+            {
+                self.acknowledged.events_list_changed == Some(true)
+            }
             ServerNotification::SubscriptionsAcknowledgedNotification(_)
             | ServerNotification::CancelledNotification(_)
             | ServerNotification::ProgressNotification(_)
@@ -1047,6 +1055,8 @@ where
     // metadata has to be seeded now or every later request omits it.
     if !initialize_result.protocol_version.has_initialize() {
         peer.set_client_request_metadata(ClientRequestMetadata {
+            #[cfg(feature = "events")]
+            discovered: false,
             protocol_version: initialize_result.protocol_version.clone(),
             client_info: client_info_for_meta.client_info,
             client_capabilities: client_info_for_meta.capabilities,
@@ -1133,6 +1143,8 @@ where
                     result,
                 ));
                 peer.set_client_request_metadata(ClientRequestMetadata {
+                    #[cfg(feature = "events")]
+                    discovered: true,
                     protocol_version: selected,
                     client_info: client_info.client_info.clone(),
                     client_capabilities: client_info.capabilities.clone(),
@@ -1370,6 +1382,20 @@ impl Peer<RoleClient> {
         notifications: SubscriptionFilter,
         channel_capacity: usize,
     ) -> Result<Subscription, ServiceError> {
+        #[cfg(feature = "events")]
+        let notifications = {
+            let mut notifications = notifications;
+            if notifications.events_list_changed == Some(true)
+                && !(self.used_discovery()
+                    && self.peer_info().is_some_and(|info| {
+                        info.protocol_version >= ProtocolVersion::V_2026_07_28
+                            && crate::events::advertises_list_changes(&info.capabilities)
+                    }))
+            {
+                notifications.events_list_changed = None;
+            }
+            notifications
+        };
         let request = ClientRequest::SubscriptionsListenRequest(SubscriptionsListenRequest::new(
             SubscriptionsListenRequestParams::new(notifications.clone()),
         ));

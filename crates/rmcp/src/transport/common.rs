@@ -3,7 +3,11 @@ pub mod server_side_http;
 
 pub mod http_header;
 
-#[cfg(any(feature = "client-side-sse", feature = "server-side-http"))]
+#[cfg(any(
+    feature = "client-side-sse",
+    feature = "server-side-http",
+    all(feature = "events", feature = "server"),
+))]
 pub mod mcp_headers;
 
 #[cfg(any(

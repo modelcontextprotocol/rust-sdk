@@ -124,6 +124,68 @@ mod untagged_server_result {
     }
 
     #[test]
+    fn events_completion_envelopes_keep_their_json_values() {
+        let complete = json!({ "resultType": "complete" });
+        let custom_meta = json!({ "x": true });
+        let correlated_meta =
+            |id| json!({ "io.modelcontextprotocol/subscriptionId": id, "x": true });
+        let cases = [
+            (
+                "list",
+                json!(1),
+                json!({ "resultType": "complete", "events": [] }),
+            ),
+            (
+                "list",
+                json!(1),
+                json!({ "resultType": "complete", "events": [], "nextCursor": "page" }),
+            ),
+            (
+                "poll",
+                json!(1),
+                json!({ "resultType": "complete", "events": [], "cursor": null }),
+            ),
+            (
+                "poll",
+                json!(1),
+                json!({ "resultType": "complete", "events": [], "cursor": "replay", "truncated": false, "hasMore": true, "nextPollMs": 1000 }),
+            ),
+            (
+                "subscribe",
+                json!(1),
+                json!({ "resultType": "complete", "id": "sub_1", "refreshBefore": null }),
+            ),
+            ("unsubscribe", json!(1), complete),
+            (
+                "unsubscribe",
+                json!(1),
+                json!({ "resultType": "complete", "_meta": custom_meta }),
+            ),
+            (
+                "stream",
+                json!(1),
+                json!({ "resultType": "complete", "_meta": correlated_meta(json!(1)) }),
+            ),
+            (
+                "stream",
+                json!("event-1"),
+                json!({ "resultType": "complete", "_meta": correlated_meta(json!("event-1")) }),
+            ),
+        ];
+        for (method, id, result) in cases {
+            let envelope = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+            match (method, parse_result(envelope.clone())) {
+                ("list" | "poll" | "subscribe", ServerResult::CustomResult(_))
+                | ("unsubscribe", ServerResult::TaskAckResult(_))
+                | ("stream", ServerResult::SubscriptionsListenResult(_)) => {}
+                (_, other) => panic!("unexpected {method} result: {other:?}"),
+            }
+            let parsed: ServerJsonRpcMessage = serde_json::from_value(envelope.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), envelope);
+        }
+    }
+
+    #[test]
     fn call_tool_result_with_meta_deserializes_to_correct_variant() {
         let result = parse_result(wrap_response(json!({
             "content": [{ "type": "text", "text": "hi" }],
