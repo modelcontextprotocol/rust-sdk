@@ -2020,6 +2020,9 @@ pub struct MergedList<T> {
 /// The spec forbids interpreting a cursor value (an empty string is a valid
 /// cursor), so only an absent `nextCursor` ends the walk. A peer that keeps
 /// returning one therefore needs a page cap, like the MRTR round cap.
+///
+/// `max_pages` bounds the pages this walk may read, so `0` reads nothing and
+/// fails before the first request is sent.
 async fn list_all_pages<P, Fut>(
     mut list_page: impl FnMut(Option<PaginatedRequestParams>) -> Fut,
     max_pages: usize,
@@ -2080,6 +2083,7 @@ impl Peer<RoleClient> {
     /// Like [`Peer::list_all_tools`], but returns the merged cache hint and
     /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
     /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
     pub async fn list_all_tools_with_max_pages(
         &self,
         max_pages: usize,
@@ -2090,6 +2094,7 @@ impl Peer<RoleClient> {
     /// Like [`Peer::list_all_prompts`], but returns the merged cache hint and
     /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
     /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
     pub async fn list_all_prompts_with_max_pages(
         &self,
         max_pages: usize,
@@ -2100,6 +2105,7 @@ impl Peer<RoleClient> {
     /// Like [`Peer::list_all_resources`], but returns the merged cache hint and
     /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
     /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
     pub async fn list_all_resources_with_max_pages(
         &self,
         max_pages: usize,
@@ -2110,6 +2116,7 @@ impl Peer<RoleClient> {
     /// Like [`Peer::list_all_skills`], but returns the merged cache hint and
     /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
     /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
     pub async fn list_all_skills_with_max_pages(
         &self,
         max_pages: usize,
@@ -2121,6 +2128,7 @@ impl Peer<RoleClient> {
     /// hint and fails with [`ServiceError::ListPaginationExceeded`] after
     /// `max_pages` pages instead of following a peer that never stops returning
     /// a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
     pub async fn list_all_resource_templates_with_max_pages(
         &self,
         max_pages: usize,
@@ -3222,6 +3230,22 @@ mod tests {
                 Err(ServiceError::ListPaginationExceeded { max_pages: 2 })
             ),
             "expected the cap, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_page_cap_reads_nothing() {
+        // A disconnected peer fails any request with TransportClosed, so seeing
+        // the cap means the walk returned before it sent one.
+        let peer = disconnected_peer();
+
+        let result = peer.list_all_tools_with_max_pages(0).await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 0 })
+            ),
+            "expected the zero cap, got {result:?}"
         );
     }
 
