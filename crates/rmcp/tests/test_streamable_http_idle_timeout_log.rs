@@ -78,7 +78,7 @@ async fn test_keep_alive_timeout_does_not_emit_error_log() {
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 
@@ -184,7 +184,7 @@ async fn test_explicit_close_on_live_session_succeeds() {
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 

@@ -79,7 +79,7 @@ async fn start_test_server(ct: CancellationToken, trigger: Arc<Notify>) -> Strin
         StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

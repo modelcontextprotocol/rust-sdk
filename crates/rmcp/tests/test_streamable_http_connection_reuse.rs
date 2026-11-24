@@ -67,7 +67,7 @@ async fn test_subsequent_tool_calls_reuse_connections() -> anyhow::Result<()> {
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 

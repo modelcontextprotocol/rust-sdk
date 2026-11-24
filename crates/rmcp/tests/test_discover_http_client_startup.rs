@@ -126,7 +126,7 @@ async fn discover_http_client_bootstraps_headers_without_initialize() {
                 .with_json_response(true)
                 .with_cancellation_token(ct.child_token()),
         );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -170,7 +170,7 @@ async fn auto_http_client_falls_back_to_stateful_legacy_startup() {
                 .with_json_response(true)
                 .with_cancellation_token(ct.child_token()),
         );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");

@@ -67,7 +67,7 @@ where
     let service: StreamableHttpService<S, LocalSessionManager> =
         StreamableHttpService::new(service_factory, Default::default(), config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
     tokio::spawn({
@@ -432,7 +432,7 @@ async fn spawn_legacy_server() -> (reqwest::Client, String, CancellationToken) {
     let service: StreamableHttpService<HeaderValidationServer, LocalSessionManager> =
         StreamableHttpService::new(|| Ok(HeaderValidationServer), Default::default(), config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
     tokio::spawn({

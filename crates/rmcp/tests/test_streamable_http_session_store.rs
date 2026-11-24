@@ -92,7 +92,7 @@ async fn test_session_state_persisted_to_store() -> anyhow::Result<()> {
     let ct = CancellationToken::new();
     let service = make_service(store.clone(), &ct);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -158,7 +158,7 @@ async fn test_session_state_deleted_from_store_on_delete() -> anyhow::Result<()>
         cfg
     });
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -239,7 +239,7 @@ fn spawn_server(
     std_listener.set_nonblocking(true).unwrap();
     let addr = std_listener.local_addr().unwrap();
     let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
-    let router = axum::Router::new().nest_service("/mcp", svc);
+    let router = axum::Router::new().route_service("/mcp", svc);
     let handle = tokio::spawn({
         let ct = ct.clone();
         async move {

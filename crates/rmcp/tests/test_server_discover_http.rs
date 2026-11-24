@@ -47,7 +47,7 @@ async fn spawn_server_with_legacy_session_mode(
         .with_cancellation_token(cancellation_token.clone());
     let service: StreamableHttpService<DiscoveryServer, LocalSessionManager> =
         StreamableHttpService::new(|| Ok(DiscoveryServer), Default::default(), config);
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");

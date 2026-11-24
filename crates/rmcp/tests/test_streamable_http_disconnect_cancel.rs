@@ -94,7 +94,7 @@ async fn spawn_stateless_server(json_response: bool) -> anyhow::Result<TestServe
             Arc::new(LocalSessionManager::default()),
             config,
         );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn({

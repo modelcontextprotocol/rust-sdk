@@ -45,7 +45,7 @@ async fn spawn_handler<S: ServerHandler + Clone>(
     let service: StreamableHttpService<S, LocalSessionManager> =
         StreamableHttpService::new(move || Ok(handler.clone()), session_manager, config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 
@@ -628,7 +628,7 @@ async fn spawn_counting(
     let service: StreamableHttpService<CountingServer, LocalSessionManager> =
         StreamableHttpService::new(move || Ok(server.clone()), Default::default(), config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 

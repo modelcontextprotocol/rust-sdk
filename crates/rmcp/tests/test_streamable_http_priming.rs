@@ -24,7 +24,7 @@ async fn test_priming_on_stream_start() -> anyhow::Result<()> {
                 .with_cancellation_token(ct.child_token()),
         );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = tcp_listener.local_addr()?;
 
@@ -85,7 +85,7 @@ async fn test_request_wise_priming_includes_http_request_id() -> anyhow::Result<
                 .with_cancellation_token(ct.child_token()),
         );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = tcp_listener.local_addr()?;
 
@@ -210,7 +210,7 @@ async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()
                 .with_cancellation_token(ct.child_token()),
         );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = tcp_listener.local_addr()?;
 
@@ -315,7 +315,7 @@ async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = tcp_listener.local_addr()?;
 
@@ -425,7 +425,7 @@ async fn test_priming_on_stream_close() -> anyhow::Result<()> {
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = tcp_listener.local_addr()?;
 
