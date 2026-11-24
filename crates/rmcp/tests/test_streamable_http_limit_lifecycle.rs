@@ -483,8 +483,7 @@ async fn oversized_discover_fails_without_fallback_or_retry(
         matches!(
             error
                 .error
-                .downcast_ref::<StreamableHttpError<reqwest::Error>>()
-                .map(StreamableHttpError::startup_error),
+                .downcast_ref::<StreamableHttpError<reqwest::Error>>(),
             Some(StreamableHttpError::ResponseBodyTooLarge { max_size: 64 })
         ),
         "unexpected transport error: {error:?}"

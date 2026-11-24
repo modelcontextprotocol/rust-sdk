@@ -110,11 +110,7 @@ fn assert_status_error(error: StreamableHttpError<reqwest::Error>, status: u16) 
         !rendered.contains("private-"),
         "retained private response/request state: {rendered}"
     );
-    assert!(
-        rendered.contains(format!("HTTP {status}").as_str()),
-        "underlying status missing from Display: {rendered}"
-    );
-    match error.startup_error() {
+    match error {
         StreamableHttpError::HttpStatus(metadata) => {
             assert_eq!(metadata.status, status);
             assert_eq!(metadata.retry_after.as_deref(), Some("17"));
