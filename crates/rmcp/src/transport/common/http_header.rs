@@ -46,6 +46,31 @@ pub(crate) fn validate_custom_header(name: &http::HeaderName) -> Result<(), Stri
     Ok(())
 }
 
+/// The longest `DPoP-Nonce` value rmcp keeps. A client echoes the nonce in
+/// every DPoP proof, so this stops a server from inflating the client's
+/// request headers.
+pub const MAX_DPOP_NONCE_BYTES: usize = 256;
+
+/// `nonce = 1*NQCHAR`, `NQCHAR = %x21 / %x23-5B / %x5D-7E` (RFC 9449 §8.1),
+/// after removing surrounding spaces and tabs.
+#[cfg(any(feature = "client-side-sse", feature = "auth-dpop"))]
+pub(crate) fn valid_dpop_nonce(value: &str) -> Option<&str> {
+    let value = value.trim_matches([' ', '\t']);
+    let is_nqchar = |byte: u8| matches!(byte, 0x21 | 0x23..=0x5B | 0x5D..=0x7E);
+    (!value.is_empty() && value.len() <= MAX_DPOP_NONCE_BYTES && value.bytes().all(is_nqchar))
+        .then_some(value)
+}
+
+/// Reads a valid `DPoP-Nonce` header (RFC 9449 §8 and §9) from a response.
+#[cfg(feature = "auth-dpop")]
+pub(crate) fn dpop_nonce_from_headers(headers: &http::HeaderMap) -> Option<String> {
+    headers
+        .get(HEADER_DPOP_NONCE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(valid_dpop_nonce)
+        .map(str::to_owned)
+}
+
 /// Extracts the `scope=` parameter from a `WWW-Authenticate` header value.
 /// Handles both quoted (`scope="files:read files:write"`) and unquoted (`scope=read:data`) forms.
 #[cfg(feature = "client-side-sse")]

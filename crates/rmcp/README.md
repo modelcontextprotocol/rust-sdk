@@ -25,6 +25,7 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `schemars` | JSON Schema generation for tool definitions | |
 | `auth` | OAuth 2.0 authentication support | |
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
+| `auth-dpop` | DPoP sender-constrained tokens, SEP-1932 / RFC 9449 (includes `auth`) | |
 | `elicitation` | Elicitation support | |
 | `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`) | |
 

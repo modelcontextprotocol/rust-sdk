@@ -4,7 +4,7 @@ use http::{HeaderName, HeaderValue};
 use tracing::debug;
 
 use crate::transport::{
-    auth::{AuthClient, AuthError},
+    auth::{AuthClient, AuthError, IssuedToken},
     streamable_http_client::{
         StreamableHttpClient, StreamableHttpError, StreamableHttpResponseLimits,
     },
@@ -38,12 +38,18 @@ where
         // request goes out unauthenticated and the server's 401 challenge
         // drives authorization.
         let auth_token = match auth_token {
-            None => match self.get_access_token().await {
-                Ok(token) => Some(token),
-                Err(AuthError::AuthorizationRequired) => None,
-                Err(error) => return Err(error.into()),
-            },
-            token => token,
+            None => {
+                let issued = {
+                    let manager = self.auth_manager.lock().await;
+                    manager.issued_access_token().await
+                };
+                match issued {
+                    Ok(token) => Some(bearer(token)?),
+                    Err(AuthError::AuthorizationRequired) => None,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Some(token) => Some(self.caller_bearer_token(token).await?),
         };
         match call(auth_token.clone()).await {
             Err(StreamableHttpError::AuthRequired(challenge)) => {
@@ -57,7 +63,9 @@ where
                     manager.try_refresh_or_reauth().await
                 };
                 match refreshed {
-                    Ok(fresh_token) if fresh_token != sent_token => call(Some(fresh_token)).await,
+                    Ok(fresh_token) if fresh_token.secret != sent_token => {
+                        call(Some(bearer(fresh_token)?)).await
+                    }
                     Ok(_) => Err(StreamableHttpError::AuthRequired(challenge)),
                     // `try_refresh_or_reauth` already reports the cases that need a
                     // new authorization; anything else is retryable or infrastructural.
@@ -71,6 +79,40 @@ where
             result => result,
         }
     }
+
+    /// A caller-supplied token is sent as Bearer, as before. With a DPoP
+    /// signer set and a DPoP-bound token stored, it is refused instead: it
+    /// may be a copy of that token, which must not be sent as Bearer.
+    async fn caller_bearer_token(&self, token: String) -> Result<String, AuthError> {
+        #[cfg(feature = "auth-dpop")]
+        {
+            let manager = self.auth_manager.lock().await;
+            if manager.dpop_proof_factory().is_some()
+                && manager
+                    .stored_access_token()
+                    .await?
+                    .is_some_and(|stored| stored.dpop_bound)
+            {
+                return Err(AuthError::InternalError(
+                    "a DPoP-bound token is stored; a caller-supplied token cannot be sent as \
+                     Bearer"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(token)
+    }
+}
+
+/// `AuthClient` sends tokens only as Bearer for now. A DPoP-bound token
+/// (RFC 9449 §5) must never be sent as Bearer, so it is refused.
+fn bearer(token: IssuedToken) -> Result<String, AuthError> {
+    if token.dpop_bound {
+        return Err(AuthError::InternalError(
+            "token is DPoP-bound; AuthClient does not send DPoP tokens yet".to_string(),
+        ));
+    }
+    Ok(token.secret)
 }
 
 impl<C> StreamableHttpClient for AuthClient<C>
@@ -573,5 +615,235 @@ mod tests {
             matches!(error, StreamableHttpError::AuthRequired(_)),
             "a definitively rejected refresh token must surface the challenge, got: {error:?}"
         );
+    }
+}
+
+#[cfg(all(test, feature = "auth-dpop"))]
+mod dpop_tests {
+    use std::sync::{Arc, Mutex};
+
+    use oauth2::{AccessToken, RefreshToken, basic::BasicTokenType};
+
+    use super::*;
+    use crate::transport::{
+        auth::{
+            AuthorizationManager, AuthorizationMetadata, CredentialStore, InMemoryCredentialStore,
+            OAuthHttpClient, OAuthHttpClientFuture, OAuthHttpRequest, OAuthTokenResponse,
+            StoredCredentials, VendorExtraTokenFields, dpop::Es256DpopSigner,
+        },
+        streamable_http_client::AuthRequiredError,
+    };
+
+    /// Answers the first token request with `use_dpop_nonce` and the second
+    /// with a DPoP-bound token.
+    #[derive(Default)]
+    struct NonceTokenEndpoint {
+        requests: Mutex<usize>,
+    }
+
+    impl OAuthHttpClient for NonceTokenEndpoint {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            Box::pin(async move {
+                assert!(request.request.headers().contains_key("dpop"));
+                let mut requests = self.requests.lock().unwrap();
+                *requests += 1;
+                let response = if *requests == 1 {
+                    oauth2::http::Response::builder()
+                        .status(400)
+                        .header("content-type", "application/json")
+                        .header("DPoP-Nonce", "as-nonce")
+                        .body(br#"{"error":"use_dpop_nonce"}"#.to_vec())
+                } else {
+                    oauth2::http::Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(
+                            br#"{"access_token":"fresh-token","token_type":"DPoP","refresh_token":"r2"}"#
+                                .to_vec(),
+                        )
+                };
+                Ok(response.unwrap())
+            })
+        }
+    }
+
+    /// A manager with a DPoP signer and a stored `old-token` of `token_type`.
+    async fn manager_with_token(
+        token_endpoint: Arc<dyn OAuthHttpClient>,
+        token_type: BasicTokenType,
+    ) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            token_endpoint,
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: "https://auth.example.com/token".into(),
+            ..Default::default()
+        });
+        manager.configure_client_id("client").unwrap();
+        let mut token_response = OAuthTokenResponse::new(
+            AccessToken::new("old-token".into()),
+            token_type,
+            VendorExtraTokenFields::default(),
+        );
+        token_response.set_refresh_token(Some(RefreshToken::new("stored-refresh".into())));
+        let store = InMemoryCredentialStore::new();
+        store
+            .save(StoredCredentials::new(
+                "client".into(),
+                Some(token_response),
+                vec![],
+                None,
+            ))
+            .await
+            .unwrap();
+        manager.set_credential_store(store);
+        manager.set_dpop_signer(Arc::new(Es256DpopSigner::generate()));
+        manager
+    }
+
+    /// Send one request, answering 401 when `challenge` is set, and record
+    /// the token each attempt carried.
+    async fn record_calls(
+        client: &AuthClient<reqwest::Client>,
+        caller_token: Option<&str>,
+        challenge: bool,
+    ) -> (
+        Result<(), StreamableHttpError<reqwest::Error>>,
+        Vec<Option<String>>,
+    ) {
+        let recorded: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let result = client
+            .call_reacting_to_challenges(caller_token.map(str::to_string), |token| {
+                let recorded = recorded.clone();
+                async move {
+                    recorded.lock().unwrap().push(token);
+                    if challenge {
+                        return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                            "Bearer".to_string(),
+                        )));
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+        let calls = recorded.lock().unwrap().clone();
+        (result, calls)
+    }
+
+    fn assert_refused(result: &Result<(), StreamableHttpError<reqwest::Error>>, reason: &str) {
+        assert!(
+            matches!(
+                result,
+                Err(StreamableHttpError::Auth(AuthError::InternalError(message)))
+                    if message.contains(reason)
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bearer_token_is_sent_as_bearer_with_a_signer() {
+        let manager = manager_with_token(
+            Arc::new(NonceTokenEndpoint::default()),
+            BasicTokenType::Bearer,
+        )
+        .await;
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        let (result, calls) = record_calls(&client, None, false).await;
+
+        result.unwrap();
+        assert_eq!(calls, [Some("old-token".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn stored_dpop_bound_token_is_not_sent() {
+        let manager = manager_with_token(
+            Arc::new(NonceTokenEndpoint::default()),
+            BasicTokenType::Extension("dpop".into()),
+        )
+        .await;
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        let (result, calls) = record_calls(&client, None, false).await;
+
+        assert_refused(&result, "DPoP-bound");
+        assert!(calls.is_empty(), "nothing may be sent");
+    }
+
+    #[tokio::test]
+    async fn refreshed_dpop_bound_token_is_not_sent() {
+        let endpoint = Arc::new(NonceTokenEndpoint::default());
+        let manager = manager_with_token(endpoint.clone(), BasicTokenType::Bearer).await;
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        let (result, calls) = record_calls(&client, None, true).await;
+
+        // The refresh retried once with the server's nonce and got a
+        // DPoP-bound token, which must not go out as Bearer.
+        assert_eq!(*endpoint.requests.lock().unwrap(), 2);
+        assert_refused(&result, "DPoP-bound");
+        assert_eq!(calls, [Some("old-token".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn caller_token_is_refused_while_a_dpop_token_is_stored() {
+        let manager = manager_with_token(
+            Arc::new(NonceTokenEndpoint::default()),
+            BasicTokenType::Extension("DPoP".into()),
+        )
+        .await;
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        for token in ["old-token", "stale-token"] {
+            let (result, calls) = record_calls(&client, Some(token), false).await;
+            assert_refused(&result, "caller-supplied token cannot be sent as Bearer");
+            assert!(calls.is_empty(), "nothing may be sent");
+        }
+    }
+
+    struct FailingStore;
+
+    #[async_trait::async_trait]
+    impl CredentialStore for FailingStore {
+        async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
+            Err(AuthError::CredentialStoreError("store offline".into()))
+        }
+
+        async fn save(&self, _: StoredCredentials) -> Result<(), AuthError> {
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), AuthError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_store_error_is_surfaced_instead_of_sending_bearer() {
+        let mut manager = manager_with_token(
+            Arc::new(NonceTokenEndpoint::default()),
+            BasicTokenType::Extension("DPoP".into()),
+        )
+        .await;
+        manager.set_credential_store(FailingStore);
+        let client = AuthClient::new(reqwest::Client::new(), manager);
+
+        let (result, calls) = record_calls(&client, Some("old-token"), false).await;
+
+        assert!(
+            matches!(
+                &result,
+                Err(StreamableHttpError::Auth(AuthError::CredentialStoreError(
+                    _
+                )))
+            ),
+            "{result:?}"
+        );
+        assert!(calls.is_empty());
     }
 }

@@ -162,18 +162,8 @@ impl AuthRequiredError {
     }
 }
 
-/// The longest `DPoP-Nonce` value an [`AuthRequiredError`] keeps. A client
-/// echoes the nonce in every DPoP proof, so this stops a server from inflating
-/// the client's request headers.
-pub const MAX_DPOP_NONCE_BYTES: usize = 256;
-
-/// `nonce = 1*NQCHAR`, `NQCHAR = %x21 / %x23-5B / %x5D-7E` (RFC 9449 §8.1).
-fn valid_dpop_nonce(value: &str) -> Option<&str> {
-    let value = value.trim_matches([' ', '\t']);
-    let is_nqchar = |byte: u8| matches!(byte, 0x21 | 0x23..=0x5B | 0x5D..=0x7E);
-    (!value.is_empty() && value.len() <= MAX_DPOP_NONCE_BYTES && value.bytes().all(is_nqchar))
-        .then_some(value)
-}
+pub use super::common::http_header::MAX_DPOP_NONCE_BYTES;
+use super::common::http_header::valid_dpop_nonce;
 
 /// The error for a 401 response that carries a `WWW-Authenticate` challenge,
 /// with the `DPoP-Nonce` header if the server sent one. Returns `None` for any

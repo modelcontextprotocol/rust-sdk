@@ -230,6 +230,9 @@ impl OAuthHttpClient for ReqwestOAuthHttpClient {
 struct OAuth2HttpClient<'a> {
     client: &'a dyn OAuthHttpClient,
     redirect_policy: OAuthHttpRedirectPolicy,
+    /// Adds a DPoP proof to each token request (SEP-1932).
+    #[cfg(feature = "auth-dpop")]
+    dpop: Option<&'a dpop::DpopProofFactory>,
 }
 
 #[derive(Debug)]
@@ -256,12 +259,94 @@ impl<'c> AsyncHttpClient<'c> for OAuth2HttpClient<'_> {
 
     fn call(&'c self, request: HttpRequest) -> Self::Future {
         Box::pin(async move {
-            self.client
-                .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+            self.send_token_request(|| clone_request(&request), |error| error)
                 .await
-                .map_err(OAuth2HttpClientError)
         })
     }
+}
+
+impl OAuth2HttpClient<'_> {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, OAuth2HttpClientError> {
+        self.client
+            .execute(OAuthHttpRequest::new(request, self.redirect_policy))
+            .await
+            .map_err(OAuth2HttpClientError)
+    }
+
+    /// Send a token request built by `build`.
+    ///
+    /// With a DPoP signer, the request carries a proof (RFC 9449 §5). When
+    /// the authorization server answers `use_dpop_nonce` with a nonce the
+    /// request did not carry, `build` runs again and the new request is sent
+    /// once more with a proof that carries the nonce (RFC 9449 §8). Building
+    /// the request again lets single-use parts, such as a client assertion
+    /// `jti`, be fresh on the retry.
+    async fn send_token_request<E>(
+        &self,
+        build: impl Fn() -> Result<HttpRequest, E>,
+        map_err: impl Fn(OAuth2HttpClientError) -> E,
+    ) -> Result<HttpResponse, E> {
+        #[cfg(feature = "auth-dpop")]
+        if let Some(proofs) = self.dpop {
+            let request = build()?;
+            let uri = request.uri().to_string();
+            let (first, sent_nonce) = with_dpop_proof(proofs, request, &uri)
+                .await
+                .map_err(&map_err)?;
+            let response = self.execute(first).await.map_err(&map_err)?;
+            let retry =
+                crate::transport::common::http_header::dpop_nonce_from_headers(response.headers())
+                    .is_some_and(|nonce| {
+                        proofs.record_nonce_for_retry(&uri, sent_nonce.as_deref(), &nonce)
+                    });
+            if retry
+                && response.status() == StatusCode::BAD_REQUEST
+                && dpop::is_use_dpop_nonce_error(response.body())
+            {
+                debug!("retrying the token request with the server's DPoP nonce");
+                let (second, _) = with_dpop_proof(proofs, build()?, &uri)
+                    .await
+                    .map_err(&map_err)?;
+                return self.execute(second).await.map_err(map_err);
+            }
+            return Ok(response);
+        }
+        self.execute(build()?).await.map_err(map_err)
+    }
+}
+
+/// Copy a token request. The oauth2 client hands over one request, and a
+/// nonce retry sends it twice.
+fn clone_request(request: &HttpRequest) -> Result<HttpRequest, OAuth2HttpClientError> {
+    let mut builder = oauth2::http::Request::builder()
+        .method(request.method().clone())
+        .uri(request.uri().clone())
+        .version(request.version());
+    for (name, value) in request.headers() {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(request.body().clone())
+        .map_err(|error| OAuth2HttpClientError(Box::new(error)))
+}
+
+/// Add a fresh `DPoP` proof header to `request`. Also returns the nonce the
+/// proof carries.
+#[cfg(feature = "auth-dpop")]
+async fn with_dpop_proof(
+    proofs: &dpop::DpopProofFactory,
+    mut request: HttpRequest,
+    uri: &str,
+) -> Result<(HttpRequest, Option<String>), OAuth2HttpClientError> {
+    let to_error = |error: Box<dyn std::error::Error + Send + Sync>| OAuth2HttpClientError(error);
+    let (proof, nonce) = proofs
+        .proof_and_nonce(request.method().as_str(), uri, None)
+        .await
+        .map_err(|error| to_error(Box::new(error)))?;
+    let proof =
+        oauth2::http::HeaderValue::try_from(proof).map_err(|error| to_error(Box::new(error)))?;
+    request.headers_mut().insert(dpop::DPOP_HEADER, proof);
+    Ok((request, nonce))
 }
 
 const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
@@ -566,6 +651,28 @@ impl StateStore for InMemoryStateStore {
     async fn delete(&self, csrf_token: &str) -> Result<(), AuthError> {
         self.states.write().await.remove(csrf_token);
         Ok(())
+    }
+}
+
+/// An access token and how it must be presented.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IssuedToken {
+    pub(crate) secret: String,
+    /// The token was issued with `token_type` `DPoP` (RFC 9449 §5), so it must
+    /// never be sent as Bearer. Always `false` without `auth-dpop`.
+    pub(crate) dpop_bound: bool,
+}
+
+impl IssuedToken {
+    fn from_response(response: &OAuthTokenResponse) -> Self {
+        #[cfg(feature = "auth-dpop")]
+        let dpop_bound = dpop::is_dpop_token_type(response.token_type().as_ref());
+        #[cfg(not(feature = "auth-dpop"))]
+        let dpop_bound = false;
+        Self {
+            secret: response.access_token().secret().to_string(),
+            dpop_bound,
+        }
     }
 }
 
@@ -1270,6 +1377,9 @@ pub struct AuthorizationManager {
     allow_private_metadata_addresses: bool,
     /// Scopes the caller asked to send on refresh. `None` omits the parameter.
     refresh_scopes: Option<Vec<String>>,
+    /// Builds DPoP proofs when a signer is set (SEP-1932).
+    #[cfg(feature = "auth-dpop")]
+    dpop: Option<dpop::DpopProofFactory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1583,6 +1693,8 @@ impl AuthorizationManager {
             allow_missing_issuer: false,
             allow_private_metadata_addresses: false,
             refresh_scopes: None,
+            #[cfg(feature = "auth-dpop")]
+            dpop: None,
         };
 
         Ok(manager)
@@ -2463,10 +2575,7 @@ impl AuthorizationManager {
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(pkce_verifier)
             .add_extra_param("resource", self.oauth_resource().await)
-            .request_async(&OAuth2HttpClient {
-                client: self.http_client.as_ref(),
-                redirect_policy: OAuthHttpRedirectPolicy::Stop,
-            })
+            .request_async(&self.token_http_client(OAuthHttpRedirectPolicy::Stop))
             .await
         {
             Ok(token) => token,
@@ -2540,18 +2649,71 @@ impl AuthorizationManager {
     /// Transient refresh failures return [`AuthError::TokenRefreshFailed`] so the
     /// caller can retry; other errors are propagated as-is.
     pub async fn get_access_token(&self) -> Result<String, AuthError> {
+        Ok(self.issued_access_token().await?.secret)
+    }
+
+    /// Like [`get_access_token`](Self::get_access_token), but also reports
+    /// whether the token is DPoP-bound, from the same credential load.
+    pub(crate) async fn issued_access_token(&self) -> Result<IssuedToken, AuthError> {
         self.get_access_token_with_clock(Self::now_epoch_secs).await
+    }
+
+    /// The client for token-endpoint requests. It adds DPoP proofs when a
+    /// signer is set.
+    fn token_http_client(&self, redirect_policy: OAuthHttpRedirectPolicy) -> OAuth2HttpClient<'_> {
+        OAuth2HttpClient {
+            client: self.http_client.as_ref(),
+            redirect_policy,
+            #[cfg(feature = "auth-dpop")]
+            dpop: self.dpop.as_ref(),
+        }
+    }
+
+    /// Request DPoP-bound access tokens (SEP-1932, RFC 9449).
+    ///
+    /// Every token request then carries a DPoP proof signed by `signer`. A
+    /// server that ignores the proof issues a Bearer token, which is sent as
+    /// before. A token with `token_type` `DPoP` is never sent as Bearer:
+    /// [`AuthClient`] and [`prepare_request`](Self::prepare_request) return an
+    /// error for it. Sending DPoP-bound tokens to the resource server is not
+    /// supported yet.
+    ///
+    /// Tokens are bound to the signer's key, so keep the same key for as long
+    /// as the stored credentials are used.
+    #[cfg(feature = "auth-dpop")]
+    pub fn set_dpop_signer(&mut self, signer: Arc<dyn dpop::DpopSigner>) {
+        self.dpop = Some(dpop::DpopProofFactory::new(signer));
+    }
+
+    /// The DPoP proof factory, if a signer is set.
+    #[cfg(all(feature = "auth-dpop", feature = "transport-streamable-http-client"))]
+    pub(crate) fn dpop_proof_factory(&self) -> Option<&dpop::DpopProofFactory> {
+        self.dpop.as_ref()
+    }
+
+    /// The stored access token, without an expiry check or a refresh.
+    #[cfg(all(feature = "auth-dpop", feature = "transport-streamable-http-client"))]
+    pub(crate) async fn stored_access_token(&self) -> Result<Option<IssuedToken>, AuthError> {
+        Ok(self.credential_store.load().await?.and_then(|stored| {
+            stored
+                .token_response
+                .as_ref()
+                .map(IssuedToken::from_response)
+        }))
     }
 
     #[cfg(test)]
     async fn get_access_token_at(&self, now_epoch_secs: u64) -> Result<String, AuthError> {
-        self.get_access_token_with_clock(|| now_epoch_secs).await
+        Ok(self
+            .get_access_token_with_clock(|| now_epoch_secs)
+            .await?
+            .secret)
     }
 
     async fn get_access_token_with_clock(
         &self,
         now_epoch_secs: impl FnOnce() -> u64 + Send,
-    ) -> Result<String, AuthError> {
+    ) -> Result<IssuedToken, AuthError> {
         let stored = self.credential_store.load().await?;
         let Some(stored_creds) = stored else {
             return Err(AuthError::AuthorizationRequired);
@@ -2580,18 +2742,19 @@ impl AuthorizationManager {
         // When expiry info is unavailable (e.g., credentials stored before
         // token_received_at was tracked), skip the expiry check and return
         // the token as-is.
-        Ok(creds.access_token().secret().to_string())
+        Ok(IssuedToken::from_response(creds))
     }
 
     /// Attempt to refresh the token. If refresh fails because there is no
     /// refresh token or the server rejected it, return `AuthorizationRequired`
     /// so the caller can re-prompt the user. Infrastructure errors (e.g. store
     /// I/O failures, misconfigured client) are propagated as-is.
-    pub(crate) async fn try_refresh_or_reauth(&self) -> Result<String, AuthError> {
+    /// The result keeps the refreshed token's type.
+    pub(crate) async fn try_refresh_or_reauth(&self) -> Result<IssuedToken, AuthError> {
         match self.refresh_token().await {
             Ok(new_creds) => {
                 tracing::info!("Refreshed access token.");
-                Ok(new_creds.access_token().secret().to_string())
+                Ok(IssuedToken::from_response(&new_creds))
             }
             Err(e @ (AuthError::AuthorizationRequired | AuthError::TokenRefreshRejected(_))) => {
                 tracing::warn!(error = %e, "Token refresh not possible, re-authorization required.");
@@ -2656,10 +2819,7 @@ impl AuthorizationManager {
             scopes_to_send
         };
         let mut token_result = match refresh_request
-            .request_async(&OAuth2HttpClient {
-                client: self.http_client.as_ref(),
-                redirect_policy: self.refresh_redirect_policy,
-            })
+            .request_async(&self.token_http_client(self.refresh_redirect_policy))
             .await
         {
             Ok(token_result) => token_result,
@@ -2725,12 +2885,21 @@ impl AuthorizationManager {
     }
 
     /// prepare request, add authorization header
+    ///
+    /// This only sends `Authorization: Bearer`. With `auth-dpop`, it returns
+    /// an error for a DPoP-bound token; use [`AuthClient`] for those.
     pub async fn prepare_request(
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, AuthError> {
-        let token = self.get_access_token().await?;
-        Ok(request.header(AUTHORIZATION, format!("Bearer {}", token)))
+        let token = self.issued_access_token().await?;
+        if token.dpop_bound {
+            return Err(AuthError::InternalError(
+                "DPoP-bound tokens require AuthClient; prepare_request sends Bearer only"
+                    .to_string(),
+            ));
+        }
+        Ok(request.header(AUTHORIZATION, format!("Bearer {}", token.secret)))
     }
 
     /// handle response, check if need to re-authorize or scope upgrade
@@ -3700,10 +3869,7 @@ impl AuthorizationManager {
         }
 
         let token_result = match request
-            .request_async(&OAuth2HttpClient {
-                client: self.http_client.as_ref(),
-                redirect_policy: OAuthHttpRedirectPolicy::Stop,
-            })
+            .request_async(&self.token_http_client(OAuthHttpRedirectPolicy::Stop))
             .await
         {
             Ok(token) => token,
@@ -3796,41 +3962,41 @@ impl AuthorizationManager {
         let audience =
             client_authentication_audience(metadata, token_endpoint_audience.as_deref())?;
 
-        let assertion =
-            Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
-
         let scope_str = scopes.join(" ");
-        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-        serializer.append_pair("grant_type", "client_credentials");
-        serializer.append_pair(
-            "client_assertion_type",
-            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-        );
-        serializer.append_pair("client_assertion", &assertion);
-        if !scope_str.is_empty() {
-            serializer.append_pair("scope", &scope_str);
-        }
-        if let Some(res) = resource.as_deref() {
-            serializer.append_pair("resource", res);
-        }
-        let body_str = serializer.finish();
-
-        let request = oauth2::http::Request::builder()
-            .method("POST")
-            .uri(token_endpoint_url.as_str())
-            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(body_str.into_bytes())
-            .map_err(|error| AuthError::ClientCredentialsError(error.to_string()))?;
+        // Build the request per attempt, so a DPoP nonce retry sends a new
+        // assertion with a fresh `jti` instead of replaying the first one.
+        let build_request = || {
+            let assertion =
+                Self::build_jwt_assertion(client_id, audience, signing_key, *signing_algorithm)?;
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            serializer.append_pair("grant_type", "client_credentials");
+            serializer.append_pair(
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            );
+            serializer.append_pair("client_assertion", &assertion);
+            if !scope_str.is_empty() {
+                serializer.append_pair("scope", &scope_str);
+            }
+            if let Some(res) = resource.as_deref() {
+                serializer.append_pair("resource", res);
+            }
+            oauth2::http::Request::builder()
+                .method("POST")
+                .uri(token_endpoint_url.as_str())
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(serializer.finish().into_bytes())
+                .map_err(|error| AuthError::ClientCredentialsError(error.to_string()))
+        };
         let response = self
-            .http_client
-            .execute(OAuthHttpRequest::new(
-                request,
-                OAuthHttpRedirectPolicy::Stop,
-            ))
-            .await
-            .map_err(|e| {
-                AuthError::ClientCredentialsError(format!("Token exchange request failed: {e}"))
-            })?;
+            .token_http_client(OAuthHttpRedirectPolicy::Stop)
+            .send_token_request(build_request, |error| {
+                AuthError::ClientCredentialsError(format!(
+                    "Token exchange request failed: {}",
+                    error.0
+                ))
+            })
+            .await?;
 
         let status = response.status();
         let body = response.body();
@@ -11314,5 +11480,326 @@ mod tests {
             "old-refresh"
         );
         assert!(store.lock.try_lock().is_ok());
+    }
+}
+
+#[cfg(all(test, feature = "auth-dpop"))]
+mod dpop_token_tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
+
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use oauth2::{HttpResponse, TokenResponse};
+
+    use super::{
+        AuthError, AuthorizationManager, AuthorizationMetadata, ClientCredentialsConfig,
+        OAuthHttpClient, OAuthHttpClientFuture, OAuthHttpRequest,
+        dpop::{DpopProofFactory, Es256DpopSigner, is_dpop_token_type},
+    };
+
+    const TOKEN_ENDPOINT: &str = "https://auth.example.com/token";
+
+    /// A throwaway P-256 key used only to sign test client assertions.
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    const TEST_EC_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgBTqxgcr/8Itdqt4E
+g5O8b2uOQvnoSsrUrKimmKv3chuhRANCAARskcqlF+jYkpLQWKCknsbi2PeqGQPX
+rcBgL1TEu0I9V8lcmufUE7Yk449EXKvuhtOMyy1wYT78d5a8m/wlCy+4
+-----END PRIVATE KEY-----
+";
+
+    /// What a token endpoint saw in one request.
+    #[derive(Clone)]
+    struct SeenRequest {
+        method: String,
+        uri: String,
+        proof: Option<String>,
+        body: String,
+    }
+
+    /// A token endpoint that replays scripted responses and records requests.
+    #[derive(Clone, Default)]
+    struct ScriptedTokenEndpoint {
+        seen: Arc<Mutex<Vec<SeenRequest>>>,
+        script: Arc<Mutex<VecDeque<HttpResponse>>>,
+        /// When set, records a nonce on this factory during the first request,
+        /// as a concurrent request that got the same challenge would.
+        concurrent: Arc<Mutex<Option<(DpopProofFactory, String)>>>,
+    }
+
+    impl ScriptedTokenEndpoint {
+        fn push(&self, response: HttpResponse) {
+            self.script.lock().unwrap().push_back(response);
+        }
+
+        fn seen(&self) -> Vec<SeenRequest> {
+            self.seen.lock().unwrap().clone()
+        }
+
+        fn proof_claims(&self, index: usize) -> serde_json::Value {
+            let seen = self.seen();
+            let proof = seen[index].proof.as_deref().expect("request has a proof");
+            let claims = proof.split('.').nth(1).expect("proof has claims");
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(claims).unwrap()).unwrap()
+        }
+    }
+
+    impl OAuthHttpClient for ScriptedTokenEndpoint {
+        fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+            let first = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(SeenRequest {
+                    method: request.request.method().to_string(),
+                    uri: request.request.uri().to_string(),
+                    proof: request
+                        .request
+                        .headers()
+                        .get("dpop")
+                        .map(|value| value.to_str().unwrap().to_string()),
+                    body: String::from_utf8(request.request.body().clone()).unwrap(),
+                });
+                seen.len() == 1
+            };
+            if first && let Some((factory, nonce)) = self.concurrent.lock().unwrap().as_ref() {
+                factory.record_nonce(TOKEN_ENDPOINT, nonce);
+            }
+            let response = self.script.lock().unwrap().pop_front();
+            Box::pin(async move { response.ok_or_else(|| "missing scripted response".into()) })
+        }
+    }
+
+    fn nonce_required(nonce: Option<&str>) -> HttpResponse {
+        let mut builder = oauth2::http::Response::builder().status(400);
+        if let Some(nonce) = nonce {
+            builder = builder.header("DPoP-Nonce", nonce);
+        }
+        builder
+            .body(br#"{"error":"use_dpop_nonce"}"#.to_vec())
+            .unwrap()
+    }
+
+    fn invalid_client(nonce: &str) -> HttpResponse {
+        oauth2::http::Response::builder()
+            .status(400)
+            .header("DPoP-Nonce", nonce)
+            .body(br#"{"error":"invalid_client","error_description":"bad credentials"}"#.to_vec())
+            .unwrap()
+    }
+
+    fn dpop_token() -> HttpResponse {
+        oauth2::http::Response::builder()
+            .status(200)
+            .body(
+                br#"{"access_token":"dpop-token","token_type":"DPoP","expires_in":3600}"#.to_vec(),
+            )
+            .unwrap()
+    }
+
+    async fn manager_with_signer(endpoint: &ScriptedTokenEndpoint) -> AuthorizationManager {
+        let mut manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/mcp",
+            Arc::new(endpoint.clone()),
+        )
+        .await
+        .unwrap();
+        manager.set_metadata(AuthorizationMetadata {
+            authorization_endpoint: "https://auth.example.com/authorize".into(),
+            token_endpoint: TOKEN_ENDPOINT.into(),
+            issuer: Some("https://auth.example.com".into()),
+            ..Default::default()
+        });
+        manager.set_dpop_signer(Arc::new(Es256DpopSigner::generate()));
+        manager
+    }
+
+    fn secret_config() -> ClientCredentialsConfig {
+        ClientCredentialsConfig::ClientSecret {
+            client_id: "m2m".into(),
+            client_secret: "secret".into(),
+            scopes: vec!["read".into()],
+            resource: Some("https://mcp.example.com/mcp".into()),
+        }
+    }
+
+    async fn client_credentials_manager(endpoint: &ScriptedTokenEndpoint) -> AuthorizationManager {
+        let mut manager = manager_with_signer(endpoint).await;
+        manager
+            .configure_client_credentials(&secret_config())
+            .unwrap();
+        manager
+    }
+
+    fn assert_token_request_proofs(endpoint: &ScriptedTokenEndpoint) {
+        let seen = endpoint.seen();
+        assert_eq!(seen[0].method, "POST");
+        assert_eq!(seen[0].uri, TOKEN_ENDPOINT);
+        let first = endpoint.proof_claims(0);
+        assert_eq!(first["htm"], "POST");
+        assert_eq!(first["htu"], TOKEN_ENDPOINT);
+        assert!(first.get("ath").is_none());
+        assert!(first.get("nonce").is_none());
+        let second = endpoint.proof_claims(1);
+        assert_eq!(second["htu"], TOKEN_ENDPOINT);
+        assert_eq!(second["nonce"], "as-nonce");
+        assert_ne!(first["jti"], second["jti"]);
+    }
+
+    #[tokio::test]
+    async fn code_exchange_sends_a_proof_and_retries_with_the_nonce() {
+        let endpoint = ScriptedTokenEndpoint::default();
+        endpoint.push(nonce_required(Some("as-nonce")));
+        endpoint.push(dpop_token());
+        let mut manager = manager_with_signer(&endpoint).await;
+        manager.configure_client_id("client").unwrap();
+        let url = manager.get_authorization_url(&[]).await.unwrap();
+        let state = url::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .unwrap()
+            .1
+            .into_owned();
+
+        let token = manager
+            .exchange_code_for_token("code", &state)
+            .await
+            .unwrap();
+
+        assert!(is_dpop_token_type(token.token_type().as_ref()));
+        assert_token_request_proofs(&endpoint);
+        assert!(
+            endpoint.seen()[1]
+                .body
+                .contains("grant_type=authorization_code")
+        );
+    }
+
+    #[cfg(feature = "auth-client-credentials-jwt")]
+    #[tokio::test]
+    async fn private_key_jwt_credentials_send_a_proof_and_retry_with_the_nonce() {
+        let endpoint = ScriptedTokenEndpoint::default();
+        endpoint.push(nonce_required(Some("as-nonce")));
+        endpoint.push(dpop_token());
+        let config = ClientCredentialsConfig::PrivateKeyJwt {
+            client_id: "m2m".into(),
+            signing_key: TEST_EC_KEY_PEM.as_bytes().to_vec(),
+            signing_algorithm: super::JwtSigningAlgorithm::ES256,
+            token_endpoint_audience: None,
+            scopes: vec!["read".into()],
+            resource: Some("https://mcp.example.com/mcp".into()),
+        };
+        let mut manager = manager_with_signer(&endpoint).await;
+        manager.configure_client_credentials(&config).unwrap();
+
+        let token = manager.exchange_client_credentials(&config).await.unwrap();
+
+        assert!(is_dpop_token_type(token.token_type().as_ref()));
+        assert_token_request_proofs(&endpoint);
+        // The retry carries a new client assertion. Reusing the first one would
+        // replay its `jti`, which authorization servers may reject.
+        let assertion_jti = |index: usize| {
+            let body = endpoint.seen()[index].body.clone();
+            let assertion = url::form_urlencoded::parse(body.as_bytes())
+                .find(|(name, _)| name == "client_assertion")
+                .expect("request has a client assertion")
+                .1
+                .into_owned();
+            let claims = assertion.split('.').nth(1).expect("assertion has claims");
+            let claims: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(claims).unwrap()).unwrap();
+            claims["jti"]
+                .as_str()
+                .expect("assertion has a jti")
+                .to_string()
+        };
+        assert_ne!(assertion_jti(0), assertion_jti(1));
+    }
+
+    /// A token request is retried at most once, and only for a
+    /// `use_dpop_nonce` error that brings a nonce the request did not carry.
+    /// `script` answers each request in turn. After `successes` calls that
+    /// succeed, the next call must fail with `error` after `requests`
+    /// requests in total.
+    #[rstest::rstest]
+    #[case::other_error(vec![invalid_client("n1")], 0, 1, "invalid_client")]
+    #[case::no_nonce(vec![nonce_required(None)], 0, 1, "use_dpop_nonce")]
+    #[case::second_challenge(
+        vec![nonce_required(Some("n1")), nonce_required(Some("n2"))],
+        0,
+        2,
+        "use_dpop_nonce"
+    )]
+    #[case::repeated_nonce(
+        vec![nonce_required(Some("n1")), dpop_token(), nonce_required(Some("n1"))],
+        1,
+        3,
+        "use_dpop_nonce"
+    )]
+    #[tokio::test]
+    async fn a_nonce_challenge_is_retried_at_most_once(
+        #[case] script: Vec<HttpResponse>,
+        #[case] successes: usize,
+        #[case] requests: usize,
+        #[case] error: &str,
+    ) {
+        let endpoint = ScriptedTokenEndpoint::default();
+        for response in script {
+            endpoint.push(response);
+        }
+        let manager = client_credentials_manager(&endpoint).await;
+
+        for _ in 0..successes {
+            manager
+                .exchange_client_credentials(&secret_config())
+                .await
+                .unwrap();
+        }
+
+        let message = match manager.exchange_client_credentials(&secret_config()).await {
+            Err(AuthError::ClientCredentialsError(message)) => message,
+            other => panic!("expected a client credentials error, got {other:?}"),
+        };
+        assert!(message.contains(error), "{message}");
+        assert_eq!(endpoint.seen().len(), requests);
+    }
+
+    #[tokio::test]
+    async fn a_nonce_stored_by_a_concurrent_request_still_gets_a_retry() {
+        let endpoint = ScriptedTokenEndpoint::default();
+        endpoint.push(nonce_required(Some("n1")));
+        endpoint.push(dpop_token());
+        let manager = client_credentials_manager(&endpoint).await;
+        let factory = manager.dpop_proof_factory().unwrap().clone();
+        *endpoint.concurrent.lock().unwrap() = Some((factory, "n1".into()));
+
+        let token = manager
+            .exchange_client_credentials(&secret_config())
+            .await
+            .unwrap();
+
+        assert!(is_dpop_token_type(token.token_type().as_ref()));
+        assert!(endpoint.proof_claims(0).get("nonce").is_none());
+        assert_eq!(endpoint.proof_claims(1)["nonce"], "n1");
+    }
+
+    #[tokio::test]
+    async fn prepare_request_refuses_a_dpop_bound_token() {
+        let endpoint = ScriptedTokenEndpoint::default();
+        endpoint.push(dpop_token());
+        let manager = client_credentials_manager(&endpoint).await;
+        manager
+            .exchange_client_credentials(&secret_config())
+            .await
+            .unwrap();
+
+        let request = reqwest::Client::new().get("https://mcp.example.com/mcp");
+        let error = manager.prepare_request(request).await.unwrap_err();
+
+        assert!(
+            matches!(&error, AuthError::InternalError(message) if message.contains("AuthClient")),
+            "{error:?}"
+        );
     }
 }
