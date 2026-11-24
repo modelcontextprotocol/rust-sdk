@@ -1,7 +1,10 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use futures::SinkExt;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{DeserializeOwned, DeserializeSeed, Error as _, MapAccess, Visitor},
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
@@ -232,101 +235,94 @@ where
 /// complete, delimited `id` and string `method` fields. Definite syntax errors,
 /// duplicate request fields, and visible response fields keep the line unanswered.
 fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
-    fn skip_whitespace(prefix: &[u8], position: &mut usize) {
-        while prefix
-            .get(*position)
-            .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
-        {
-            *position += 1;
-        }
-    }
-
-    /// Return `Ok(None)` for an incomplete token at the end of the prefix.
-    fn take_value<T: DeserializeOwned>(
-        prefix: &[u8],
-        position: &mut usize,
-    ) -> Result<Option<T>, serde_json::Error> {
-        let mut values =
-            serde_json::Deserializer::from_slice(&prefix[*position..]).into_iter::<T>();
-        match values.next().transpose() {
-            Err(error) if error.is_eof() => Ok(None),
-            result => {
-                *position += values.byte_offset();
-                result
-            }
-        }
-    }
-
     let prefix = prefix.strip_prefix(UTF8_BOM.as_slice()).unwrap_or(prefix);
     // An incomplete final code point is consistent with a truncated prefix.
     if std::str::from_utf8(prefix).is_err_and(|error| error.error_len().is_some()) {
         return None;
     }
-    let mut position = 0;
-    let mut id = None;
-    let mut has_method = false;
 
-    skip_whitespace(prefix, &mut position);
-    if prefix.get(position) != Some(&b'{') {
-        return None;
-    }
-    position += 1;
-
-    loop {
-        skip_whitespace(prefix, &mut position);
-        match prefix.get(position) {
-            Some(b'"') => {}
-            None => break,
-            _ => return None,
-        }
-        let Some(key) = take_value::<String>(prefix, &mut position).ok()? else {
-            break;
-        };
-        match key.as_str() {
-            "result" | "error" => return None,
-            "id" if id.is_some() => return None,
-            "method" if has_method => return None,
-            _ => {}
-        }
-
-        skip_whitespace(prefix, &mut position);
-        match prefix.get(position) {
-            Some(b':') => position += 1,
-            None => break,
-            _ => return None,
-        }
-
-        // Validate nested values and string encoding even for fields we do not use.
-        let Some(value) = take_value::<serde_json::Value>(prefix, &mut position).ok()? else {
-            break;
-        };
-
-        skip_whitespace(prefix, &mut position);
-        let end_of_object = match prefix.get(position) {
-            Some(b',') => false,
-            Some(b'}') => true,
-            None => break,
-            _ => return None,
-        };
-        // Record fields only after seeing their delimiter. A number at EOF
-        // could still be the beginning of a longer request ID.
-        match key.as_str() {
-            "id" => id = Some(serde_json::from_value(value).ok()?),
-            "method" if value.is_string() => has_method = true,
-            "method" => return None,
-            _ => {}
-        }
-        position += 1;
-        if end_of_object {
-            skip_whitespace(prefix, &mut position);
-            if position != prefix.len() {
-                return None;
+    let mut fields = RequestPrefixFields::default();
+    let mut deserializer = serde_json::Deserializer::from_slice(prefix);
+    match deserializer
+        .deserialize_map(&mut fields)
+        .and_then(|()| deserializer.end())
+    {
+        Ok(()) => {}
+        Err(error) if error.is_eof() => {
+            // A final comma confirms the pending field even if the prefix ends
+            // before the next key begins.
+            if prefix.trim_ascii_end().ends_with(b",") {
+                fields.confirm_pending_field();
             }
-            break;
         }
+        Err(_) => return None,
     }
 
-    if has_method { id } else { None }
+    if fields.has_method { fields.id } else { None }
+}
+
+#[derive(Default)]
+struct RequestPrefixFields {
+    id: Option<RequestId>,
+    has_method: bool,
+    pending: Option<RequestPrefixField>,
+}
+
+enum RequestPrefixField {
+    Id(RequestId),
+    Method,
+}
+
+impl RequestPrefixFields {
+    fn confirm_pending_field(&mut self) {
+        match self.pending.take() {
+            Some(RequestPrefixField::Id(id)) => self.id = Some(id),
+            Some(RequestPrefixField::Method) => self.has_method = true,
+            None => {}
+        }
+    }
+}
+
+impl<'de> Visitor<'de> for &mut RequestPrefixFields {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON-RPC request object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while let Some(key) = map.next_key_seed(ConfirmFieldBeforeKey(self))? {
+            match key.as_str() {
+                "result" | "error" => return Err(A::Error::custom("JSON-RPC response field")),
+                "id" if self.id.is_some() => return Err(A::Error::duplicate_field("id")),
+                "method" if self.has_method => return Err(A::Error::duplicate_field("method")),
+                "id" => self.pending = Some(RequestPrefixField::Id(map.next_value()?)),
+                "method" => {
+                    let _: String = map.next_value()?;
+                    self.pending = Some(RequestPrefixField::Method);
+                }
+                _ => {
+                    // Validate string encoding and escapes even inside fields we do not use.
+                    let _: serde_json::Value = map.next_value()?;
+                }
+            }
+        }
+        self.confirm_pending_field();
+        Ok(())
+    }
+}
+
+struct ConfirmFieldBeforeKey<'a>(&'a mut RequestPrefixFields);
+
+impl<'de> DeserializeSeed<'de> for ConfirmFieldBeforeKey<'_> {
+    type Value = String;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<String, D::Error> {
+        // A key after the first confirms the preceding comma. Without a
+        // delimiter, a parsed number at EOF could still be part of a longer ID.
+        self.0.confirm_pending_field();
+        String::deserialize(deserializer)
+    }
 }
 
 /// What to do once the `fill_buf` borrow has been released.
@@ -764,8 +760,24 @@ mod test {
     #[case::trailing_data(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}[]"#)]
     #[case::response_field(br#"{"jsonrpc":"2.0","id":1,"method":"ping","result":{}}"#)]
     #[case::duplicate_id(br#"{"jsonrpc":"2.0","id":1,"method":"ping","id":2}"#)]
+    #[case::response_key_at_cutoff(br#"{"id":1,"method":"ping","error""#)]
+    #[case::duplicate_method_at_cutoff(br#"{"id":1,"method":"ping","method""#)]
+    #[case::id_without_delimiter(br#"{"method":"ping","id":1 "#)]
+    #[case::method_without_delimiter(br#"{"id":1,"method":"ping""#)]
     fn oversized_prefix_rejects_malformed_or_ambiguous_json(#[case] prefix: &[u8]) {
         assert_eq!(request_id_from_oversized_prefix(prefix), None);
+    }
+
+    #[rstest::rstest]
+    #[case::id_before_partial_key(br#"{"method":"ping","id":1,"par"#)]
+    #[case::method_before_partial_key(br#"{"id":1,"method":"ping","par"#)]
+    #[case::comma_at_cutoff(br#"{"method":"ping","id":1,  "#)]
+    #[case::closing_brace(br#"{"method":"ping","id":1}"#)]
+    fn oversized_prefix_recovers_fields_with_confirmed_delimiters(#[case] prefix: &[u8]) {
+        assert_eq!(
+            request_id_from_oversized_prefix(prefix),
+            Some(RequestId::Number(1))
+        );
     }
 
     #[test]
