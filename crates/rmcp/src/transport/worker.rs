@@ -483,16 +483,17 @@ impl<W: Worker> WorkerContext<W> {
         error: W::Error,
         context: &'static str,
     ) -> WorkerQuitReason<W::Error> {
-        let cell = Arc::new(OnceLock::new());
-        self.terminal_ack
-            .set((id, cell.clone()))
-            .expect("a worker exits on its first terminal ack");
+        let (registered_id, cell) = self.terminal_ack.get_or_init(|| (id, Arc::default()));
         let detail = error.to_string();
-        if let Err(Err(unread)) = responder.send(Err(error)) {
+        // Always deliver the live error. Only the registered ack owns the
+        // recovery slot, just as on the AckReceiver::drop side of the race.
+        if let Err(Err(unread)) = responder.send(Err(error))
+            && *registered_id == id
+        {
             let _ = cell.set(unread);
         }
         WorkerQuitReason::StartupFailed {
-            error: cell,
+            error: Arc::clone(cell),
             detail,
             context: context.into(),
         }
@@ -781,6 +782,30 @@ mod tests {
         assert!(Weak::ptr_eq(&registered, &Arc::downgrade(&current)));
         drop(current);
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "transport-streamable-http-client")]
+    #[tokio::test]
+    async fn duplicate_terminal_ack_still_delivers_the_live_error() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut transport = WorkerTransport::spawn(TestWorker(tx));
+        let context = rx.await.unwrap();
+        let (first, abandoned) = tokio::sync::oneshot::channel();
+        drop(abandoned);
+        context.startup_failed(1, first, io::ErrorKind::TimedOut.into(), "first");
+
+        let (second, live) = tokio::sync::oneshot::channel();
+        let reason = context.startup_failed(2, second, io::ErrorKind::BrokenPipe.into(), "second");
+        assert_eq!(
+            live.await.unwrap().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        let retained = RetainedQuitReason(Arc::new(reason));
+        assert_eq!(
+            retained.startup_error().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        transport.close().await.unwrap();
     }
 
     /// A worker whose startup fails must retain the real typed error in its

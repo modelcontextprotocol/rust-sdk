@@ -92,6 +92,8 @@ pub enum ClientInitializeError {
         received: RequestId,
     },
 
+    /// The peer closed the connection during initialization. If the transport
+    /// reports a retained failure at EOF, the client returns [`Self::TransportError`] instead.
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
 
