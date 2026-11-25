@@ -230,18 +230,6 @@ impl<R: ServiceRole> Peer<R> {
         }
     }
 
-    fn scoped_cache_key(
-        logical_key: &str,
-        scope: CacheScope,
-        config: &ClientCacheConfig,
-    ) -> CacheKey {
-        let partition = match scope {
-            CacheScope::Public => CachePartition::Public,
-            CacheScope::Private => CachePartition::Private(Self::private_partition(config)),
-        };
-        Self::cache_key(logical_key, partition)
-    }
-
     /// Captures the cache generation before a request crosses the transport.
     ///
     /// Any configuration change, explicit clear, or notification invalidation
@@ -334,7 +322,8 @@ impl<R: ServiceRole> Peer<R> {
         None
     }
 
-    /// Stores a response when the configured effective TTL is positive.
+    /// Stores a response when the configured effective TTL is positive, or evicts
+    /// any cached entry for the key when the effective TTL is zero.
     ///
     /// Missing `cacheScope` is treated as private. This is deliberately more
     /// conservative than the model's backwards-compatible wire default and
@@ -353,24 +342,30 @@ impl<R: ServiceRole> Peer<R> {
             return;
         }
 
+        let private_key = Self::cache_key(
+            &logical_key,
+            CachePartition::Private(Self::private_partition(&cache.config)),
+        );
+        let public_key = Self::cache_key(&logical_key, CachePartition::Public);
+
         let requested_ttl = ttl_ms
             .map(Duration::from_millis)
             .unwrap_or(cache.config.default_ttl);
         let ttl = requested_ttl.min(cache.config.max_ttl);
         if ttl.is_zero() {
+            cache.entries.remove(&private_key);
+            cache.entries.remove(&public_key);
             return;
         }
         let Some(expires_at) = now.checked_add(ttl) else {
+            cache.entries.remove(&private_key);
+            cache.entries.remove(&public_key);
             return;
         };
         let scope = cache_scope.unwrap_or(CacheScope::Private);
-        let target_key = Self::scoped_cache_key(&logical_key, scope, &cache.config);
-        let opposite_key = match scope {
-            CacheScope::Public => Self::cache_key(
-                &logical_key,
-                CachePartition::Private(Self::private_partition(&cache.config)),
-            ),
-            CacheScope::Private => Self::cache_key(&logical_key, CachePartition::Public),
+        let (target_key, opposite_key) = match scope {
+            CacheScope::Public => (public_key, private_key),
+            CacheScope::Private => (private_key, public_key),
         };
 
         if !cache.config.serve_stale_on_error {
@@ -460,5 +455,212 @@ impl Peer<RoleClient> {
         let mut cache = self.response_cache.write().await;
         cache.generation = cache.generation.wrapping_add(1);
         cache.entries.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ServiceError,
+        model::{ListToolsResult, PaginatedRequestParams, Tool},
+        service::{
+            AtomicU32RequestIdProvider,
+            client::{TOOL_LIST_CACHE_PREFIX, list_response_cache_key},
+        },
+    };
+
+    fn disconnected_peer() -> Peer<RoleClient> {
+        let (peer, receiver) =
+            Peer::<RoleClient>::new(Arc::new(AtomicU32RequestIdProvider::default()), None);
+        drop(receiver);
+        peer
+    }
+
+    fn tools_result(
+        name: &str,
+        ttl_ms: Option<u64>,
+        cache_scope: Option<CacheScope>,
+    ) -> ListToolsResult {
+        let mut result = ListToolsResult::with_all_items(vec![Tool::new(
+            name.to_owned(),
+            "",
+            Arc::new(Default::default()),
+        )]);
+        result.ttl_ms = ttl_ms;
+        result.cache_scope = cache_scope;
+        result
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_refresh_evicts_stale_entry_and_blocks_stale_fallback() {
+        let peer = disconnected_peer();
+        let params = None::<PaginatedRequestParams>;
+        let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
+
+        // Cache an initial response and let it expire while retained for stale fallback.
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v1", Some(1), Some(CacheScope::Public))),
+            Some(1),
+            Some(CacheScope::Public),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(peer.stale_cached_response(&key).await.is_some());
+
+        // A subsequent successful re-fetch returns ttlMs = 0 ("do not cache").
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v2", Some(0), Some(CacheScope::Public))),
+            Some(0),
+            Some(CacheScope::Public),
+        )
+        .await;
+
+        assert!(
+            peer.stale_cached_response(&key).await.is_none(),
+            "stale v1 entry must be evicted when a refresh returns ttlMs = 0"
+        );
+        assert!(matches!(
+            peer.list_tools(params).await,
+            Err(ServiceError::TransportClosed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_refresh_evicts_stale_entry_across_scope_changes() {
+        let peer = disconnected_peer();
+        let key = "tools/list:scope-switch".to_owned();
+
+        // Public -> Private/None with ttlMs = 0
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(
+                "public-v1",
+                Some(1),
+                Some(CacheScope::Public),
+            )),
+            Some(1),
+            Some(CacheScope::Public),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(peer.stale_cached_response(&key).await.is_some());
+
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v2", Some(0), None)),
+            Some(0),
+            None,
+        )
+        .await;
+        assert!(peer.stale_cached_response(&key).await.is_none());
+
+        // Private -> Public with ttlMs = 0
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result(
+                "private-v1",
+                Some(1),
+                Some(CacheScope::Private),
+            )),
+            Some(1),
+            Some(CacheScope::Private),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(peer.stale_cached_response(&key).await.is_some());
+
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v2", Some(0), Some(CacheScope::Public))),
+            Some(0),
+            Some(CacheScope::Public),
+        )
+        .await;
+        assert!(peer.stale_cached_response(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn omitted_ttl_with_zero_default_ttl_evicts_stale_entry() {
+        let peer = disconnected_peer();
+        let key = "tools/list:omitted-ttl".to_owned();
+
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v1", Some(1), Some(CacheScope::Private))),
+            Some(1),
+            Some(CacheScope::Private),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(peer.stale_cached_response(&key).await.is_some());
+
+        // Default config has default_ttl = Duration::ZERO, so omitting ttlMs yields effective TTL 0.
+        peer.cache_response(
+            key.clone(),
+            ServerResult::ListToolsResult(tools_result("v2", None, None)),
+            None,
+            None,
+        )
+        .await;
+        assert!(peer.stale_cached_response(&key).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn zero_ttl_refresh_preserves_other_keys_and_ignores_stale_generation() {
+        let peer = disconnected_peer();
+        let key_a = "tools/list:a".to_owned();
+        let key_b = "tools/list:b".to_owned();
+
+        let old_generation = peer.capture_response_cache_generation().await;
+        peer.clear_response_cache().await;
+
+        peer.cache_response(
+            key_a.clone(),
+            ServerResult::ListToolsResult(tools_result(
+                "fresh-a",
+                Some(5_000),
+                Some(CacheScope::Public),
+            )),
+            Some(5_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+        peer.cache_response(
+            key_b.clone(),
+            ServerResult::ListToolsResult(tools_result(
+                "fresh-b",
+                Some(5_000),
+                Some(CacheScope::Public),
+            )),
+            Some(5_000),
+            Some(CacheScope::Public),
+        )
+        .await;
+
+        // An in-flight zero-TTL response from an older generation must not evict fresh-a.
+        peer.cache_response_with_generation(
+            key_a.clone(),
+            ServerResult::ListToolsResult(tools_result("old-a", Some(0), Some(CacheScope::Public))),
+            Some(0),
+            Some(CacheScope::Public),
+            old_generation,
+        )
+        .await;
+        assert!(peer.cached_response(&key_a).await.is_some());
+
+        // A current-generation zero-TTL response evicts key_a without touching key_b.
+        peer.cache_response(
+            key_a.clone(),
+            ServerResult::ListToolsResult(tools_result("new-a", Some(0), Some(CacheScope::Public))),
+            Some(0),
+            Some(CacheScope::Public),
+        )
+        .await;
+        assert!(peer.cached_response(&key_a).await.is_none());
+        assert!(peer.stale_cached_response(&key_a).await.is_none());
+        assert!(peer.cached_response(&key_b).await.is_some());
     }
 }
