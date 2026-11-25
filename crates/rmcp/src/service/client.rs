@@ -20,11 +20,11 @@ use crate::{
         CallToolResult, CancelTaskParams, CancelTaskRequest, CancelledNotification,
         CancelledNotificationParam, ClientConfig, ClientJsonRpcMessage, ClientNotification,
         ClientRequest, ClientResult, CompleteRequest, CompleteRequestParams, CompleteResult,
-        CompletionContext, CompletionInfo, DEFAULT_MRTR_MAX_ROUNDS, DiscoverRequest,
-        DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta, GetPromptRequest,
-        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequest,
-        GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult, GetTaskParams,
-        GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
+        CompletionContext, CompletionInfo, DEFAULT_LIST_ALL_MAX_PAGES, DEFAULT_MRTR_MAX_ROUNDS,
+        DiscoverRequest, DiscoverRequestParams, DiscoverResult, ErrorData, GetExtensions, GetMeta,
+        GetPromptRequest, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        GetSkillRequest, GetSkillRequestMethod, GetSkillRequestParams, GetSkillResult,
+        GetTaskParams, GetTaskRequest, GetTaskResult, InitializeRequest, InitializeRequestParams,
         InitializedNotification, InputRequest, InputRequiredResult, InputResponses,
         JsonRpcResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
         ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListSkillsRequest,
@@ -2015,8 +2015,17 @@ pub struct MergedList<T> {
 }
 
 /// Follows `nextCursor` from the first page to the last and merges the pages.
+/// Walk every page of a paginated list, up to `max_pages`.
+///
+/// The spec forbids interpreting a cursor value (an empty string is a valid
+/// cursor), so only an absent `nextCursor` ends the walk. A peer that keeps
+/// returning one therefore needs a page cap, like the MRTR round cap.
+///
+/// `max_pages` bounds the pages this walk may read, so `0` reads nothing and
+/// fails before the first request is sent.
 async fn list_all_pages<P, Fut>(
     mut list_page: impl FnMut(Option<PaginatedRequestParams>) -> Fut,
+    max_pages: usize,
 ) -> Result<MergedList<P::Item>, ServiceError>
 where
     P: PaginatedResult,
@@ -2027,11 +2036,22 @@ where
         ttl_ms.and_then(|ttl_ms| Instant::now().checked_add(Duration::from_millis(ttl_ms)))
     };
 
+    let mut pages_read = 0;
+    let mut next = || {
+        pages_read += 1;
+        if pages_read > max_pages {
+            return Err(ServiceError::ListPaginationExceeded { max_pages });
+        }
+        Ok(())
+    };
+
+    next()?;
     let page = list_page(params(None)).await?;
     let mut expires_at = expiry(page.ttl_ms());
     let mut cache_scope = page.cache_scope();
     let (mut items, mut cursor) = page.into_page();
     while cursor.is_some() {
+        next()?;
         let page = list_page(params(cursor)).await?;
         expires_at = expires_at
             .zip(expiry(page.ttl_ms()))
@@ -2060,7 +2080,64 @@ where
 }
 
 impl Peer<RoleClient> {
-    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed.
+    /// Like [`Peer::list_all_tools`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
+    pub async fn list_all_tools_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
+        list_all_pages(|params| self.list_tools(params), max_pages).await
+    }
+
+    /// Like [`Peer::list_all_prompts`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
+    pub async fn list_all_prompts_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
+        list_all_pages(|params| self.list_prompts(params), max_pages).await
+    }
+
+    /// Like [`Peer::list_all_resources`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
+    pub async fn list_all_resources_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
+        list_all_pages(|params| self.list_resources(params), max_pages).await
+    }
+
+    /// Like [`Peer::list_all_skills`], but returns the merged cache hint and
+    /// fails with [`ServiceError::ListPaginationExceeded`] after `max_pages`
+    /// pages instead of following a peer that never stops returning a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
+    pub async fn list_all_skills_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
+        list_all_pages(|params| self.list_skills(params), max_pages).await
+    }
+
+    /// Like [`Peer::list_all_resource_templates`], but returns the merged cache
+    /// hint and fails with [`ServiceError::ListPaginationExceeded`] after
+    /// `max_pages` pages instead of following a peer that never stops returning
+    /// a cursor.
+    /// A `max_pages` of `0` reads nothing and fails before sending a request.
+    pub async fn list_all_resource_templates_with_max_pages(
+        &self,
+        max_pages: usize,
+    ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
+        list_all_pages(|params| self.list_resource_templates(params), max_pages).await
+    }
+
+    /// Calls [`Peer<RoleClient>::list_tools`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_tools(&self) -> Result<Vec<crate::model::Tool>, ServiceError> {
         Ok(self.list_all_tools_with_cache_hint().await?.items)
     }
@@ -2069,10 +2146,11 @@ impl Peer<RoleClient> {
     pub async fn list_all_tools_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Tool>, ServiceError> {
-        list_all_pages(|params| self.list_tools(params)).await
+        list_all_pages(|params| self.list_tools(params), DEFAULT_LIST_ALL_MAX_PAGES).await
     }
 
-    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_prompts`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_prompts(&self) -> Result<Vec<crate::model::Prompt>, ServiceError> {
         Ok(self.list_all_prompts_with_cache_hint().await?.items)
     }
@@ -2081,10 +2159,15 @@ impl Peer<RoleClient> {
     pub async fn list_all_prompts_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Prompt>, ServiceError> {
-        list_all_pages(|params| self.list_prompts(params)).await
+        list_all_pages(
+            |params| self.list_prompts(params),
+            DEFAULT_LIST_ALL_MAX_PAGES,
+        )
+        .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_resources`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_resources(&self) -> Result<Vec<crate::model::Resource>, ServiceError> {
         Ok(self.list_all_resources_with_cache_hint().await?.items)
     }
@@ -2093,10 +2176,15 @@ impl Peer<RoleClient> {
     pub async fn list_all_resources_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Resource>, ServiceError> {
-        list_all_pages(|params| self.list_resources(params)).await
+        list_all_pages(
+            |params| self.list_resources(params),
+            DEFAULT_LIST_ALL_MAX_PAGES,
+        )
+        .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_skills`] until every page is listed, or until
+    /// [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_skills(&self) -> Result<Vec<crate::model::Skill>, ServiceError> {
         Ok(self.list_all_skills_with_cache_hint().await?.items)
     }
@@ -2105,10 +2193,15 @@ impl Peer<RoleClient> {
     pub async fn list_all_skills_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::Skill>, ServiceError> {
-        list_all_pages(|params| self.list_skills(params)).await
+        list_all_pages(
+            |params| self.list_skills(params),
+            DEFAULT_LIST_ALL_MAX_PAGES,
+        )
+        .await
     }
 
-    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed.
+    /// Calls [`Peer<RoleClient>::list_resource_templates`] until every page is listed,
+    /// or until [`DEFAULT_LIST_ALL_MAX_PAGES`] pages have been read.
     pub async fn list_all_resource_templates(
         &self,
     ) -> Result<Vec<crate::model::ResourceTemplate>, ServiceError> {
@@ -2122,7 +2215,11 @@ impl Peer<RoleClient> {
     pub async fn list_all_resource_templates_with_cache_hint(
         &self,
     ) -> Result<MergedList<crate::model::ResourceTemplate>, ServiceError> {
-        list_all_pages(|params| self.list_resource_templates(params)).await
+        list_all_pages(
+            |params| self.list_resource_templates(params),
+            DEFAULT_LIST_ALL_MAX_PAGES,
+        )
+        .await
     }
 
     /// Convenient method to get completion suggestions for a prompt argument
@@ -3109,6 +3206,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_page_cap_keeps_the_cache_hint() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Private));
+        cache_tool_pages(&peer, &[hint, hint]).await;
+
+        let merged = peer.list_all_tools_with_max_pages(8).await.unwrap();
+        assert_eq!(merged.items.len(), 2);
+        assert_eq!(merged.cache_scope, Some(CacheScope::Private));
+        assert!(merged.ttl_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn custom_page_cap_still_stops_the_walk() {
+        let peer = disconnected_peer();
+        let hint = (Some(5_000), Some(CacheScope::Public));
+        cache_tool_pages(&peer, &[hint, hint, hint]).await;
+
+        let result = peer.list_all_tools_with_max_pages(2).await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 2 })
+            ),
+            "expected the cap, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_page_cap_reads_nothing() {
+        // A disconnected peer fails any request with TransportClosed, so seeing
+        // the cap means the walk returned before it sent one.
+        let peer = disconnected_peer();
+
+        let result = peer.list_all_tools_with_max_pages(0).await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 0 })
+            ),
+            "expected the zero cap, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn merged_scope_is_private_when_another_page_omits_it() {
         for scopes in [
             [Some(CacheScope::Private), None],
@@ -3204,5 +3345,118 @@ mod sep2260_association_tests {
     fn legacy_protocol_accepts_even_unassociated() {
         let info = server_info(ProtocolVersion::V_2025_11_25);
         assert!(enforce(&info, PeerRequestAssociation::Unassociated).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod list_page_cap_tests {
+    use super::*;
+    use crate::model::Cursor;
+
+    struct Page {
+        cursor: Option<Cursor>,
+    }
+
+    impl PaginatedResult for Page {
+        type Item = u8;
+
+        fn ttl_ms(&self) -> Option<u64> {
+            None
+        }
+
+        fn cache_scope(&self) -> Option<CacheScope> {
+            None
+        }
+
+        fn into_page(self) -> (Vec<u8>, Option<Cursor>) {
+            (vec![1], self.cursor)
+        }
+    }
+
+    #[tokio::test]
+    async fn none_cursor_ends_the_walk() {
+        let pages = std::cell::Cell::new(0usize);
+        let result = list_all_pages(
+            |params| {
+                pages.set(pages.get() + 1);
+                let first = params.and_then(|params| params.cursor).is_none();
+                async move {
+                    Ok(Page {
+                        cursor: if first {
+                            Some("next".to_string())
+                        } else {
+                            None
+                        },
+                    })
+                }
+            },
+            10,
+        )
+        .await
+        .expect("a terminating walk must succeed");
+        assert_eq!(result.items, vec![1, 1]);
+        assert_eq!(pages.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn endless_cursor_is_capped() {
+        let result = list_all_pages(
+            |_cursor| async {
+                Ok::<_, ServiceError>(Page {
+                    cursor: Some("again".to_string()),
+                })
+            },
+            3,
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 3 })
+            ),
+            "expected the cap, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_string_cursor_is_not_the_end() {
+        // The spec explicitly allows "" as a cursor, so it must keep the walk
+        // going — the cap is the only thing that stops it.
+        let result = list_all_pages(
+            |_cursor| async {
+                Ok::<_, ServiceError>(Page {
+                    cursor: Some(String::new()),
+                })
+            },
+            2,
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(ServiceError::ListPaginationExceeded { max_pages: 2 })
+            ),
+            "empty cursor must not terminate the walk, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn final_page_may_arrive_at_the_limit() {
+        let pages = std::cell::Cell::new(0usize);
+        let result = list_all_pages(
+            |_cursor| {
+                pages.set(pages.get() + 1);
+                let last = pages.get() == 2;
+                async move {
+                    Ok::<_, ServiceError>(Page {
+                        cursor: if last { None } else { Some("p2".to_string()) },
+                    })
+                }
+            },
+            2,
+        )
+        .await
+        .expect("finishing exactly on the last allowed page must succeed");
+        assert_eq!(result.items.len(), 2);
     }
 }
