@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     sync::{
-        Arc, Mutex, PoisonError, Weak,
+        Arc, Mutex, OnceLock, PoisonError, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -33,15 +33,12 @@ pub enum WorkerQuitReason<E> {
     /// often retryable lifecycle event (peer unreachable, TLS failure, an auth
     /// challenge), not an internal fault.
     ///
-    /// `error` carries the typed cause when this reason is the only remaining
-    /// copy — i.e. the live `send()` ack was never delivered because the waiter
-    /// was already gone (its own timeout fired, the #1441 case). When the ack
-    /// *was* delivered, the waiter owns the typed error and `error` is `None`;
-    /// `detail` keeps the rendered cause for logs and late observers on every
-    /// path.
+    /// The cell contains the original error if it was not consumed by the
+    /// live sender. It can be filled after publication if an unread ack is
+    /// abandoned. The rendered detail is available regardless of ownership.
     #[error("Startup failed {detail}, when {context}")]
     StartupFailed {
-        error: Option<Arc<E>>,
+        error: Arc<OnceLock<E>>,
         detail: String,
         context: Cow<'static, str>,
     },
@@ -76,22 +73,12 @@ impl<E: std::error::Error + Send + 'static> WorkerQuitReason<E> {
     pub fn startup_failed(error: E, context: impl Into<Cow<'static, str>>) -> Self {
         Self::StartupFailed {
             detail: error.to_string(),
-            error: Some(Arc::new(error)),
+            error: Arc::new(OnceLock::from(error)),
             context: context.into(),
         }
     }
     pub fn startup_failed_context(context: impl Into<Cow<'static, str>>) -> impl FnOnce(E) -> Self {
         |e| Self::startup_failed(e, context)
-    }
-    /// A startup failure whose typed error was already delivered to the live
-    /// `send()` waiter. The waiter owns the typed error; only the rendered
-    /// cause is retained for logs and late observers.
-    pub fn startup_failed_delivered(detail: String, context: impl Into<Cow<'static, str>>) -> Self {
-        Self::StartupFailed {
-            error: None,
-            detail,
-            context: context.into(),
-        }
     }
 }
 
@@ -183,6 +170,8 @@ pub struct WorkerSendRequest<W: Worker> {
     pub responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
     cancellation: Option<Arc<RequestCancellationRegistration>>,
     control_generation: u64,
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) ack_id: u64,
 }
 
 impl<W: Worker> WorkerSendRequest<W> {
@@ -240,7 +229,7 @@ impl<E> RetainedQuitReason<E> {
     /// [`DynamicTransportError::downcast_ref`]: crate::transport::DynamicTransportError::downcast_ref
     pub fn startup_error(&self) -> Option<&E> {
         match self.0.as_ref() {
-            WorkerQuitReason::StartupFailed { error, .. } => error.as_deref(),
+            WorkerQuitReason::StartupFailed { error, .. } => error.get(),
             WorkerQuitReason::Fatal { error, .. } => Some(error),
             _ => None,
         }
@@ -256,9 +245,9 @@ impl<E: std::error::Error + Send + 'static> std::fmt::Display for RetainedQuitRe
 impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for RetainedQuitReason<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self.0.as_ref() {
-            WorkerQuitReason::StartupFailed { error, .. } => error
-                .as_deref()
-                .map(|e| e as &(dyn std::error::Error + 'static)),
+            WorkerQuitReason::StartupFailed { error, .. } => {
+                error.get().map(|e| e as &(dyn std::error::Error + 'static))
+            }
             WorkerQuitReason::Fatal { error, .. } => Some(error),
             WorkerQuitReason::Join(e) => Some(e),
             _ => None,
@@ -268,12 +257,41 @@ impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for Retaine
 
 type WorkerJoinHandle<E> = tokio::task::JoinHandle<Result<(), Arc<WorkerQuitReason<E>>>>;
 
+// At most one startup ack terminates a worker. Register the recovery cell
+// before sending that ack. Normal sends need no extra channel or allocation.
+type TerminalAck<E> = Arc<OnceLock<(u64, Arc<OnceLock<E>>)>>;
+
+struct AckReceiver<E> {
+    receiver: tokio::sync::oneshot::Receiver<Result<(), E>>,
+    id: u64,
+    terminal: TerminalAck<E>,
+}
+
+impl<E> Drop for AckReceiver<E> {
+    fn drop(&mut self) {
+        if self.receiver.is_terminated() {
+            return;
+        }
+        // Close first: either send fails and returns the value to the worker,
+        // or it succeeded and we can drain its unread value here.
+        self.receiver.close();
+        if let Ok(Err(error)) = self.receiver.try_recv()
+            && let Some((id, cell)) = self.terminal.get()
+            && *id == self.id
+        {
+            let _ = cell.set(error);
+        }
+    }
+}
+
 pub struct WorkerTransport<W: Worker> {
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     control_send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     request_cancellations: RequestCancellations,
     control_generation: Arc<AtomicU64>,
+    next_ack_id: u64,
+    terminal_ack: TerminalAck<W::Error>,
     join_handle: Option<WorkerJoinHandle<W::Error>>,
     /// Retained terminal status of the worker, written exactly once when its
     /// task quits. Lets an observer whose own timeout has already fired still
@@ -324,7 +342,10 @@ impl<W: Worker> WorkerTransport<W> {
             tokio::sync::mpsc::channel::<RxJsonRpcMessage<W::Role>>(config.channel_buffer_capacity);
         let request_cancellations = RequestCancellations::default();
         let control_generation = Arc::new(AtomicU64::new(0));
+        let terminal_ack = TerminalAck::default();
         let context = WorkerContext {
+            #[cfg(feature = "transport-streamable-http-client")]
+            terminal_ack: terminal_ack.clone(),
             to_handler_tx,
             from_handler_rx,
             control_from_handler_rx,
@@ -406,6 +427,8 @@ impl<W: Worker> WorkerTransport<W> {
             control_send_service: control_to_transport_tx,
             request_cancellations,
             control_generation,
+            next_ack_id: 0,
+            terminal_ack,
             join_handle: Some(join_handle),
             quit_status,
             ct: transport_task_ct.clone(),
@@ -440,6 +463,8 @@ pub struct SendRequest<W: Worker> {
 
 #[non_exhaustive]
 pub struct WorkerContext<W: Worker> {
+    #[cfg(feature = "transport-streamable-http-client")]
+    terminal_ack: TerminalAck<W::Error>,
     pub to_handler_tx: tokio::sync::mpsc::Sender<RxJsonRpcMessage<W::Role>>,
     pub from_handler_rx: tokio::sync::mpsc::Receiver<WorkerSendRequest<W>>,
     /// Messages selected by [`Worker::is_control_message`].
@@ -449,6 +474,30 @@ pub struct WorkerContext<W: Worker> {
 }
 
 impl<W: Worker> WorkerContext<W> {
+    /// Register the terminal receipt before the receiver can see the error.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) fn startup_failed(
+        &self,
+        id: u64,
+        responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
+        error: W::Error,
+        context: &'static str,
+    ) -> WorkerQuitReason<W::Error> {
+        let cell = Arc::new(OnceLock::new());
+        self.terminal_ack
+            .set((id, cell.clone()))
+            .expect("a worker exits on its first terminal ack");
+        let detail = error.to_string();
+        if let Err(Err(unread)) = responder.send(Err(error)) {
+            let _ = cell.set(unread);
+        }
+        WorkerQuitReason::StartupFailed {
+            error: cell,
+            detail,
+            context: context.into(),
+        }
+    }
+
     /// Return the local generation that newly created sends will capture.
     ///
     /// Workers may use this value to check messages from an earlier connection
@@ -526,7 +575,16 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
             .as_ref()
             .map(|target| target.lifetime_token().drop_guard());
         let (responder, receiver) = tokio::sync::oneshot::channel();
+        let ack_id = self.next_ack_id;
+        self.next_ack_id = ack_id.wrapping_add(1);
+        let mut ack = AckReceiver {
+            receiver,
+            id: ack_id,
+            terminal: self.terminal_ack.clone(),
+        };
         let request = WorkerSendRequest {
+            #[cfg(feature = "transport-streamable-http-client")]
+            ack_id,
             message: item,
             responder,
             cancellation: registration,
@@ -537,7 +595,7 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
             let _cancellation_target = cancellation_target;
             let _target_guard = target_guard;
             tx.send(request).await.map_err(|_| W::err_closed())?;
-            receiver.await.map_err(|_| W::err_closed())??;
+            (&mut ack.receiver).await.map_err(|_| W::err_closed())??;
             if let Some(guard) = cancellation_guard {
                 let _ = guard.disarm();
             }
@@ -756,7 +814,7 @@ mod tests {
         let mut transport = WorkerTransport::spawn(StartupFailWorker);
         // No close() pending — the worker dies on its own; the quit reason must
         // still be observable afterwards.
-        transport.close().await.unwrap();
+        assert!(transport.receive().await.is_none());
         let status = transport.quit_status().expect("quit reason retained");
         let text = status.to_string();
         assert!(text.contains("Startup failed"), "got: {text}");
@@ -779,9 +837,7 @@ mod tests {
             .expect("typed reason downcast");
         match retained.0.as_ref() {
             WorkerQuitReason::StartupFailed { error, .. } => {
-                let error = error
-                    .as_ref()
-                    .expect("undelivered ack keeps the typed error");
+                let error = error.get().expect("undelivered ack keeps the typed error");
                 assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
             }
             other => panic!("expected StartupFailed, got {other:?}"),

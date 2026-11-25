@@ -246,6 +246,44 @@ async fn rate_limited_auto_discovery_preserves_metadata_without_legacy_fallback(
     assert_eq!(*server.methods.lock().unwrap(), ["server/discover"]);
 }
 
+#[rstest::rstest]
+#[case::cancel_before_reply(true)]
+#[case::cancel_after_reply(false)]
+#[tokio::test]
+async fn abandoned_startup_send_retains_status_metadata(#[case] cancel_before_reply: bool) {
+    use rmcp::transport::Transport;
+
+    let server = mock_server(429, false).await;
+    let mut transport = StreamableHttpClientTransport::with_client(
+        reqwest::Client::new(),
+        StreamableHttpClientTransportConfig::with_uri(server.uri.clone()),
+    );
+    // On this current-thread runtime the first poll enqueues the request,
+    // but the worker cannot run until we yield. Never poll the ack again.
+    let mut send = Some(Box::pin(transport.send(ping())));
+    assert!(futures::poll!(send.as_mut().unwrap().as_mut()).is_pending());
+    if cancel_before_reply {
+        drop(send.take());
+    }
+    // EOF orders this point after the worker has acknowledged the request
+    // and published its status. No close(), timer race or join is needed.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), transport.receive())
+            .await
+            .expect("worker must terminate without waiting for the ack reader")
+            .is_none()
+    );
+    drop(send);
+    let reason = transport.quit_status().expect("startup failure");
+    let Some(StreamableHttpError::HttpStatus(metadata)) =
+        reason.downcast_ref::<StreamableHttpClientTransport<reqwest::Client>, RoleClient>()
+    else {
+        panic!("missing typed HTTP status: {reason}")
+    };
+    assert_eq!(metadata.status, 429);
+    assert_eq!(metadata.retry_after.as_deref(), Some("17"));
+}
+
 #[test]
 fn custom_backends_can_construct_bounded_status_metadata() {
     // This integration test is compiled outside rmcp, where a non-exhaustive

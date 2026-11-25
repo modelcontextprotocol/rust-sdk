@@ -412,6 +412,8 @@ impl DynamicTransportError {
         None
     }
 
+    /// Tests for an owned transport error, as accepted by [`Self::downcast`].
+    /// For a typed cause inside a retained worker reason, use [`Self::downcast_ref`].
     pub fn is<T: Transport<R> + 'static, R: ServiceRole>(&self) -> bool {
         self.error.is::<T::Error>() && self.transport_type_id == std::any::TypeId::of::<T>()
     }

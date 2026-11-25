@@ -2923,6 +2923,10 @@ mod tests {
                 None
             }
 
+            fn is_closed_error(error: &Self::Error) -> bool {
+                error.kind() == std::io::ErrorKind::BrokenPipe
+            }
+
             async fn close(&mut self) -> Result<(), Self::Error> {
                 self.closed = true;
                 Ok(())
