@@ -95,10 +95,14 @@ fn numeric_ttl_preserves_the_typed_tools_result() {
         ("5000.0", 5000),
         ("5e3", 5000),
         ("1200.0e-2", 12),
-        ("15e-1", 0),
+        ("15e-1", 1),
+        ("0.9", 0),
+        ("5000.9", 5000),
+        ("5000.0000000000001", 5000),
         ("-1.5", 0),
-        ("9007199254740993.0", 9007199254740993),
+        ("9007199254740993", 9007199254740993),
         ("18446744073709551615", u64::MAX),
+        ("18446744073709551616.0", 0),
         ("1e20", 0),
     ] {
         let payload = format!(
@@ -123,7 +127,7 @@ fn discovery_normalizes_numeric_ttl_but_still_requires_it() {
         "cacheScope": "private"
     });
     assert!(serde_json::from_value::<DiscoverResult>(payload.clone()).is_err());
-    payload["ttlMs"] = json!(5000.0);
+    payload["ttlMs"] = json!(5000.9);
     let ServerResult::DiscoverResult(result) = serde_json::from_value(payload).unwrap() else {
         panic!("decimal TTL lost the typed discovery result");
     };

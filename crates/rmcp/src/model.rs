@@ -1858,30 +1858,17 @@ pub enum CacheScope {
     Private,
 }
 
-/// Read whole milliseconds without rounding a decimal or exponent through f64.
-/// A negative (SEP-2549), fractional or overflowing TTL is immediately stale.
-/// Rejecting the number would make untagged ServerResult lose the typed result.
+/// Truncate fractional milliseconds. Negative (SEP-2549) or out-of-range
+/// hints make the result immediately stale without discarding it.
 fn cache_ttl_ms(number: serde_json::Number) -> u64 {
     if let Some(ms) = number.as_u64() {
         return ms;
     }
-    let decimal = number.to_string();
-    let (mantissa, exponent) = decimal.split_once(['e', 'E']).unwrap_or((&decimal, "0"));
-    let Ok(exponent) = exponent.parse::<i64>() else {
-        return 0;
-    };
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = format!("{whole}{fraction}");
-    let significant = digits.trim_end_matches('0');
-    // After removing trailing zeros, a negative power means fractional milliseconds.
-    let power = exponent.saturating_add(whole.len() as i64 - significant.len() as i64);
-    let (Ok(ms), Ok(power)) = (significant.parse::<u64>(), u32::try_from(power)) else {
-        return 0;
-    };
-    10u64
-        .checked_pow(power)
-        .and_then(|scale| ms.checked_mul(scale))
-        .unwrap_or(0)
+    // u64::MAX rounds up to 2^64 as f64, so the upper bound is exclusive.
+    match number.as_f64() {
+        Some(ms) if (0.0..u64::MAX as f64).contains(&ms) => ms as u64,
+        _ => 0,
+    }
 }
 
 fn deserialize_required_ttl_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
