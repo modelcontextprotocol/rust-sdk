@@ -251,6 +251,7 @@ fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
         Err(error) if error.is_eof() => {
             // A final comma confirms the pending field even if the prefix ends
             // before the next key begins.
+            // The parser has already consumed the closing quote of any pending string.
             if prefix.trim_ascii_end().ends_with(b",") {
                 fields.confirm_pending_field();
             }
