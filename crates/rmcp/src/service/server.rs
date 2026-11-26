@@ -670,6 +670,11 @@ where
                     ct,
                 ));
             }
+            // A notification during the bootstrap window (e.g. notifications/cancelled,
+            // the only client->server notification in 2026-07-28) must be tolerated,
+            // not treated as a fatal error. Before any request there is nothing to
+            // cancel, so drop it and keep waiting for the committing request.
+            ClientJsonRpcMessage::Notification(_) => {}
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,

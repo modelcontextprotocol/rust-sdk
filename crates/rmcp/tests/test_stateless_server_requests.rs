@@ -341,3 +341,62 @@ async fn stateless_server_first_request_handler_can_send_notifications() {
         .await
         .expect("cancel server");
 }
+
+/// A client notification during the bootstrap window (after `server/discover`,
+/// before the committing request) must be tolerated, not terminate the server.
+/// Regression test: `notifications/cancelled` used to hit the pre-init loop's
+/// `other` arm and end the session with `ExpectedInitializeRequest`.
+#[tokio::test]
+async fn bootstrap_tolerates_a_client_notification_after_discover() {
+    let (server_transport, client_transport) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        StatelessServer
+            .serve(server_transport)
+            .await
+            .expect("server should start")
+    });
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+
+    // Bootstrap probe.
+    let mut discover = DiscoverRequest::new(DiscoverRequestParams {});
+    discover.extensions.insert(complete_meta());
+    client
+        .send(ClientJsonRpcMessage::request(
+            ClientRequest::DiscoverRequest(discover),
+            RequestId::Number(1),
+        ))
+        .await
+        .expect("send discover");
+    assert!(matches!(
+        client.receive().await,
+        Some(ServerJsonRpcMessage::Response(_))
+    ));
+
+    // A legitimate client->server notification arrives before any committing request.
+    let cancelled: ClientJsonRpcMessage = serde_json::from_value(serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": { "requestId": 1, "reason": "timed out" }
+    }))
+    .expect("cancelled notification should deserialize");
+    client
+        .send(cancelled)
+        .await
+        .expect("send cancelled notification");
+
+    // The server must still be serving: a valid request is answered.
+    client
+        .send(list_tools_request(complete_meta()))
+        .await
+        .expect("send list tools");
+    assert!(
+        matches!(
+            client.receive().await,
+            Some(ServerJsonRpcMessage::Response(_))
+        ),
+        "server terminated by a notification during the bootstrap window"
+    );
+
+    let running = server_task.await.expect("server task");
+    running.cancel().await.expect("cancel server");
+}
