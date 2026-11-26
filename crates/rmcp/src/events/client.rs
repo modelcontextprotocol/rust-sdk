@@ -1,9 +1,6 @@
 //! Explicit client access to a discovered Events catalog, polls, and subscriptions.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -16,7 +13,10 @@ use super::{
 };
 use crate::{
     Peer, RoleClient, ServiceError,
-    model::{ClientRequest, CustomRequest, JsonObject, ProtocolVersion, ServerResult},
+    model::{
+        ClientRequest, CustomRequest, DEFAULT_LIST_ALL_MAX_PAGES, JsonObject, ProtocolVersion,
+        ServerResult,
+    },
     service::PeerRequestOptions,
 };
 
@@ -155,9 +155,8 @@ impl EventsClient {
 
     async fn load_catalog(&self) -> Result<HashMap<String, CatalogEntry>, EventsError> {
         let mut catalog = HashMap::new();
-        let mut seen = HashSet::new();
         let mut cursor = None;
-        loop {
+        for _ in 0..DEFAULT_LIST_ALL_MAX_PAGES {
             let page = self.request_page(cursor.as_deref()).await?;
             for descriptor in page.events {
                 catalog.insert(
@@ -171,11 +170,11 @@ impl EventsClient {
             let Some(next) = page.next_cursor else {
                 return Ok(catalog);
             };
-            if !seen.insert(next.clone()) {
-                return Err(EventsError::UnexpectedResponse);
-            }
             cursor = Some(next);
         }
+        Err(from_service(ServiceError::ListPaginationExceeded {
+            max_pages: DEFAULT_LIST_ALL_MAX_PAGES,
+        }))
     }
 }
 

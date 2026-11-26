@@ -3,7 +3,10 @@
 use std::{
     borrow::Cow,
     future::{pending, ready},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -1480,6 +1483,44 @@ events_test!(
         client.cancel().await.unwrap();
     }
 );
+
+#[derive(Clone, Default)]
+struct EndlessCatalog(Arc<AtomicUsize>);
+
+impl ServerHandler for EndlessCatalog {
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::default();
+        let extensions = info.capabilities.extensions.get_or_insert_default();
+        extensions.insert(EXTENSION.into(), JsonObject::new());
+        info
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
+    }
+
+    async fn on_custom_request(
+        &self,
+        _: CustomRequest,
+        _: EventContext,
+    ) -> Result<CustomResult, ErrorData> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(CustomResult(json!({"events":[],"nextCursor":""})))
+    }
+}
+
+events_test!(catalog_walk_stops_at_the_page_cap, {
+    let server = EndlessCatalog::default();
+    let client = exchange(server.clone(), modern()).await;
+    let events = EventsClient::new(client.peer().clone());
+    assert!(matches!(
+        events.poll(PollParams::new("source")).await,
+        Err(EventsError::Service(error))
+            if matches!(*error, ServiceError::ListPaginationExceeded { max_pages: 64 })
+    ));
+    assert_eq!(server.0.load(Ordering::SeqCst), 64);
+    client.cancel().await.unwrap();
+});
 
 events_test!(catalog_change_before_watcher, {
     let runtime = EventsServer::new();
