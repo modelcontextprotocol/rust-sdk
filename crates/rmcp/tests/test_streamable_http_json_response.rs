@@ -92,7 +92,7 @@ async fn spawn_server(
     let service: StreamableHttpService<Calculator, LocalSessionManager> =
         StreamableHttpService::new(|| Ok(Calculator::new()), Default::default(), config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 
@@ -117,7 +117,7 @@ async fn spawn_progress_server(
     let service: StreamableHttpService<ProgressServer, LocalSessionManager> =
         StreamableHttpService::new(|| Ok(ProgressServer), Default::default(), config);
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp_listener.local_addr().unwrap();
 

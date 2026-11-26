@@ -1932,7 +1932,7 @@ async fn main() -> anyhow::Result<()> {
         config,
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!("Conformance server listening on http://{}/mcp", bind_addr);

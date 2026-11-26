@@ -51,7 +51,7 @@ async fn start_server(ct: CancellationToken) -> String {
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!(
         "http://127.0.0.1:{}/mcp",

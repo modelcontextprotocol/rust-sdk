@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
         StreamableHttpServerConfig::default().with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let tcp_listener = tokio::net::TcpListener::bind(BIND_ADDRESS).await?;
     let _ = axum::serve(tcp_listener, router)
         .with_graceful_shutdown(async move {

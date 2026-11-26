@@ -673,9 +673,12 @@ async fn main() -> Result<()> {
 
     // Create protected MCP routes (require authorization). `route_layer` keeps
     // the check off unmatched paths, which should 404 instead of 401.
-    let protected_mcp_router = Router::new().nest_service("/mcp", mcp_service).route_layer(
-        middleware::from_fn_with_state(oauth_store.clone(), validate_token_middleware),
-    );
+    let protected_mcp_router = Router::new()
+        .route_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn_with_state(
+            oauth_store.clone(),
+            validate_token_middleware,
+        ));
 
     // Create CORS layer for the oauth authorization server endpoint
     let cors_layer = CorsLayer::new()

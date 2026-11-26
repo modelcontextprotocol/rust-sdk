@@ -120,7 +120,7 @@ async fn spawn_server(
     let observed_get_requests = get_requests.clone();
     let router =
         axum::Router::new()
-            .nest_service("/mcp", service)
+            .route_service("/mcp", service)
             .layer(axum::middleware::from_fn(
                 move |request: axum::extract::Request, next: axum::middleware::Next| {
                     let observed_get_requests = observed_get_requests.clone();

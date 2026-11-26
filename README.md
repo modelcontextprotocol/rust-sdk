@@ -1607,7 +1607,8 @@ let service = StreamableHttpService::new(
 );
 
 // `StreamableHttpService` is a Tower service — mount it on any router.
-let router = axum::Router::new().nest_service("/mcp", service);
+// Streamable HTTP uses one endpoint URL, so route only that exact path.
+let router = axum::Router::new().route_service("/mcp", service);
 ```
 
 > Because there is no per-session state, the `service_factory` runs per request.

@@ -270,7 +270,7 @@ async fn test_stale_session_id_returns_status_aware_error() -> anyhow::Result<()
                 .with_cancellation_token(ct.child_token()),
         );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -338,7 +338,7 @@ async fn test_transparent_reinitialization_on_session_expiry() -> anyhow::Result
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
@@ -418,7 +418,7 @@ async fn test_session_expired_error_when_reinit_disabled() -> anyhow::Result<()>
             .with_cancellation_token(ct.child_token()),
     );
 
-    let router = axum::Router::new().nest_service("/mcp", service);
+    let router = axum::Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
 
