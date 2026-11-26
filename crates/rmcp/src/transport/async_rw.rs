@@ -1,7 +1,10 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use futures::SinkExt;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{DeserializeOwned, DeserializeSeed, Error as _, MapAccess, Visitor},
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader},
@@ -14,7 +17,7 @@ use tokio_util::{
 
 use super::{IntoTransport, Transport};
 use crate::{
-    model::ErrorData,
+    model::{ErrorData, RequestId},
     service::{RxJsonRpcMessage, ServiceRole, TxJsonRpcMessage},
 };
 
@@ -57,6 +60,11 @@ pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpc
 /// HTTP is also acceptable over stdio.
 pub const DEFAULT_MAX_LINE_LENGTH: usize = 16 * 1024 * 1024;
 
+/// Maximum prefix retained while draining an oversized line. A small prefix is
+/// enough to recover the conventional early `id` and `method` fields without
+/// undermining the line-length bound.
+const OVERSIZED_LINE_PREFIX_LENGTH: usize = 8 * 1024;
+
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     read: BufReader<R>,
     line_buf: Vec<u8>,
@@ -65,13 +73,17 @@ pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     /// newline is seen. Lives on the struct rather than in `read_line` because
     /// `receive` is polled inside a `select!` and can be cancelled mid-discard.
     discarding: bool,
+    /// Bounded prefix of the oversized line currently being discarded. This
+    /// also lives across cancelled `receive` calls so a correlatable request
+    /// can still receive an Invalid Request response after the line is drained.
+    oversized_line_prefix: Vec<u8>,
     write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
     pending_error_response: Option<PendingErrorResponse>,
     _role: PhantomData<fn() -> Role>,
 }
 
 enum PendingErrorResponse {
-    Queue,
+    Queue(Option<RequestId>),
     Flush,
 }
 
@@ -80,7 +92,7 @@ enum LineRead {
     /// A whole `\n`-terminated line is in `line_buf`.
     Line,
     /// The line exceeded `max_line_length`; it has been dropped.
-    Oversized,
+    Oversized(Option<RequestId>),
     /// The peer closed the stream.
     Eof,
     Io(std::io::Error),
@@ -102,6 +114,7 @@ where
             line_buf: Vec::new(),
             max_line_length: DEFAULT_MAX_LINE_LENGTH,
             discarding: false,
+            oversized_line_prefix: Vec::new(),
             write,
             pending_error_response: None,
             _role: PhantomData,
@@ -110,8 +123,9 @@ where
 
     /// Override the maximum size of a single incoming line.
     ///
-    /// Defaults to [`DEFAULT_MAX_LINE_LENGTH`]. Lines longer than this are
-    /// dropped and logged rather than buffered, and the connection stays open.
+    /// Defaults to [`DEFAULT_MAX_LINE_LENGTH`]. Lines are logged as soon as they
+    /// exceed this limit and the rest of the line is discarded without buffering.
+    /// The connection stays open.
     /// `usize::MAX` restores the previous unbounded behaviour.
     pub fn with_max_line_length(mut self, max_line_length: usize) -> Self {
         self.max_line_length = max_line_length;
@@ -155,6 +169,18 @@ where
                         newline.map(|_| Step::EndDiscard).unwrap_or(Step::More),
                     )
                 } else if self.line_buf.len().saturating_add(take) > self.max_line_length {
+                    tracing::error!(
+                        max_line_length = self.max_line_length,
+                        "Incoming message exceeded the maximum line length, discarding it"
+                    );
+                    let prefix_length = OVERSIZED_LINE_PREFIX_LENGTH.min(self.max_line_length);
+                    self.oversized_line_prefix.clear();
+                    self.oversized_line_prefix.extend_from_slice(
+                        &self.line_buf[..self.line_buf.len().min(prefix_length)],
+                    );
+                    let remaining = prefix_length - self.oversized_line_prefix.len();
+                    self.oversized_line_prefix
+                        .extend_from_slice(&available[..take.min(remaining)]);
                     self.line_buf.clear();
                     (
                         take,
@@ -182,14 +208,121 @@ where
             match step {
                 Step::Line => return LineRead::Line,
                 Step::More => {}
-                Step::EndDiscard => self.discarding = false,
-                Step::Oversized => return LineRead::Oversized,
+                Step::EndDiscard => {
+                    self.discarding = false;
+                    return LineRead::Oversized(self.finish_oversized_line());
+                }
+                Step::Oversized => {
+                    return LineRead::Oversized(self.finish_oversized_line());
+                }
                 Step::OversizedNeedsDiscard => {
                     self.discarding = true;
-                    return LineRead::Oversized;
                 }
             }
         }
+    }
+
+    fn finish_oversized_line(&mut self) -> Option<RequestId> {
+        let request_id = request_id_from_oversized_prefix(&self.oversized_line_prefix);
+        self.oversized_line_prefix.clear();
+        request_id
+    }
+}
+
+/// Recover a correlatable request id from a truncated top-level JSON object.
+///
+/// Check all retained bytes before using an ID. An expected cutoff can follow
+/// complete, delimited `id` and string `method` fields. Definite syntax errors,
+/// duplicate request fields, and visible response fields keep the line unanswered.
+fn request_id_from_oversized_prefix(prefix: &[u8]) -> Option<RequestId> {
+    let prefix = prefix.strip_prefix(UTF8_BOM.as_slice()).unwrap_or(prefix);
+    // An incomplete final code point is consistent with a truncated prefix.
+    if std::str::from_utf8(prefix).is_err_and(|error| error.error_len().is_some()) {
+        return None;
+    }
+
+    let mut fields = RequestPrefixFields::default();
+    let mut deserializer = serde_json::Deserializer::from_slice(prefix);
+    match deserializer
+        .deserialize_map(&mut fields)
+        .and_then(|()| deserializer.end())
+    {
+        Ok(()) => {}
+        Err(error) if error.is_eof() => {
+            // A final comma confirms the pending field even if the prefix ends
+            // before the next key begins.
+            // The parser has already consumed the closing quote of any pending string.
+            if prefix.trim_ascii_end().ends_with(b",") {
+                fields.confirm_pending_field();
+            }
+        }
+        Err(_) => return None,
+    }
+
+    if fields.has_method { fields.id } else { None }
+}
+
+#[derive(Default)]
+struct RequestPrefixFields {
+    id: Option<RequestId>,
+    has_method: bool,
+    pending: Option<RequestPrefixField>,
+}
+
+enum RequestPrefixField {
+    Id(RequestId),
+    Method,
+}
+
+impl RequestPrefixFields {
+    fn confirm_pending_field(&mut self) {
+        match self.pending.take() {
+            Some(RequestPrefixField::Id(id)) => self.id = Some(id),
+            Some(RequestPrefixField::Method) => self.has_method = true,
+            None => {}
+        }
+    }
+}
+
+impl<'de> Visitor<'de> for &mut RequestPrefixFields {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON-RPC request object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while let Some(key) = map.next_key_seed(ConfirmFieldBeforeKey(self))? {
+            match key.as_str() {
+                "result" | "error" => return Err(A::Error::custom("JSON-RPC response field")),
+                "id" if self.id.is_some() => return Err(A::Error::duplicate_field("id")),
+                "method" if self.has_method => return Err(A::Error::duplicate_field("method")),
+                "id" => self.pending = Some(RequestPrefixField::Id(map.next_value()?)),
+                "method" => {
+                    let _: String = map.next_value()?;
+                    self.pending = Some(RequestPrefixField::Method);
+                }
+                _ => {
+                    // Validate string encoding and escapes even inside fields we do not use.
+                    let _: serde_json::Value = map.next_value()?;
+                }
+            }
+        }
+        self.confirm_pending_field();
+        Ok(())
+    }
+}
+
+struct ConfirmFieldBeforeKey<'a>(&'a mut RequestPrefixFields);
+
+impl<'de> DeserializeSeed<'de> for ConfirmFieldBeforeKey<'_> {
+    type Value = String;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<String, D::Error> {
+        // A key after the first confirms the preceding comma. Without a
+        // delimiter, a parsed number at EOF could still be part of a longer ID.
+        self.0.confirm_pending_field();
+        String::deserialize(deserializer)
     }
 }
 
@@ -254,10 +387,10 @@ where
             if let Some(state) = self.pending_error_response.as_mut() {
                 let mut write = self.write.lock().await;
                 let framed = write.as_mut()?;
-                if matches!(state, PendingErrorResponse::Queue) {
+                if let PendingErrorResponse::Queue(id) = state {
                     let response = TxJsonRpcMessage::<Role>::error(
                         ErrorData::invalid_request("Invalid request", None),
-                        None,
+                        id.clone(),
                     );
                     if framed.feed(response).await.is_err() {
                         return None;
@@ -280,11 +413,10 @@ where
             // incoming requests under concurrent response load.
             match self.read_line().await {
                 LineRead::Line => {}
-                LineRead::Oversized => {
-                    tracing::error!(
-                        max_line_length = self.max_line_length,
-                        "Incoming message exceeded the maximum line length, discarding it"
-                    );
+                LineRead::Oversized(id) => {
+                    if id.is_some() {
+                        self.pending_error_response = Some(PendingErrorResponse::Queue(id));
+                    }
                     continue;
                 }
                 // EOF. Any bytes still in `line_buf` are an incomplete trailing
@@ -327,7 +459,7 @@ where
                             // real protocol error rather than unparsable input, so surface it with
                             // an Invalid Request response instead of silently dropping it.
                             tracing::debug!("Protocol error on incoming message: {e}");
-                            self.pending_error_response = Some(PendingErrorResponse::Queue);
+                            self.pending_error_response = Some(PendingErrorResponse::Queue(None));
                         }
                     }
                 }
@@ -623,6 +755,44 @@ mod test {
     use tokio_util::codec::FramedRead;
 
     use super::*;
+
+    #[rstest::rstest]
+    #[case::malformed_value(br#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"value":]}"#)]
+    #[case::trailing_data(br#"{"jsonrpc":"2.0","id":1,"method":"ping"}[]"#)]
+    #[case::response_field(br#"{"jsonrpc":"2.0","id":1,"method":"ping","result":{}}"#)]
+    #[case::duplicate_id(br#"{"jsonrpc":"2.0","id":1,"method":"ping","id":2}"#)]
+    #[case::response_key_at_cutoff(br#"{"id":1,"method":"ping","error""#)]
+    #[case::duplicate_method_at_cutoff(br#"{"id":1,"method":"ping","method""#)]
+    #[case::id_without_delimiter(br#"{"method":"ping","id":1 "#)]
+    #[case::method_without_delimiter(br#"{"id":1,"method":"ping""#)]
+    fn oversized_prefix_rejects_malformed_or_ambiguous_json(#[case] prefix: &[u8]) {
+        assert_eq!(request_id_from_oversized_prefix(prefix), None);
+    }
+
+    #[rstest::rstest]
+    #[case::id_before_partial_key(br#"{"method":"ping","id":1,"par"#)]
+    #[case::method_before_partial_key(br#"{"id":1,"method":"ping","par"#)]
+    #[case::comma_at_cutoff(br#"{"method":"ping","id":1,  "#)]
+    #[case::closing_brace(br#"{"method":"ping","id":1}"#)]
+    fn oversized_prefix_recovers_fields_with_confirmed_delimiters(#[case] prefix: &[u8]) {
+        assert_eq!(
+            request_id_from_oversized_prefix(prefix),
+            Some(RequestId::Number(1))
+        );
+    }
+
+    #[test]
+    fn oversized_prefix_accepts_a_truncated_code_point_but_rejects_invalid_utf8() {
+        let mut prefix = b"{\"id\":1,\"method\":\"ping\",\"params\":\"\xe2".to_vec();
+        assert_eq!(
+            request_id_from_oversized_prefix(&prefix),
+            Some(RequestId::Number(1))
+        );
+
+        prefix.push(b'a');
+        assert_eq!(request_id_from_oversized_prefix(&prefix), None);
+    }
+
     fn from_async_read<T: DeserializeOwned, R: AsyncRead>(reader: R) -> impl Stream<Item = T> {
         FramedRead::new(reader, JsonRpcMessageCodec::<T>::default()).filter_map(|result| {
             if let Err(e) = &result {
