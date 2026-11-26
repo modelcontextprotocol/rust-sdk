@@ -31,7 +31,7 @@
 //!     "https://mcp.example", refresh,
 //! ).with_scopes(["files.read"]).exchange(&http, &http).await?;
 //! // Use token.access_token only for the approved MCP resource; never log it.
-//! // token.scopes contains the final granted scopes, which may be narrower.
+//! // token.scopes contains the final scopes granted by the resource AS, which may differ from those requested.
 //! # Ok(()) }
 //! ```
 
@@ -794,12 +794,14 @@ impl ResourceTokenResponse {
         {
             return Err(invalid("access token resource mismatch"));
         }
-        // An omitted scope retains the authority carried by the assertion.
+        // The AS has the final say on scope; without a `scope` field, the ID-JAG's scopes apply (RFC 6749 §5.1).
         let scopes = if let Some(scope) = self.scope.as_deref() {
             let scopes =
                 parse_scope(scope).ok_or_else(|| invalid("malformed or duplicate scopes"))?;
-            if !scopes.iter().all(|s| granted.contains(*s)) {
-                return Err(invalid("access token scope exceeds ID-JAG scope"));
+            // Count only; scope values are never logged.
+            let added = scopes.iter().filter(|s| !granted.contains(**s)).count();
+            if added > 0 {
+                tracing::debug!(added, "resource AS granted scopes beyond the ID-JAG");
             }
             scopes.into_iter().map(str::to_owned).collect()
         } else {
