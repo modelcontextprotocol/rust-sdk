@@ -527,6 +527,10 @@ impl Default for StreamableHttpResponseLimits {
 /// configured event-size limit.
 /// Implementations that buffer JSON or HTTP error responses must also override
 /// [`Self::post_message_with_response_limits`] to enforce the body-size limits.
+/// A GET that carries a session ID and receives HTTP 404 should yield
+/// [`StreamableHttpError::SessionExpired`], as the built-in clients do, so
+/// reconnection stops and, when `reinit_on_expired_session` is enabled, the
+/// session is re-initialized.
 ///
 /// For legacy http, the transport keeps an open response stream alive until
 /// its cancellation send finishes or is dropped. This lets a custom client
@@ -689,10 +693,12 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
 
     fn classify_reconnect_error(&self, error: &Self::Error) -> ReconnectErrorDisposition {
         match error {
-            // Repeating GET cannot enable SSE or repair the cloned credentials.
+            // Repeating GET cannot enable SSE, repair the cloned credentials,
+            // or revive a session the server has already terminated.
             StreamableHttpError::ServerDoesNotSupportSse
             | StreamableHttpError::AuthRequired(_)
-            | StreamableHttpError::InsufficientScope(_) => ReconnectErrorDisposition::Terminate,
+            | StreamableHttpError::InsufficientScope(_)
+            | StreamableHttpError::SessionExpired => ReconnectErrorDisposition::Terminate,
             _ => ReconnectErrorDisposition::Retry,
         }
     }
@@ -700,6 +706,18 @@ impl<C: StreamableHttpClient> SseStreamReconnect for StreamableHttpClientReconne
     fn map_fatal_stream_error(&mut self, error: SseError) -> Option<Self::Error> {
         Some(StreamableHttpError::Sse(error))
     }
+}
+
+/// Whether a stream-triggered session recovery may run now.
+///
+/// This is an event-driven throttle, not a scheduler: it only decides whether
+/// the session-expired event being handled may trigger recovery, and a
+/// suppressed event is dropped rather than retried on a timer. The interval
+/// prevents a server that answers every replacement listener with 404 from
+/// driving an initialize hot loop, because the initial listener GET has no
+/// backoff of its own.
+fn stream_recovery_allowed(last_attempt: Option<tokio::time::Instant>, timeout: Duration) -> bool {
+    last_attempt.is_none_or(|attempt| attempt.elapsed() >= timeout)
 }
 
 /// Info retained for cleaning up the session when the worker exits.
@@ -1382,6 +1400,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let mut recovery_posts = VecDeque::<WorkerSendRequest<Self>>::new();
         let mut recovery_deadline: Option<tokio::time::Instant> = None;
         let mut retrying_recovery = false;
+        // A session-expired GET has no POST to retry; recovery only replaces the session.
+        let mut recovery_requested = false;
+        let mut last_stream_recovery: Option<tokio::time::Instant> = None;
         let mut barrier_in_flight = false;
         let max_concurrent_requests = config.max_concurrent_requests.max(1);
         let mut awaiting_fallback_initialized = false;
@@ -1403,7 +1424,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 retrying_recovery = false;
             }
             if !retrying_recovery
-                && !recovery_posts.is_empty()
+                && (!recovery_posts.is_empty() || recovery_requested)
                 && posts.is_empty()
                 && control_posts.is_empty()
             {
@@ -1411,6 +1432,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 // Retry only ordinary POSTs that returned SessionExpired, at most once each.
                 session_cancellation.cancel();
                 recovery_deadline = None;
+                recovery_requested = false;
                 let recovery = tokio::select! {
                     _ = transport_task_ct.cancelled() => {
                         break 'main_loop Err(WorkerQuitReason::Cancelled);
@@ -1468,9 +1490,10 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                                 transport_task_ct.clone(),
                             );
                         }
-                        retrying_recovery = true;
+                        retrying_recovery = !recovery_posts.is_empty();
                     }
                     Err(error) => {
+                        tracing::warn!(%error, "session recovery failed");
                         session_cancellation = CancellationToken::new();
                         Self::fail_recovery_posts(
                             &mut recovery_posts,
@@ -1483,7 +1506,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             }
 
             let has_post_capacity = posts.len() < max_concurrent_requests;
-            let may_start = (retrying_recovery || recovery_posts.is_empty())
+            // A GET-triggered recovery has no queued POSTs, but new ordinary
+            // POSTs must still wait for it; otherwise they are sent on the
+            // known-expired session and can be canceled at the recovery deadline.
+            let may_start = (retrying_recovery
+                || (recovery_posts.is_empty() && !recovery_requested))
                 && !barrier_in_flight
                 && has_post_capacity;
             let may_receive = may_start && pending_message.is_none() && !retrying_recovery;
@@ -1922,6 +1949,8 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     }
                 }
                 Event::StreamResult { request_id, result } => {
+                    let session_expired =
+                        matches!(&result, Err(StreamableHttpError::SessionExpired));
                     if let Some(request_id) = request_id {
                         Self::drain_queued_stream_messages(
                             &mut sse_worker_rx,
@@ -1933,14 +1962,37 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                             .remove(&request_id)
                             .is_some_and(|registration| registration.token().is_cancelled());
                         if pending_stream_response_ids.remove(&request_id) && !cancelled {
+                            // The interrupted POST already ran and its response
+                            // stream is gone, so replaying it is unsafe; fail the
+                            // caller with the session-expiry signal instead.
+                            let error = if session_expired {
+                                ErrorData::internal_error("Session expired (HTTP 404)", None)
+                            } else {
+                                ErrorData::transport_closed(
+                                    "streamable HTTP response stream closed before its final response",
+                                )
+                            };
                             context
                                 .send_to_handler(ServerJsonRpcMessage::error(
-                                    ErrorData::transport_closed(
-                                        "streamable HTTP response stream closed before its final response",
-                                    ),
+                                    error,
                                     Some(request_id),
                                 ))
                                 .await?;
+                        }
+                    }
+                    if session_expired
+                        && config.reinit_on_expired_session
+                        && saved_init_request.is_some()
+                        && stream_recovery_allowed(
+                            last_stream_recovery,
+                            config.session_recovery_timeout,
+                        )
+                    {
+                        last_stream_recovery = Some(tokio::time::Instant::now());
+                        recovery_requested = true;
+                        if recovery_deadline.is_none() {
+                            recovery_deadline =
+                                Some(tokio::time::Instant::now() + config.session_recovery_timeout);
                         }
                     }
                     if result.is_err() {
@@ -2247,6 +2299,19 @@ pub struct StreamableHttpClientTransportConfig {
     ///
     /// Control POSTs and other POST failures are not retried. If recovery or a retry
     /// fails, the transport returns an error to the caller.
+    ///
+    /// A `404` on an SSE resume or listener GET is always terminal: the session is
+    /// gone, so the interrupted request fails with a session-expired error instead
+    /// of being replayed. It makes a single recovery request and restarts the
+    /// listener on the new session.
+    ///
+    /// Stream-triggered recovery is event-driven, not scheduled:
+    /// [`Self::session_recovery_timeout`] is a minimum interval between attempts,
+    /// not a retry window. If the replacement listener also receives a `404`
+    /// inside that interval, the event is dropped. No further recovery is queued
+    /// and no timer retries it, so an idle client stays without server-initiated
+    /// messages until a later session-expired event (from a POST or another
+    /// stream) triggers recovery again.
     pub reinit_on_expired_session: bool,
 }
 
@@ -2528,6 +2593,42 @@ mod tests {
             })
             .boxed())
         }
+    }
+
+    #[test]
+    fn session_expired_reconnect_error_is_terminal() {
+        let reconnect = StreamableHttpClientReconnect {
+            client: StatelessReconnectClient::default(),
+            session_id: Some("session-1".into()),
+            uri: Arc::from("http://scripted/mcp"),
+            auth_header: None,
+            custom_headers: HashMap::new(),
+            max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,
+        };
+        assert!(matches!(
+            reconnect.classify_reconnect_error(&StreamableHttpError::SessionExpired),
+            ReconnectErrorDisposition::Terminate
+        ));
+        assert!(matches!(
+            reconnect.classify_reconnect_error(&StreamableHttpError::Client(
+                std::io::Error::other("transient")
+            )),
+            ReconnectErrorDisposition::Retry
+        ));
+    }
+
+    #[test]
+    fn stream_recovery_is_rate_limited_to_one_attempt_per_timeout() {
+        let timeout = Duration::from_secs(5);
+        assert!(stream_recovery_allowed(None, timeout));
+        assert!(!stream_recovery_allowed(
+            Some(tokio::time::Instant::now()),
+            timeout
+        ));
+        assert!(stream_recovery_allowed(
+            Some(tokio::time::Instant::now() - timeout),
+            timeout
+        ));
     }
 
     #[tokio::test]

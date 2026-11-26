@@ -1,10 +1,19 @@
 #![cfg(not(feature = "local"))]
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-    session::{SessionId, local::LocalSessionManager},
+use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities,
+        ServerConfig,
+    },
+    service::RequestContext,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService,
+        session::{SessionId, local::LocalSessionManager},
+    },
 };
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 mod common;
@@ -271,9 +280,8 @@ async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()
     assert!(events[1].contains(r#""id":2"#));
 
     // Resume with Last-Event-ID after the channel has completed.
-    // The server returns 200 — either with replayed cached events
-    // (if the channel is still retained) or an empty stream (if the
-    // session worker hasn't processed the completion yet).
+    // The completed request-wise channel retains its cache within
+    // `completed_cache_ttl` and replays missed events before ending.
     let resume = client
         .get(format!("http://{addr}/mcp"))
         .header("Accept", "text/event-stream")
@@ -285,8 +293,10 @@ async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()
     assert_eq!(resume.status(), 200);
 
     let resume_body = resume.text().await?;
-    // The stream should complete (not hang), regardless of whether
-    // it contains replayed events or is empty.
+    assert!(
+        resume_body.contains("id: 1/0") && resume_body.contains(r#""id":2"#),
+        "expected replayed tool response in resume stream, got: {resume_body}"
+    );
     assert!(
         !resume_body.contains("standalone"),
         "should not receive events from a different stream"
@@ -300,8 +310,6 @@ async fn test_resume_after_request_wise_channel_completed() -> anyhow::Result<()
 
 #[tokio::test]
 async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
-    use std::sync::Arc;
-
     let ct = CancellationToken::new();
     let mut session_manager = LocalSessionManager::default();
     session_manager.session_config.completed_cache_ttl = Duration::from_millis(200);
@@ -366,25 +374,27 @@ async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
         .await?;
     assert!(body.contains(r#""id":2"#));
 
+    // Resume immediately (within TTL) — cached response must still be replayed
+    let pre_eviction = client
+        .get(format!("http://{addr}/mcp"))
+        .header("Accept", "text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .header("last-event-id", "0/0")
+        .send()
+        .await?;
+    assert_eq!(pre_eviction.status(), 200);
+    let pre_eviction_body = pre_eviction.text().await?;
+    assert!(
+        pre_eviction_body.contains("id: 1/0") && pre_eviction_body.contains(r#""id":2"#),
+        "expected cached response before TTL expiry, got: {pre_eviction_body}"
+    );
+
     // Wait for TTL to expire (200ms) plus margin
     tokio::time::sleep(Duration::from_millis(400)).await;
 
-    // Send a notification to trigger an event loop iteration (runs eviction)
-    client
-        .post(format!("http://{addr}/mcp"))
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .header("mcp-session-id", session_id.to_string())
-        .header("Mcp-Protocol-Version", "2025-06-18")
-        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-        .send()
-        .await?;
-
-    // Small delay to ensure the eviction ran
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Resume after TTL — channel should be evicted. The server returns
-    // 200 with an empty stream (no events from a different stream).
+    // Resume directly after TTL without sending other session events — resume()
+    // must evict expired entries and return 200 with an empty stream.
     let resume = client
         .get(format!("http://{addr}/mcp"))
         .header("Accept", "text/event-stream")
@@ -407,12 +417,173 @@ async fn test_completed_cache_ttl_eviction() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
+struct SlowToolServer {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl ServerHandler for SlowToolServer {
+    #[allow(deprecated)]
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn call_tool(
+        &self,
+        _request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(CallToolResult::success(vec![ContentBlock::text("slow-ok")]).into())
+    }
+}
+
+#[tokio::test]
+async fn test_resume_after_close_sse_stream_replays_completed_response() -> anyhow::Result<()> {
+    let ct = CancellationToken::new();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let server = SlowToolServer {
+        started: started.clone(),
+        release: release.clone(),
+    };
+
+    let session_manager = Arc::new(LocalSessionManager::default());
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        session_manager.clone(),
+        StreamableHttpServerConfig::default()
+            .with_sse_keep_alive(None)
+            .with_cancellation_token(ct.child_token()),
+    );
+
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = tcp_listener.local_addr()?;
+
+    let handle = tokio::spawn({
+        let ct = ct.clone();
+        async move {
+            let _ = axum::serve(tcp_listener, router)
+                .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+                .await;
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/mcp");
+
+    // Initialize session
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#)
+        .send()
+        .await?;
+    assert_eq!(response.status(), 200);
+    let session_id: SessionId = response.headers()["mcp-session-id"].to_str()?.into();
+
+    let status = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+        .send()
+        .await?
+        .status();
+    assert_eq!(status, 202);
+
+    // Start slow tool call in the background
+    let post_handle = tokio::spawn({
+        let client = client.clone();
+        let url = url.clone();
+        let session_id = session_id.clone();
+        async move {
+            let resp = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
+                .header("mcp-session-id", session_id.to_string())
+                .header("Mcp-Protocol-Version", "2025-06-18")
+                .body(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"slow","arguments":{}}}"#)
+                .send()
+                .await?;
+            anyhow::Ok((resp.status(), resp.text().await?))
+        }
+    });
+
+    started.notified().await;
+
+    let session = session_manager
+        .sessions
+        .read()
+        .await
+        .get(&session_id)
+        .expect("session exists")
+        .clone();
+
+    // Server-initiated SSE disconnect while request is still in-flight
+    session
+        .close_sse_stream(0, Some(Duration::from_millis(50)))
+        .await?;
+
+    let (post_status, post_body) = post_handle.await??;
+    assert_eq!(post_status, 200);
+    assert!(
+        post_body.contains("id: 0/0")
+            && post_body.contains("id: 1/0")
+            && post_body.contains("retry: 50"),
+        "expected initial + close priming events before disconnect, got: {post_body}"
+    );
+    assert!(
+        !post_body.contains(r#""id":2"#),
+        "response should not have arrived before disconnect, got: {post_body}"
+    );
+
+    // Release the handler so the response completes into the retained cache
+    // before the client reconnects with Last-Event-ID.
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if session.close_sse_stream(0, None).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let resume = client
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .header("mcp-session-id", session_id.to_string())
+        .header("Mcp-Protocol-Version", "2025-06-18")
+        .header("last-event-id", "1/0")
+        .send()
+        .await?;
+    assert_eq!(resume.status(), 200);
+
+    let resume_body = resume.text().await?;
+    assert!(
+        resume_body.contains("id: 2/0")
+            && resume_body.contains(r#""id":2"#)
+            && resume_body.contains("slow-ok"),
+        "expected completed response replayed on resume after disconnect, got: {resume_body}"
+    );
+
+    ct.cancel();
+    handle.await?;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_priming_on_stream_close() -> anyhow::Result<()> {
-    use std::sync::Arc;
-
-    use rmcp::transport::streamable_http_server::session::SessionId;
-
     let ct = CancellationToken::new();
     let session_manager = Arc::new(LocalSessionManager::default());
 

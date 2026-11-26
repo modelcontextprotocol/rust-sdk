@@ -2,14 +2,17 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     num::ParseIntError,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures::{Stream, StreamExt};
 use thiserror::Error;
-use tokio::sync::{
-    mpsc::{Receiver, Sender},
-    oneshot,
+use tokio::{
+    sync::{
+        mpsc::{Receiver, Sender},
+        oneshot,
+    },
+    time::Instant,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::instrument;
@@ -429,18 +432,11 @@ pub struct StreamableHttpMessageReceiver {
 }
 
 impl LocalSessionWorker {
-    fn unregister_resource(&mut self, resource: &ResourceKey) {
-        let Some(http_request_id) = self.resource_router.remove(resource) else {
-            return;
-        };
-        tracing::trace!(?resource, http_request_id, "unregister resource");
+    fn complete_request_wise_channel(&mut self, http_request_id: HttpRequestId) {
         let Some(channel) = self.tx_router.get_mut(&http_request_id) else {
             tracing::warn!(http_request_id, "http request wise channel not found");
             return;
         };
-        if !channel.resources.is_empty() && !matches!(resource, ResourceKey::McpRequestId(_)) {
-            return;
-        }
         tracing::debug!(http_request_id, "close http request wise channel");
         let resources: Vec<_> = channel.resources.drain().collect();
         channel.completed_at = Some(Instant::now());
@@ -452,6 +448,20 @@ impl LocalSessionWorker {
         for resource in resources {
             self.resource_router.remove(&resource);
         }
+    }
+    fn unregister_resource(&mut self, resource: &ResourceKey) {
+        let Some(http_request_id) = self.resource_router.remove(resource) else {
+            return;
+        };
+        tracing::trace!(?resource, http_request_id, "unregister resource");
+        let Some(channel) = self.tx_router.get(&http_request_id) else {
+            tracing::warn!(http_request_id, "http request wise channel not found");
+            return;
+        };
+        if !channel.resources.is_empty() && !matches!(resource, ResourceKey::McpRequestId(_)) {
+            return;
+        }
+        self.complete_request_wise_channel(http_request_id);
     }
     fn register_resource(&mut self, resource: ResourceKey, http_request_id: HttpRequestId) {
         tracing::trace!(?resource, http_request_id, "register resource");
@@ -492,6 +502,14 @@ impl LocalSessionWorker {
         let ttl = self.session_config.completed_cache_ttl;
         self.tx_router
             .retain(|_, rw| rw.completed_at.is_none_or(|at| at.elapsed() < ttl));
+    }
+    fn next_completed_eviction_deadline(&self) -> Option<Instant> {
+        let ttl = self.session_config.completed_cache_ttl;
+        self.tx_router
+            .values()
+            .filter_map(|rw| rw.completed_at)
+            .filter_map(|at| at.checked_add(ttl))
+            .min()
     }
     fn next_http_request_id(&mut self) -> HttpRequestId {
         let id = self.next_http_request_id;
@@ -640,10 +658,8 @@ impl LocalSessionWorker {
             OutboundChannel::RequestWise { id, close } => {
                 if let Some(request_wise) = self.tx_router.get_mut(&id) {
                     request_wise.tx.send(message).await?;
-                    if close && let Some(channel) = self.tx_router.remove(&id) {
-                        for resource in channel.resources {
-                            self.resource_router.remove(&resource);
-                        }
+                    if close {
+                        self.complete_request_wise_channel(id);
                     }
                 } else {
                     return Err(SessionError::ChannelClosed(Some(id)));
@@ -657,6 +673,7 @@ impl LocalSessionWorker {
         &mut self,
         last_event_id: EventId,
     ) -> Result<StreamableHttpMessageReceiver, SessionError> {
+        self.evict_expired_channels();
         // Clean up closed shadow senders before processing
         self.shadow_txs.retain(|tx| !tx.is_closed());
 
@@ -763,6 +780,7 @@ impl LocalSessionWorker {
                 let request_wise = self
                     .tx_router
                     .get_mut(&id)
+                    .filter(|rw| rw.completed_at.is_none())
                     .ok_or(SessionError::ChannelClosed(Some(id)))?;
 
                 // Send priming event if retry interval is specified
@@ -1106,10 +1124,13 @@ impl Worker for LocalSessionWorker {
             .send(Ok(()))
             .map_err(|_| WorkerQuitReason::HandlerTerminated)?;
         let ct = context.cancellation_token.clone();
-        let keep_alive = self.session_config.keep_alive.unwrap_or(Duration::MAX);
+        let mut idle_deadline = self
+            .session_config
+            .keep_alive
+            .and_then(|d| Instant::now().checked_add(d));
         loop {
             self.evict_expired_channels();
-            let keep_alive_timeout = tokio::time::sleep(keep_alive);
+            let next_eviction = self.next_completed_eviction_deadline();
             let event = tokio::select! {
                 event = self.event_rx.recv() => {
                     if let Some(event) = event {
@@ -1124,10 +1145,29 @@ impl Worker for LocalSessionWorker {
                 _ = ct.cancelled() => {
                     return Err(WorkerQuitReason::Cancelled)
                 }
-                _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::IdleTimeout(keep_alive))
+                _ = async {
+                    match idle_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    return Err(WorkerQuitReason::IdleTimeout(
+                        self.session_config.keep_alive.unwrap_or(Duration::MAX),
+                    ))
+                }
+                _ = async {
+                    match next_eviction {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    continue;
                 }
             };
+            idle_deadline = self
+                .session_config
+                .keep_alive
+                .and_then(|d| Instant::now().checked_add(d));
             match event {
                 InnerEvent::FromHandler(WorkerSendRequest {
                     message, responder, ..
@@ -1374,5 +1414,433 @@ mod sep2260_routing_tests {
 
         let channel = worker.resolve_outbound_channel(&roots_request(Some(originating_id)));
         assert!(matches!(channel, OutboundChannel::Common));
+    }
+}
+
+#[cfg(test)]
+mod completed_channel_resume_tests {
+    use super::*;
+    use crate::model::{EmptyResult, ErrorData, NumberOrString, ServerResult};
+
+    async fn drain_receiver(mut receiver: StreamableHttpMessageReceiver) -> Vec<ServerSseMessage> {
+        let mut events = Vec::new();
+        while let Some(msg) = receiver.inner.recv().await {
+            events.push(msg);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn completed_request_wise_channel_retains_cache_for_resume_within_ttl() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        assert_eq!(http_request_id, 0);
+
+        let req_id = RequestId::Number(2);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+        worker.register_resource(
+            ResourceKey::ProgressToken(ProgressToken(NumberOrString::Number(9))),
+            http_request_id,
+        );
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id.clone(),
+            ))
+            .await
+            .unwrap();
+
+        let initial_events = drain_receiver(receiver).await;
+        assert_eq!(initial_events.len(), 2);
+        assert_eq!(initial_events[0].event_id.as_deref(), Some("0/0"));
+        assert_eq!(initial_events[1].event_id.as_deref(), Some("1/0"));
+        assert!(matches!(
+            initial_events[1].message.as_deref(),
+            Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+        ));
+
+        assert!(worker.resource_router.is_empty());
+        assert!(
+            worker
+                .tx_router
+                .get(&http_request_id)
+                .is_some_and(|ch| ch.completed_at.is_some())
+        );
+
+        let close_err = worker
+            .close_sse_stream(Some(http_request_id), Some(Duration::from_secs(1)))
+            .await
+            .unwrap_err();
+        assert!(matches!(close_err, SessionError::ChannelClosed(Some(0))));
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed
+                .iter()
+                .all(|ev| ev.retry != Some(Duration::from_secs(1))),
+            "closing an already-completed channel must not append priming events"
+        );
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("1/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+                    )
+            }),
+            "expected response 1/0 to be replayed on resume, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_error_response_retains_cache_for_resume() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(3);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::error(
+                ErrorData::internal_error("boom", None),
+                Some(req_id.clone()),
+            ))
+            .await
+            .unwrap();
+
+        let initial_events = drain_receiver(receiver).await;
+        assert_eq!(initial_events.len(), 2);
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("1/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Error(err)) if err.id.as_ref() == Some(&req_id)
+                    )
+            }),
+            "expected error response 1/0 to be replayed on resume, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_after_close_sse_stream_replays_completed_response() {
+        let (_handle, mut worker) = create_local_session("test-session", SessionConfig::default());
+        let receiver = worker.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(4);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), http_request_id);
+
+        worker
+            .close_sse_stream(Some(http_request_id), Some(Duration::from_millis(50)))
+            .await
+            .unwrap();
+        let disconnected = drain_receiver(receiver).await;
+        assert_eq!(disconnected.len(), 2);
+        assert_eq!(disconnected[0].event_id.as_deref(), Some("0/0"));
+        assert_eq!(disconnected[1].event_id.as_deref(), Some("1/0"));
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id.clone(),
+            ))
+            .await
+            .unwrap();
+
+        let resumed = worker
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 1,
+            })
+            .await
+            .unwrap();
+        let replayed = drain_receiver(resumed).await;
+        assert!(
+            replayed.iter().any(|ev| {
+                ev.event_id.as_deref() == Some("2/0")
+                    && matches!(
+                        ev.message.as_deref(),
+                        Some(ServerJsonRpcMessage::Response(resp)) if resp.id == req_id
+                    )
+            }),
+            "expected response 2/0 to be replayed after close_sse_stream, got: {replayed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_evicts_expired_completed_channel_without_other_events() {
+        let config = SessionConfig {
+            completed_cache_ttl: Duration::ZERO,
+            ..SessionConfig::default()
+        };
+        let (_handle, mut worker) = create_local_session("test-session", config);
+        let _receiver = worker.establish_request_wise_channel().await.unwrap();
+        let req_id = RequestId::Number(5);
+        worker.register_resource(ResourceKey::McpRequestId(req_id.clone()), 0);
+
+        worker
+            .handle_server_message(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let err = worker
+            .resume(EventId {
+                http_request_id: Some(0),
+                index: 0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::ChannelClosed(Some(0))));
+        assert!(worker.tx_router.is_empty());
+    }
+
+    struct DropDetector(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropDetector {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Clone)]
+    #[allow(dead_code)]
+    struct DropFlag(Arc<DropDetector>);
+
+    async fn spawn_initialized_session(
+        config: SessionConfig,
+    ) -> (LocalSessionHandle, WorkerTransport<LocalSessionWorker>) {
+        use crate::{
+            model::{
+                ClientCapabilities, Implementation, InitializeRequest, InitializeRequestParams,
+                InitializeResult, ProtocolVersion, ServerCapabilities,
+            },
+            transport::Transport,
+        };
+
+        let (handle, worker) = create_local_session("test-session", config);
+        let mut transport = WorkerTransport::spawn(worker);
+        let init_handle = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                let init_req = ClientJsonRpcMessage::request(
+                    ClientRequest::InitializeRequest(InitializeRequest::new(
+                        InitializeRequestParams::new(
+                            ClientCapabilities::default(),
+                            Implementation::new("test", "1.0"),
+                        ),
+                    )),
+                    RequestId::Number(1),
+                );
+                handle.initialize(init_req).await
+            }
+        });
+        let received = transport.receive().await.expect("initialize forwarded");
+        assert!(matches!(received, ClientJsonRpcMessage::Request(_)));
+        transport
+            .send(ServerJsonRpcMessage::response(
+                crate::model::ServerResult::InitializeResult(
+                    InitializeResult::new(ServerCapabilities::default())
+                        .with_protocol_version(ProtocolVersion::default()),
+                ),
+                RequestId::Number(1),
+            ))
+            .await
+            .unwrap();
+        init_handle.await.unwrap().unwrap();
+        (handle, transport)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_session_evicts_completed_cache_at_ttl_without_keep_alive() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{
+            model::{PingRequest, ServerRequest},
+            service::OriginatingRequestId,
+            transport::Transport,
+        };
+
+        let config = SessionConfig {
+            keep_alive: None,
+            completed_cache_ttl: Duration::from_secs(60),
+            ..SessionConfig::default()
+        };
+        let (handle, mut transport) = spawn_initialized_session(config).await;
+
+        let receiver = handle.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(2);
+        handle
+            .push_message(
+                ClientJsonRpcMessage::request(
+                    ClientRequest::PingRequest(PingRequest::default()),
+                    req_id.clone(),
+                ),
+                Some(http_request_id),
+            )
+            .await
+            .unwrap();
+        assert!(transport.receive().await.is_some());
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        #[expect(
+            deprecated,
+            reason = "roots is SEP-2577-deprecated; any restricted request works here"
+        )]
+        let mut associated = crate::model::ListRootsRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        };
+        associated
+            .extensions
+            .insert(OriginatingRequestId(req_id.clone()));
+        associated
+            .extensions
+            .insert(DropFlag(Arc::new(DropDetector(dropped.clone()))));
+        transport
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::ListRootsRequest(associated),
+                RequestId::Number(100),
+            ))
+            .await
+            .unwrap();
+
+        transport
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let events = drain_receiver(receiver).await;
+        assert_eq!(events.len(), 3);
+        drop(events);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(59)).await;
+        tokio::task::yield_now().await;
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "completed cache must be evicted at TTL even when idle without keep_alive"
+        );
+
+        let err = handle
+            .resume(EventId {
+                http_request_id: Some(http_request_id),
+                index: 0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::ChannelClosed(Some(id)) if id == http_request_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_cache_eviction_does_not_extend_keep_alive_timeout() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::{
+            model::{PingRequest, ServerRequest},
+            service::OriginatingRequestId,
+            transport::Transport,
+        };
+
+        let config = SessionConfig {
+            keep_alive: Some(Duration::from_secs(100)),
+            completed_cache_ttl: Duration::from_secs(60),
+            ..SessionConfig::default()
+        };
+        let (handle, mut transport) = spawn_initialized_session(config).await;
+
+        let receiver = handle.establish_request_wise_channel().await.unwrap();
+        let http_request_id = receiver.http_request_id.unwrap();
+        let req_id = RequestId::Number(2);
+        handle
+            .push_message(
+                ClientJsonRpcMessage::request(
+                    ClientRequest::PingRequest(PingRequest::default()),
+                    req_id.clone(),
+                ),
+                Some(http_request_id),
+            )
+            .await
+            .unwrap();
+        assert!(transport.receive().await.is_some());
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        #[expect(
+            deprecated,
+            reason = "roots is SEP-2577-deprecated; any restricted request works here"
+        )]
+        let mut associated = crate::model::ListRootsRequest {
+            method: Default::default(),
+            extensions: Default::default(),
+        };
+        associated
+            .extensions
+            .insert(OriginatingRequestId(req_id.clone()));
+        associated
+            .extensions
+            .insert(DropFlag(Arc::new(DropDetector(dropped.clone()))));
+        transport
+            .send(ServerJsonRpcMessage::request(
+                ServerRequest::ListRootsRequest(associated),
+                RequestId::Number(100),
+            ))
+            .await
+            .unwrap();
+
+        transport
+            .send(ServerJsonRpcMessage::response(
+                ServerResult::EmptyResult(EmptyResult {}),
+                req_id,
+            ))
+            .await
+            .unwrap();
+
+        let events = drain_receiver(receiver).await;
+        assert_eq!(events.len(), 3);
+        drop(events);
+        assert!(!dropped.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "completed cache must be evicted at TTL"
+        );
+
+        tokio::time::advance(Duration::from_secs(40)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            transport.receive().await.is_none(),
+            "idle keep_alive timeout must not be extended by cache eviction wakeup"
+        );
+        drop(handle);
     }
 }

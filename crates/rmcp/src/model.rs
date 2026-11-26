@@ -1511,6 +1511,7 @@ pub struct DiscoverResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     /// How long clients may consider this response fresh, in milliseconds.
+    #[serde(deserialize_with = "deserialize_required_ttl_ms")]
     pub ttl_ms: u64,
     /// Whether the cached result may be shared across authorization contexts.
     pub cache_scope: CacheScope,
@@ -1884,17 +1885,32 @@ pub enum CacheScope {
     Private,
 }
 
-/// Normalize a `ttlMs` value during deserialization.
-///
-/// Per SEP-2549, `ttlMs` MUST be `>= 0`; if a server returns a negative value,
-/// clients SHOULD treat it as `0` (immediately stale). This tolerates that case
-/// rather than erroring, while still accepting an absent field as `None`.
+/// Truncate fractional milliseconds. Negative (SEP-2549) or out-of-range
+/// hints make the result immediately stale without discarding it.
+fn cache_ttl_ms(number: serde_json::Number) -> u64 {
+    if let Some(ms) = number.as_u64() {
+        return ms;
+    }
+    // u64::MAX rounds up to 2^64 as f64, so the upper bound is exclusive.
+    match number.as_f64() {
+        Some(ms) if (0.0..u64::MAX as f64).contains(&ms) => ms as u64,
+        _ => 0,
+    }
+}
+
+fn deserialize_required_ttl_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Number::deserialize(deserializer).map(cache_ttl_ms)
+}
+
 fn deserialize_ttl_ms<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = Option::<i64>::deserialize(deserializer)?;
-    Ok(value.map(|ttl_ms| ttl_ms.max(0) as u64))
+    let value = Option::<serde_json::Number>::deserialize(deserializer)?;
+    Ok(value.map(cache_ttl_ms))
 }
 
 /// Normalize a `cacheScope` value during deserialization.
@@ -4466,6 +4482,14 @@ impl CallToolResult {
         serde_json::from_value(serde_json::Value::Null)
     }
 }
+
+/// Default page cap for the `list_all_*` client helpers.
+///
+/// A server may keep returning `nextCursor` forever (the spec forbids the client
+/// from interpreting the cursor value, and `""` is a valid cursor), so an
+/// unbounded walk is a memory/latency hole. The value matches the TypeScript
+/// SDK's `listMaxPages` default of 64.
+pub const DEFAULT_LIST_ALL_MAX_PAGES: usize = 64;
 
 const_string!(ListToolsRequestMethod = "tools/list");
 /// Request to list all available tools from a server
