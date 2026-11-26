@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [4.0.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.11.0...rmcp-v4.0.0) - 2026-11-26
+## [3.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.11.0...rmcp-v3.12.0) - 2026-11-26
 
 ### Added
 
@@ -19,17 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(model)* keep typed results for numeric cache TTLs ([#1493](https://github.com/modelcontextprotocol/rust-sdk/pull/1493))
 - *(transport)* retain completed request-wise SSE cache for resume ([#1487](https://github.com/modelcontextprotocol/rust-sdk/pull/1487))
 - *(client)* treat a 404 on an SSE resume GET as session expired ([#1477](https://github.com/modelcontextprotocol/rust-sdk/pull/1477))
-- *(transport)* [**breaking**] preserve typed streamable-http startup errors ([#1441](https://github.com/modelcontextprotocol/rust-sdk/pull/1441)) ([#1444](https://github.com/modelcontextprotocol/rust-sdk/pull/1444))
 - *(macros)* keep doc comment descriptions when other attributes follow ([#1485](https://github.com/modelcontextprotocol/rust-sdk/pull/1485))
 - *(model)* keep unknown capability fields on ServerCapabilities and ClientCapabilities ([#1468](https://github.com/modelcontextprotocol/rust-sdk/pull/1468))
 - *(auth)* accept same-origin issuers at any address ([#1467](https://github.com/modelcontextprotocol/rust-sdk/pull/1467))
 - *(transport)* answer malformed Streamable HTTP bodies with 400 ([#1464](https://github.com/modelcontextprotocol/rust-sdk/pull/1464))
 - *(server)* omit cache hints for legacy peers ([#1470](https://github.com/modelcontextprotocol/rust-sdk/pull/1470))
 - *(client)* ignore late discovery replies after legacy fallback ([#1436](https://github.com/modelcontextprotocol/rust-sdk/pull/1436))
-
-### Other
-
-- Revert "fix(transport): retain terminal cause for startup failures ([#1441](https://github.com/modelcontextprotocol/rust-sdk/pull/1441))" ([#1499](https://github.com/modelcontextprotocol/rust-sdk/pull/1499))
 
 ## [3.11.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.10.0...rmcp-v3.11.0) - 2026-11-17
 
