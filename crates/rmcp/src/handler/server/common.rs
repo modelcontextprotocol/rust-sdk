@@ -9,7 +9,10 @@ use std::{
 use schemars::JsonSchema;
 
 use crate::{
-    RoleServer, model::JsonObject, schemars::generate::SchemaSettings, service::RequestContext,
+    ErrorData, RoleServer,
+    model::{JsonObject, PaginatedRequestParams},
+    schemars::generate::SchemaSettings,
+    service::RequestContext,
 };
 
 /// Generates a JSON schema for a type, for the deserialize contract (what the type accepts).
@@ -162,6 +165,17 @@ pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
 
         schema
     })
+}
+
+/// Rejects a pagination cursor for a list that is always served as one page.
+pub fn reject_cursor(request: Option<&PaginatedRequestParams>) -> Result<(), ErrorData> {
+    match request.and_then(|request| request.cursor.as_ref()) {
+        Some(_) => Err(ErrorData::invalid_params(
+            "this list is not paginated, so the server issued no cursor",
+            None,
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Trait for extracting parts from a context, unifying tool and prompt extraction

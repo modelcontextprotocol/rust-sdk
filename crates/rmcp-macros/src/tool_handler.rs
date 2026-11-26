@@ -65,9 +65,10 @@ pub fn tool_handler(attr: TokenStream, input: TokenStream) -> syn::Result<TokenS
         let tool_list_fn = syn::parse2::<ImplItem>(quote! {
             async fn list_tools(
                 &self,
-                _request: Option<rmcp::model::PaginatedRequestParams>,
+                request: Option<rmcp::model::PaginatedRequestParams>,
                 context: rmcp::service::RequestContext<rmcp::RoleServer>,
             ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+                    rmcp::handler::server::common::reject_cursor(request.as_ref())?;
                 let supports_cache_hints = context.protocol_version().is_some_and(|version| {
                     version >= rmcp::model::ProtocolVersion::V_2026_07_28
                 });
