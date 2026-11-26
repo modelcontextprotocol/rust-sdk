@@ -1880,6 +1880,7 @@ See [Oauth_support](docs/OAUTH_SUPPORT.md) for details.
 ### Extending `rmcp`
 
 - [rmcp-actix-web](https://gitlab.com/lx-industries/rmcp-actix-web) - An `actix_web` backend for `rmcp`
+- [rmcp-apps](https://gitlab.com/lx-industries/rmcp-apps) - Typed MCP Apps extension (`io.modelcontextprotocol/ui`) for `rmcp`
 - [rmcp-openapi](https://gitlab.com/lx-industries/rmcp-openapi) - Transform OpenAPI definition endpoints into MCP tools
 
 ### Built with `rmcp`
