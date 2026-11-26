@@ -4,6 +4,7 @@
 
 mod error;
 pub use error::{ErrorData, RmcpError};
+mod time;
 
 /// Basic data types in MCP specification
 pub mod model;
