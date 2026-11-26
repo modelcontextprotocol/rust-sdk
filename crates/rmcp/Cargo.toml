@@ -34,6 +34,7 @@ features = [
   "server",
   "server-side-http",
   "tower",
+  "tool-search",
   "transport-async-rw",
   "transport-child-process",
   "transport-io",
@@ -139,6 +140,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = tr
 default = ["base64", "chrono", "macros", "server"]
 local = ["rmcp-macros?/local"]
 client = ["dep:tokio-stream"]
+tool-search = []
 server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
 macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
