@@ -82,6 +82,8 @@ impl SkillResource {
     }
 
     /// Describe `bytes` as the file at `uri`, with its digest and size computed.
+    #[cfg(feature = "skill-digest")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "skill-digest")))]
     pub fn from_bytes(uri: impl Into<String>, bytes: &[u8]) -> Self {
         Self::new(uri, sha256_digest(bytes), bytes.len() as u64)
     }
@@ -91,6 +93,8 @@ impl SkillResource {
     /// Compare the size first, so a wrong length is reported without hashing.
     /// Whether the frontmatter in the bytes matches `skills/get` is the host's
     /// check, not this one.
+    #[cfg(feature = "skill-digest")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "skill-digest")))]
     pub fn verify(&self, bytes: &[u8]) -> Result<(), SkillIntegrityError> {
         let size = bytes.len() as u64;
         if size != self.size {
@@ -113,6 +117,8 @@ impl SkillResource {
 }
 
 /// The `sha256:` digest of `bytes` in the form the spec requires.
+#[cfg(feature = "skill-digest")]
+#[cfg_attr(docsrs, doc(cfg(feature = "skill-digest")))]
 pub fn sha256_digest(bytes: &[u8]) -> String {
     use std::fmt::Write;
 
@@ -128,6 +134,8 @@ pub fn sha256_digest(bytes: &[u8]) -> String {
 }
 
 /// File bytes that do not match the manifest entry.
+#[cfg(feature = "skill-digest")]
+#[cfg_attr(docsrs, doc(cfg(feature = "skill-digest")))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SkillIntegrityError {
@@ -618,12 +626,15 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "skill-digest")]
     /// The `pdf-processing` SKILL.md from the spec, whose digest and size the
     /// spec's example manifest lists.
     const SPEC_SKILL_MD: &[u8] = b"---\nname: pdf-processing\ndescription: Extract, fill, and assemble PDF documents\n---\n\n# PDF processing\n\nChoose the matching template from `templates/`.\n";
+    #[cfg(feature = "skill-digest")]
     const SPEC_SKILL_MD_DIGEST: &str =
         "sha256:99b737495721155ece826d57521e2d66141ebdc1344a400487481ea2642ab19e";
 
+    #[cfg(feature = "skill-digest")]
     mod sha256_digest {
         use super::*;
 
@@ -633,6 +644,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "skill-digest")]
     mod skill_resource_verify {
         use super::*;
 
@@ -670,6 +682,14 @@ mod tests {
             let entry = SkillResource::from_bytes("skill://pdf-processing/SKILL.md", SPEC_SKILL_MD);
             assert_eq!(entry, spec_entry());
         }
+    }
+
+    fn manifest_entry(uri: impl Into<String>) -> SkillResource {
+        SkillResource::new(
+            uri,
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            0,
+        )
     }
 
     mod skill_name_from_uri {
@@ -804,7 +824,7 @@ mod tests {
                 let skill = Skill::new(
                     uri,
                     SkillFrontmatter::new("résumé", "Résumé templates"),
-                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                    SkillResources::Files(vec![manifest_entry(uri)]),
                 );
                 assert_eq!(skill.validate(), Ok(()), "{uri}");
             }
@@ -918,8 +938,7 @@ mod tests {
 
         #[test]
         fn rejects_two_spellings_of_the_same_manifest_file() {
-            let file =
-                |path: &str| SkillResource::from_bytes(format!("skill://acme/billing/{path}"), b"");
+            let file = |path: &str| manifest_entry(format!("skill://acme/billing/{path}"));
             let mut skill = billing_skill();
             let entry = file("SKILL.md");
             let alias = file("refs/../%69nvoice.md");
@@ -941,10 +960,7 @@ mod tests {
                 let skill = Skill::new(
                     uri,
                     SkillFrontmatter::new("résumé", "Résumé templates"),
-                    SkillResources::Files(vec![
-                        SkillResource::from_bytes(uri, b""),
-                        SkillResource::from_bytes(resource, b""),
-                    ]),
+                    SkillResources::Files(vec![manifest_entry(uri), manifest_entry(resource)]),
                 );
                 assert_eq!(skill.validate(), Ok(()), "{resource}");
             }
@@ -955,9 +971,8 @@ mod tests {
             let skill = Skill::new(
                 "skill://team/r%C3%A9sum%C3%A9/SKILL.md",
                 SkillFrontmatter::new("résumé", "Résumé templates"),
-                SkillResources::Files(vec![SkillResource::from_bytes(
+                SkillResources::Files(vec![manifest_entry(
                     "skill://team/r%c3%a9sum%c3%a9/SKILL.md",
-                    b"",
                 )]),
             );
             assert!(matches!(
@@ -968,8 +983,7 @@ mod tests {
 
         #[test]
         fn rejects_a_literal_space_alias_of_an_encoded_file() {
-            let file =
-                |path: &str| SkillResource::from_bytes(format!("skill://acme/billing/{path}"), b"");
+            let file = |path: &str| manifest_entry(format!("skill://acme/billing/{path}"));
             let mut skill = billing_skill();
             let alias = file("my notes.md");
             skill.resources =
@@ -1003,7 +1017,7 @@ mod tests {
                 Skill::new(
                     uri,
                     SkillFrontmatter::new("cafe", "Coffee recipes"),
-                    SkillResources::Files(vec![SkillResource::from_bytes(uri, b"")]),
+                    SkillResources::Files(vec![manifest_entry(uri)]),
                 )
             });
             assert_eq!(validate_skills(&skills), Ok(()));

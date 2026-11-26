@@ -27,7 +27,8 @@ For **getting started**, **usage guides**, and **full MCP feature documentation*
 | `auth` | OAuth 2.0 authentication support | |
 | `auth-enterprise-managed` | EMA/XAA refresh-token and ID-JAG exchanges for registered public and confidential clients (includes `auth`) | |
 | `elicitation` | Elicitation support | |
-| `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`) | |
+| `skill-digest` | Compute and verify SEP-2640 skill file digests | ✅ |
+| `skills-fs` | Serve SEP-2640 skills from a directory tree (`SkillCatalog`, includes `skill-digest`) | |
 
 ### Transport features
 
@@ -68,6 +69,20 @@ available; `Annotations::with_timestamp_now` and the public `last_modified` fiel
 string) still work. The `auth` features still pull chrono in through `oauth2` 5, and
 `cargo tree -i chrono` shows whether anything else does. `chrono` is planned to leave the
 default features in the next major release.
+
+### Building without skill digests
+
+A Streamable HTTP client with its own HTTP backend can omit the default
+`skill-digest` feature:
+
+```toml
+[dependencies]
+rmcp = { version = "3", default-features = false, features = ["client", "transport-streamable-http-client"] }
+```
+
+The skills protocol and digest format validation still work. Enable
+`skill-digest` to use `sha256_digest`, `SkillResource::from_bytes`, or
+`SkillResource::verify`. Both `skill-digest` and `request-state` pull in `sha2`.
 
 ## Transports
 

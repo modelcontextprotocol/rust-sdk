@@ -33,6 +33,7 @@ features = [
   "schemars",
   "server",
   "server-side-http",
+  "skill-digest",
   "tower",
   "transport-async-rw",
   "transport-child-process",
@@ -74,7 +75,7 @@ schemars = { version = "1.0", optional = true }
 base64 = { version = "0.23", optional = true }
 
 # SHA-256 for SEP-2640 skill digests and SEP-2322 requestState sealing
-sha2 = "0.11"
+sha2 = { version = "0.11", optional = true }
 
 # SKILL.md frontmatter for the `skills-fs` catalog
 yaml_serde = { version = "0.10", optional = true }
@@ -136,7 +137,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = true }
 
 [features]
-default = ["base64", "chrono", "macros", "server"]
+default = ["base64", "chrono", "macros", "server", "skill-digest"]
 local = ["rmcp-macros?/local"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
@@ -144,8 +145,10 @@ macros = ["dep:rmcp-macros", "dep:pastey"]
 elicitation = ["dep:url"]
 
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
-request-state = ["dep:hmac", "dep:zeroize", "base64"]
-skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde", "dep:windows-sys"]
+request-state = ["dep:hmac", "dep:sha2", "dep:zeroize", "base64"]
+# Compute and verify SEP-2640 file digests independently of the filesystem catalog.
+skill-digest = ["dep:sha2"]
+skills-fs = ["server", "base64", "skill-digest", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde", "dep:windows-sys"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]

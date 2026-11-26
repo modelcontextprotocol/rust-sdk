@@ -21,6 +21,7 @@ rmcp = { path = "../crates/rmcp", features = [
     "auth-client-credentials-jwt",
     "auth-enterprise-managed",
     "request-state",
+    "skill-digest",
     "transport-streamable-http-server",
     "transport-streamable-http-client-reqwest",
 ] }
