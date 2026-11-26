@@ -29,6 +29,9 @@ pub struct ClientCacheConfig {
     /// The default is zero, which leaves such responses immediately stale.
     pub default_ttl: Duration,
     /// Upper bound applied to both server-provided and default TTLs.
+    ///
+    /// A value of zero disables caching; any successful refresh with an effective
+    /// TTL of zero also evicts any stale entry retained for that key.
     pub max_ttl: Duration,
     /// Stable opaque identity for the current authorization context.
     ///
@@ -80,6 +83,9 @@ impl ClientCacheConfig {
     }
 
     /// Sets the maximum TTL the client will honour.
+    ///
+    /// A zero duration disables caching and causes successful refreshes to evict
+    /// any stale cached entry for that key.
     pub fn with_max_ttl(mut self, max_ttl: Duration) -> Self {
         self.max_ttl = max_ttl;
         self
@@ -358,8 +364,6 @@ impl<R: ServiceRole> Peer<R> {
             return;
         }
         let Some(expires_at) = now.checked_add(ttl) else {
-            cache.entries.remove(&private_key);
-            cache.entries.remove(&public_key);
             return;
         };
         let scope = cache_scope.unwrap_or(CacheScope::Private);
@@ -477,6 +481,16 @@ mod tests {
         peer
     }
 
+    async fn expire_cached_entries(peer: &Peer<RoleClient>) {
+        let mut cache = peer.response_cache.write().await;
+        for entry in cache.entries.values_mut() {
+            entry.expires_at = entry
+                .inserted_at
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or(entry.inserted_at);
+        }
+    }
+
     fn tools_result(
         name: &str,
         ttl_ms: Option<u64>,
@@ -498,15 +512,20 @@ mod tests {
         let params = None::<PaginatedRequestParams>;
         let key = list_response_cache_key(TOOL_LIST_CACHE_PREFIX, &params);
 
-        // Cache an initial response and let it expire while retained for stale fallback.
+        // Cache an initial response and expire it while retaining it for stale fallback.
         peer.cache_response(
             key.clone(),
-            ServerResult::ListToolsResult(tools_result("v1", Some(1), Some(CacheScope::Public))),
-            Some(1),
+            ServerResult::ListToolsResult(tools_result(
+                "v1",
+                Some(5_000),
+                Some(CacheScope::Public),
+            )),
+            Some(5_000),
             Some(CacheScope::Public),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        expire_cached_entries(&peer).await;
+        assert!(peer.cached_response(&key).await.is_none());
         assert!(peer.stale_cached_response(&key).await.is_some());
 
         // A subsequent successful re-fetch returns ttlMs = 0 ("do not cache").
@@ -538,14 +557,15 @@ mod tests {
             key.clone(),
             ServerResult::ListToolsResult(tools_result(
                 "public-v1",
-                Some(1),
+                Some(5_000),
                 Some(CacheScope::Public),
             )),
-            Some(1),
+            Some(5_000),
             Some(CacheScope::Public),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        expire_cached_entries(&peer).await;
+        assert!(peer.cached_response(&key).await.is_none());
         assert!(peer.stale_cached_response(&key).await.is_some());
 
         peer.cache_response(
@@ -562,14 +582,15 @@ mod tests {
             key.clone(),
             ServerResult::ListToolsResult(tools_result(
                 "private-v1",
-                Some(1),
+                Some(5_000),
                 Some(CacheScope::Private),
             )),
-            Some(1),
+            Some(5_000),
             Some(CacheScope::Private),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        expire_cached_entries(&peer).await;
+        assert!(peer.cached_response(&key).await.is_none());
         assert!(peer.stale_cached_response(&key).await.is_some());
 
         peer.cache_response(
@@ -589,12 +610,17 @@ mod tests {
 
         peer.cache_response(
             key.clone(),
-            ServerResult::ListToolsResult(tools_result("v1", Some(1), Some(CacheScope::Private))),
-            Some(1),
+            ServerResult::ListToolsResult(tools_result(
+                "v1",
+                Some(5_000),
+                Some(CacheScope::Private),
+            )),
+            Some(5_000),
             Some(CacheScope::Private),
         )
         .await;
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        expire_cached_entries(&peer).await;
+        assert!(peer.cached_response(&key).await.is_none());
         assert!(peer.stale_cached_response(&key).await.is_some());
 
         // Default config has default_ttl = Duration::ZERO, so omitting ttlMs yields effective TTL 0.
