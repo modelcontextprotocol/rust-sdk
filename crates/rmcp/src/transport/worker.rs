@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     sync::{
-        Arc, Mutex, PoisonError, Weak,
+        Arc, Mutex, OnceLock, PoisonError, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -25,6 +25,21 @@ pub enum WorkerQuitReason<E> {
     #[error("Transport fatal {error}, when {context}")]
     Fatal {
         error: E,
+        context: Cow<'static, str>,
+    },
+    /// The transport's startup handshake failed.
+    ///
+    /// Distinct from [`Fatal`](Self::Fatal): a startup failure is an ordinary,
+    /// often retryable lifecycle event (peer unreachable, TLS failure, an auth
+    /// challenge), not an internal fault.
+    ///
+    /// The cell contains the original error if it was not consumed by the
+    /// live sender. It can be filled after publication if an unread ack is
+    /// abandoned. The rendered detail is available regardless of ownership.
+    #[error("Startup failed {detail}, when {context}")]
+    StartupFailed {
+        error: Arc<OnceLock<E>>,
+        detail: String,
         context: Cow<'static, str>,
     },
     #[error("Transport cancelled")]
@@ -50,12 +65,32 @@ impl<E: std::error::Error + Send + 'static> WorkerQuitReason<E> {
             context: context.into(),
         }
     }
+    /// A startup failure whose typed error is retained here.
+    ///
+    /// Use this when the error has no other home: the live ack was never
+    /// delivered (waiter already gone), or the failure was detected after the
+    /// ack window (e.g. while processing the initialize response).
+    pub fn startup_failed(error: E, context: impl Into<Cow<'static, str>>) -> Self {
+        Self::StartupFailed {
+            detail: error.to_string(),
+            error: Arc::new(OnceLock::from(error)),
+            context: context.into(),
+        }
+    }
+    pub fn startup_failed_context(context: impl Into<Cow<'static, str>>) -> impl FnOnce(E) -> Self {
+        |e| Self::startup_failed(e, context)
+    }
 }
 
 pub trait Worker: Sized + Send + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
     type Role: ServiceRole;
     fn err_closed() -> Self::Error;
+    /// Whether this is the synthetic error produced when the worker's channel
+    /// closes, rather than a real transport failure delivered by the worker.
+    fn is_closed_error(_error: &Self::Error) -> bool {
+        false
+    }
     fn err_join(e: tokio::task::JoinError) -> Self::Error;
     fn run(
         self,
@@ -135,6 +170,8 @@ pub struct WorkerSendRequest<W: Worker> {
     pub responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
     cancellation: Option<Arc<RequestCancellationRegistration>>,
     control_generation: u64,
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) ack_id: u64,
 }
 
 impl<W: Worker> WorkerSendRequest<W> {
@@ -166,13 +203,100 @@ impl<W: Worker> WorkerSendRequest<W> {
     }
 }
 
+/// A retained worker terminal reason, shared via `Arc` so it can outlive the
+/// single fire-and-forget ack delivery window.
+///
+/// Boxed into [`DynamicTransportError`](crate::transport::DynamicTransportError)
+/// by [`Transport::quit_status`].
+/// Callers can downcast to this type to recover the `Arc<WorkerQuitReason<E>>`
+/// (and thus the typed `E`), or walk [`std::error::Error::source`] to reach the
+/// inner typed error directly — preserving source-only data such as an auth challenge.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RetainedQuitReason<E>(pub Arc<WorkerQuitReason<E>>);
+
+impl<E> RetainedQuitReason<E> {
+    /// The typed error behind an abnormal quit, if this reason carries one.
+    ///
+    /// Startup failures retain their error only when the live ack was never
+    /// delivered (the waiter already owns it otherwise); fatal errors always
+    /// own theirs. Normal shutdown reasons (cancel, clean close, handler
+    /// termination, idle timeout) carry no diagnostic error and return `None`.
+    ///
+    /// This backs [`DynamicTransportError::downcast_ref`], letting callers
+    /// reach the same `&E` on the retained path as on the live-ack path.
+    ///
+    /// [`DynamicTransportError::downcast_ref`]: crate::transport::DynamicTransportError::downcast_ref
+    pub fn startup_error(&self) -> Option<&E> {
+        match self.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => error.get(),
+            WorkerQuitReason::Fatal { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl<E: std::error::Error + Send + 'static> std::fmt::Display for RetainedQuitReason<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.0.as_ref(), f)
+    }
+}
+
+impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for RetainedQuitReason<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => {
+                error.get().map(|e| e as &(dyn std::error::Error + 'static))
+            }
+            WorkerQuitReason::Fatal { error, .. } => Some(error),
+            WorkerQuitReason::Join(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+type WorkerJoinHandle<E> = tokio::task::JoinHandle<Result<(), Arc<WorkerQuitReason<E>>>>;
+
+// At most one startup ack terminates a worker. Register the recovery cell
+// before sending that ack. Normal sends need no extra channel or allocation.
+type TerminalAck<E> = Arc<OnceLock<(u64, Arc<OnceLock<E>>)>>;
+
+struct AckReceiver<E> {
+    receiver: tokio::sync::oneshot::Receiver<Result<(), E>>,
+    id: u64,
+    terminal: TerminalAck<E>,
+}
+
+impl<E> Drop for AckReceiver<E> {
+    fn drop(&mut self) {
+        if self.receiver.is_terminated() {
+            return;
+        }
+        // Close first: either send fails and returns the value to the worker,
+        // or it succeeded and we can drain its unread value here.
+        self.receiver.close();
+        if let Ok(Err(error)) = self.receiver.try_recv()
+            && let Some((id, cell)) = self.terminal.get()
+            && *id == self.id
+        {
+            let _ = cell.set(error);
+        }
+    }
+}
+
 pub struct WorkerTransport<W: Worker> {
     rx: tokio::sync::mpsc::Receiver<RxJsonRpcMessage<W::Role>>,
     send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     control_send_service: tokio::sync::mpsc::Sender<WorkerSendRequest<W>>,
     request_cancellations: RequestCancellations,
     control_generation: Arc<AtomicU64>,
-    join_handle: Option<tokio::task::JoinHandle<Result<(), WorkerQuitReason<W::Error>>>>,
+    next_ack_id: u64,
+    terminal_ack: TerminalAck<W::Error>,
+    join_handle: Option<WorkerJoinHandle<W::Error>>,
+    /// Retained terminal status of the worker, written exactly once when its
+    /// task quits. Lets an observer whose own timeout has already fired still
+    /// learn why the worker died, rather than relying on a delivery window.
+    quit_status: tokio::sync::watch::Receiver<Option<Arc<WorkerQuitReason<W::Error>>>>,
     _drop_guard: tokio_util::sync::DropGuard,
     ct: CancellationToken,
 }
@@ -218,7 +342,10 @@ impl<W: Worker> WorkerTransport<W> {
             tokio::sync::mpsc::channel::<RxJsonRpcMessage<W::Role>>(config.channel_buffer_capacity);
         let request_cancellations = RequestCancellations::default();
         let control_generation = Arc::new(AtomicU64::new(0));
+        let terminal_ack = TerminalAck::default();
         let context = WorkerContext {
+            #[cfg(feature = "transport-streamable-http-client")]
+            terminal_ack: terminal_ack.clone(),
             to_handler_tx,
             from_handler_rx,
             control_from_handler_rx,
@@ -226,16 +353,33 @@ impl<W: Worker> WorkerTransport<W> {
             cancellation_token: transport_task_ct.clone(),
         };
 
+        // Retained terminal status: written once when the worker task finishes,
+        // so the quit reason is not lost when no `Transport::close()` is pending
+        // at the moment the worker dies. The reason is shared via `Arc` so both
+        // the join handle (consumed by close()) and late observers can read it.
+        let (quit_status_tx, quit_status) = tokio::sync::watch::channel(None);
+
         let join_handle = tokio::spawn(async move {
-            worker
+            // Hold the input channel open until the terminal status is
+            // published: `run()` drops its `WorkerContext` (and thus
+            // `to_handler_tx`) on return, so without this a concurrently polled
+            // `receive()` could observe EOF and read `quit_status()` as `None`
+            // before the watch write lands. Keeping a clone alive until after
+            // the write orders EOF after the status is visible.
+            let keep_input_open = context.to_handler_tx.clone();
+            let result = worker
                 .run(context)
                 .instrument(tracing::span!(
                     Level::TRACE,
                     "transport_worker",
                     name = worker_name,
                 ))
-                .await
-                .inspect_err(|e| match e {
+                .await;
+            match &result {
+                Ok(()) => {
+                    tracing::debug!("worker quit");
+                }
+                Err(e) => match e {
                     WorkerQuitReason::Cancelled
                     | WorkerQuitReason::TransportClosed
                     | WorkerQuitReason::HandlerTerminated
@@ -245,13 +389,37 @@ impl<W: Worker> WorkerTransport<W> {
                     WorkerQuitReason::Join(e) => {
                         tracing::error!("worker quit with join error: {:?}", e);
                     }
+                    WorkerQuitReason::StartupFailed {
+                        detail, context, ..
+                    } => {
+                        // A startup failure is an ordinary lifecycle event
+                        // (peer unreachable, TLS failure, auth challenge), not
+                        // an internal fault — log at warn, not error. `detail`
+                        // keeps the full cause even when the typed error went
+                        // to a delivered ack instead of this reason.
+                        tracing::warn!("worker startup failed: {detail}, when {context}");
+                    }
                     WorkerQuitReason::Fatal { error, context } => {
                         tracing::error!("worker quit with fatal: {error}, when {context}");
                     }
-                })
-                .inspect(|_| {
-                    tracing::debug!("worker quit");
-                })
+                },
+            }
+            // Retain the terminal reason for late observers; the same value is
+            // shared with the join handle so close() can report join errors.
+            let quit = match result {
+                Ok(()) => {
+                    let _ = quit_status_tx.send(None);
+                    Ok(())
+                }
+                Err(e) => {
+                    let shared = Arc::new(e);
+                    let _ = quit_status_tx.send(Some(shared.clone()));
+                    Err(shared)
+                }
+            };
+            // Publish the status before the input channel closes.
+            drop(keep_input_open);
+            quit
         });
         Self {
             rx: from_transport_rx,
@@ -259,7 +427,10 @@ impl<W: Worker> WorkerTransport<W> {
             control_send_service: control_to_transport_tx,
             request_cancellations,
             control_generation,
+            next_ack_id: 0,
+            terminal_ack,
             join_handle: Some(join_handle),
+            quit_status,
             ct: transport_task_ct.clone(),
             _drop_guard: transport_task_ct.drop_guard(),
         }
@@ -292,6 +463,8 @@ pub struct SendRequest<W: Worker> {
 
 #[non_exhaustive]
 pub struct WorkerContext<W: Worker> {
+    #[cfg(feature = "transport-streamable-http-client")]
+    terminal_ack: TerminalAck<W::Error>,
     pub to_handler_tx: tokio::sync::mpsc::Sender<RxJsonRpcMessage<W::Role>>,
     pub from_handler_rx: tokio::sync::mpsc::Receiver<WorkerSendRequest<W>>,
     /// Messages selected by [`Worker::is_control_message`].
@@ -301,6 +474,31 @@ pub struct WorkerContext<W: Worker> {
 }
 
 impl<W: Worker> WorkerContext<W> {
+    /// Register the terminal receipt before the receiver can see the error.
+    #[cfg(feature = "transport-streamable-http-client")]
+    pub(crate) fn startup_failed(
+        &self,
+        id: u64,
+        responder: tokio::sync::oneshot::Sender<Result<(), W::Error>>,
+        error: W::Error,
+        context: &'static str,
+    ) -> WorkerQuitReason<W::Error> {
+        let (registered_id, cell) = self.terminal_ack.get_or_init(|| (id, Arc::default()));
+        let detail = error.to_string();
+        // Always deliver the live error. Only the registered ack owns the
+        // recovery slot, just as on the AckReceiver::drop side of the race.
+        if let Err(Err(unread)) = responder.send(Err(error))
+            && *registered_id == id
+        {
+            let _ = cell.set(unread);
+        }
+        WorkerQuitReason::StartupFailed {
+            error: Arc::clone(cell),
+            detail,
+            context: context.into(),
+        }
+    }
+
     /// Return the local generation that newly created sends will capture.
     ///
     /// Workers may use this value to check messages from an earlier connection
@@ -378,7 +576,16 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
             .as_ref()
             .map(|target| target.lifetime_token().drop_guard());
         let (responder, receiver) = tokio::sync::oneshot::channel();
+        let ack_id = self.next_ack_id;
+        self.next_ack_id = ack_id.wrapping_add(1);
+        let mut ack = AckReceiver {
+            receiver,
+            id: ack_id,
+            terminal: self.terminal_ack.clone(),
+        };
         let request = WorkerSendRequest {
+            #[cfg(feature = "transport-streamable-http-client")]
+            ack_id,
             message: item,
             responder,
             cancellation: registration,
@@ -389,7 +596,7 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
             let _cancellation_target = cancellation_target;
             let _target_guard = target_guard;
             tx.send(request).await.map_err(|_| W::err_closed())?;
-            receiver.await.map_err(|_| W::err_closed())??;
+            (&mut ack.receiver).await.map_err(|_| W::err_closed())??;
             if let Some(guard) = cancellation_guard {
                 let _ = guard.disarm();
             }
@@ -402,11 +609,49 @@ impl<W: Worker> Transport<W::Role> for WorkerTransport<W> {
     async fn close(&mut self) -> Result<(), Self::Error> {
         if let Some(handle) = self.join_handle.take() {
             self.ct.cancel();
-            let _quit_reason = handle.await.map_err(W::err_join)?;
+            // Await worker termination; the quit reason itself is retained in
+            // `quit_status` rather than moved out, so late observers can still
+            // read it after close() returns.
+            let _ = handle.await.map_err(W::err_join)?;
             Ok(())
         } else {
             Ok(())
         }
+    }
+
+    fn is_closed_error(error: &Self::Error) -> bool {
+        W::is_closed_error(error)
+    }
+
+    fn supports_quit_status(&self) -> bool {
+        true
+    }
+
+    fn quit_status(&self) -> Option<crate::transport::DynamicTransportError> {
+        let guard = self.quit_status.borrow();
+        let reason = guard.as_ref()?;
+        // Only report a cause for abnormal termination. Normal shutdown paths
+        // (cancel, clean transport close, handler termination, idle timeout)
+        // carry no diagnostic value and must not masquerade as a `Transport`
+        // quit reason on the service side.
+        match reason.as_ref() {
+            WorkerQuitReason::StartupFailed { .. }
+            | WorkerQuitReason::Fatal { .. }
+            | WorkerQuitReason::Join(_) => {}
+            WorkerQuitReason::Cancelled
+            | WorkerQuitReason::TransportClosed
+            | WorkerQuitReason::HandlerTerminated
+            | WorkerQuitReason::IdleTimeout(_) => return None,
+        }
+        // Retain the typed reason (not a stringified copy) so callers can still
+        // downcast to `WorkerQuitReason<W::Error>` and reach source-only data
+        // such as an auth challenge. The wrapper's `source()` exposes the inner
+        // typed error for source-chain walks like `is_authorization_required`.
+        Some(crate::transport::DynamicTransportError::from_parts(
+            Self::name(),
+            std::any::TypeId::of::<Self>(),
+            Box::new(RetainedQuitReason(reason.clone())),
+        ))
     }
 }
 
@@ -537,5 +782,90 @@ mod tests {
         assert!(Weak::ptr_eq(&registered, &Arc::downgrade(&current)));
         drop(current);
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "transport-streamable-http-client")]
+    #[tokio::test]
+    async fn duplicate_terminal_ack_still_delivers_the_live_error() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut transport = WorkerTransport::spawn(TestWorker(tx));
+        let context = rx.await.unwrap();
+        let (first, abandoned) = tokio::sync::oneshot::channel();
+        drop(abandoned);
+        context.startup_failed(1, first, io::ErrorKind::TimedOut.into(), "first");
+
+        let (second, live) = tokio::sync::oneshot::channel();
+        let reason = context.startup_failed(2, second, io::ErrorKind::BrokenPipe.into(), "second");
+        assert_eq!(
+            live.await.unwrap().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        let retained = RetainedQuitReason(Arc::new(reason));
+        assert_eq!(
+            retained.startup_error().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        transport.close().await.unwrap();
+    }
+
+    /// A worker whose startup fails must retain the real typed error in its
+    /// terminal status, so an observer whose own timeout already fired (no
+    /// pending `close()`) can still learn the cause. Regression for #1441.
+    #[tokio::test]
+    async fn startup_failure_is_retained_in_quit_status() {
+        struct StartupFailWorker;
+
+        impl Worker for StartupFailWorker {
+            type Error = io::Error;
+            type Role = RoleClient;
+
+            fn err_closed() -> Self::Error {
+                io::Error::other("worker closed")
+            }
+            fn err_join(error: tokio::task::JoinError) -> Self::Error {
+                io::Error::other(error)
+            }
+            async fn run(
+                self,
+                _context: WorkerContext<Self>,
+            ) -> Result<(), WorkerQuitReason<Self::Error>> {
+                Err(WorkerQuitReason::startup_failed(
+                    io::Error::new(io::ErrorKind::ConnectionRefused, "peer unreachable"),
+                    "startup request failed",
+                ))
+            }
+        }
+
+        let mut transport = WorkerTransport::spawn(StartupFailWorker);
+        // No close() pending — the worker dies on its own; the quit reason must
+        // still be observable afterwards.
+        assert!(transport.receive().await.is_none());
+        let status = transport.quit_status().expect("quit reason retained");
+        let text = status.to_string();
+        assert!(text.contains("Startup failed"), "got: {text}");
+        assert!(text.contains("peer unreachable"), "got: {text}");
+
+        // The unified accessor reaches the typed error through the retained
+        // wrapper — the same `&E` the live-ack path would expose. This goes
+        // through a real `WorkerTransport`, so it cannot regress silently the
+        // way a fake transport boxing the bare error would.
+        let typed = status
+            .downcast_ref::<WorkerTransport<StartupFailWorker>, RoleClient>()
+            .expect("downcast_ref reaches the typed error through the retained reason");
+        assert_eq!(typed.kind(), io::ErrorKind::ConnectionRefused);
+
+        // The retained reason is downcastable to the typed quit reason, not
+        // stringified — source-only data (here the io::Error kind) survives.
+        let retained = status
+            .error
+            .downcast::<RetainedQuitReason<io::Error>>()
+            .expect("typed reason downcast");
+        match retained.0.as_ref() {
+            WorkerQuitReason::StartupFailed { error, .. } => {
+                let error = error.get().expect("undelivered ack keeps the typed error");
+                assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+            }
+            other => panic!("expected StartupFailed, got {other:?}"),
+        }
     }
 }

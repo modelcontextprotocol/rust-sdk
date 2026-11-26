@@ -1223,6 +1223,9 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
     fn err_closed() -> Self::Error {
         StreamableHttpError::TransportChannelClosed
     }
+    fn is_closed_error(error: &Self::Error) -> bool {
+        matches!(error, StreamableHttpError::TransportChannelClosed)
+    }
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
         StreamableHttpError::TokioJoinError(e)
     }
@@ -1245,6 +1248,7 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
         let WorkerSendRequest {
             responder,
             message: startup_request,
+            ack_id,
             ..
         } = context.recv_from_handler().await?;
         let is_legacy_startup = matches!(
@@ -1279,15 +1283,15 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
             Ok(res) => {
                 let _ = responder.send(Ok(()));
                 res.expect_initialized::<C::Error>().await.map_err(
-                    WorkerQuitReason::fatal_context("process initialize response"),
+                    WorkerQuitReason::startup_failed_context("process initialize response"),
                 )?
             }
             Err(err) => {
-                let msg = format!("{:?}", err);
-                let _ = responder.send(Err(err));
-                return Err(WorkerQuitReason::fatal(
-                    StreamableHttpError::TransportChannelClosed,
-                    msg,
+                return Err(context.startup_failed(
+                    ack_id,
+                    responder,
+                    err,
+                    "startup request failed",
                 ));
             }
         };
@@ -1332,7 +1336,8 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                 &tool_header_cache,
                 &negotiated_version,
             );
-            self.client
+            let initialized_result = self
+                .client
                 .post_message_with_response_limits(
                     config.uri.clone(),
                     initialized_notification.message,
@@ -1342,13 +1347,15 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                     config.response_limits(),
                 )
                 .await
-                .map_err(WorkerQuitReason::fatal_context(
+                .and_then(|response| response.expect_accepted_or_json::<C::Error>());
+            if let Err(error) = initialized_result {
+                return Err(context.startup_failed(
+                    initialized_notification.ack_id,
+                    initialized_notification.responder,
+                    error,
                     "send initialized notification",
-                ))?
-                .expect_accepted_or_json::<C::Error>()
-                .map_err(WorkerQuitReason::fatal_context(
-                    "process initialized notification response",
-                ))?;
+                ));
+            }
             let _ = initialized_notification.responder.send(Ok(()));
         }
         #[expect(
