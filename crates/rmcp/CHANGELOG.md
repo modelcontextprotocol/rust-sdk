@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.12.0...rmcp-v3.12.1) - 2026-11-26
+
+### Other
+
+- mount Streamable HTTP examples with route_service ([#1490](https://github.com/modelcontextprotocol/rust-sdk/pull/1490))
+
 ## [3.12.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v3.11.0...rmcp-v3.12.0) - 2026-11-26
 
 ### Added
