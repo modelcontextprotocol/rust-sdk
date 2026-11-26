@@ -1,6 +1,6 @@
 //! SEP-2640 skills extension, end to end through `Peer` over a duplex transport.
 #![cfg(not(feature = "local"))]
-#![cfg(all(feature = "client", feature = "server"))]
+#![cfg(all(feature = "client", feature = "server", feature = "skill-digest"))]
 
 use std::sync::{
     Arc,

@@ -10,6 +10,7 @@ publish = false
 rmcp = { workspace = true, features = [
     "client",
     "reqwest",
+    "skill-digest",
     "transport-streamable-http-client-reqwest",
     "transport-child-process",
     "tower",
@@ -74,4 +75,5 @@ path = "src/subscriptions_streamhttp.rs"
 
 [[example]]
 name = "clients_skills_stdio"
+required-features = ["rmcp/skill-digest"]
 path = "src/skills_stdio.rs"
