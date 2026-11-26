@@ -2872,6 +2872,27 @@ impl AuthorizationManager {
         Some(issuer.to_string())
     }
 
+    /// Derive the issuer from a metadata URL as it was advertised, keeping its scheme and
+    /// authority as written (e.g. an explicit default port) for the RFC 8414 string comparison.
+    fn advertised_issuer_for_authorization_metadata_url(
+        advertised: &str,
+        discovery_url: &Url,
+    ) -> Option<String> {
+        fn authority_end(url: &str) -> Option<usize> {
+            let start = url.find("://")? + 3;
+            Some(
+                url[start..]
+                    .find(['/', '?', '#'])
+                    .map_or(url.len(), |offset| start + offset),
+            )
+        }
+
+        let normalized = Self::expected_issuer_for_authorization_metadata_url(discovery_url)?;
+        let advertised_origin = &advertised[..authority_end(advertised)?];
+        let issuer_path = &normalized[authority_end(&normalized)?..];
+        Some(format!("{advertised_origin}{issuer_path}"))
+    }
+
     fn issuer_identifiers_match(received_issuer: &str, expected_issuer: &str) -> bool {
         if received_issuer == expected_issuer {
             return true;
@@ -3008,10 +3029,13 @@ impl AuthorizationManager {
         }
 
         for candidate in &candidates {
-            let candidate_url = match Url::parse(candidate) {
-                Ok(url) => url,
+            // `Url` normalizes the identifier (e.g. drops an explicit default port), but
+            // RFC 8414 compares issuers as strings, so keep the advertised form when it
+            // is already absolute.
+            let (candidate_url, advertised_issuer) = match Url::parse(candidate) {
+                Ok(url) => (url, Some(candidate.as_str())),
                 Err(_) => match resource_metadata_url.join(candidate) {
-                    Ok(url) => url,
+                    Ok(url) => (url, None),
                     Err(e) => {
                         debug!("Failed to resolve authorization server URL `{candidate}`: {e}");
                         continue;
@@ -3029,8 +3053,14 @@ impl AuthorizationManager {
             }
 
             if candidate_url.path().contains("/.well-known/") {
+                let expected_issuer = advertised_issuer.and_then(|advertised| {
+                    Self::advertised_issuer_for_authorization_metadata_url(
+                        advertised,
+                        &candidate_url,
+                    )
+                });
                 if let Some(metadata) = self
-                    .fetch_authorization_metadata(&candidate_url, None)
+                    .fetch_authorization_metadata(&candidate_url, expected_issuer.as_deref())
                     .await?
                 {
                     return Ok(Some(metadata));
@@ -3041,7 +3071,10 @@ impl AuthorizationManager {
             // Discovery URL construction removes a non-root trailing slash. Keep the issuer
             // advertised by protected resource metadata for the exact RFC 8414 comparison.
             if let Some(metadata) = self
-                .try_discover_oauth_server(&candidate_url, Some(candidate_url.as_str()))
+                .try_discover_oauth_server(
+                    &candidate_url,
+                    Some(advertised_issuer.unwrap_or(candidate_url.as_str())),
+                )
                 .await?
             {
                 return Ok(Some(metadata));
@@ -5165,6 +5198,114 @@ mod tests {
                 Some("https://auth.example.com/tenant1/"),
                 Some("https://auth.example.com/.well-known/oauth-authorization-server/tenant1"),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_preserves_explicit_default_port_in_issuer() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com:443/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com:443/tenant1",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
+
+        assert_eq!(
+            (
+                metadata.issuer.as_deref(),
+                client.requests().last().map(|request| request.uri.as_str()),
+            ),
+            (
+                Some("https://auth.example.com:443/tenant1"),
+                Some("https://auth.example.com/.well-known/oauth-authorization-server/tenant1"),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_rejects_issuer_that_only_drops_advertised_port() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": ["https://auth.example.com:443/tenant1"]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com/tenant1",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        assert!(manager.resolve_metadata().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn protected_resource_metadata_preserves_explicit_default_port_in_well_known_url() {
+        let client = RecordingOAuthHttpClient::with_responses(vec![
+            empty_response(401),
+            http_response(
+                200,
+                serde_json::json!({
+                    "resource": "https://mcp.example.com/",
+                    "authorization_servers": [
+                        "https://auth.example.com:443/.well-known/oauth-authorization-server/tenant1"
+                    ]
+                }),
+            ),
+            http_response(
+                200,
+                serde_json::json!({
+                    "issuer": "https://auth.example.com:443/tenant1",
+                    "authorization_endpoint": "https://auth.example.com/tenant1/authorize",
+                    "token_endpoint": "https://auth.example.com/tenant1/token"
+                }),
+            ),
+        ]);
+        let manager = AuthorizationManager::new_with_oauth_http_client(
+            "https://mcp.example.com/",
+            Arc::new(client.clone()),
+        )
+        .await
+        .unwrap();
+
+        let metadata = manager.resolve_metadata().await.unwrap().metadata;
+
+        assert_eq!(
+            metadata.issuer.as_deref(),
+            Some("https://auth.example.com:443/tenant1")
         );
     }
 
