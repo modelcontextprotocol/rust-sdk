@@ -266,12 +266,12 @@ async fn spawn_server(
         let session_manager =
             Arc::new(LocalSessionManager::default().with_event_store(event_store));
         let service = StreamableHttpService::new(|| Ok(ProgressServer), session_manager, config);
-        axum::Router::new().nest_service("/mcp", service)
+        axum::Router::new().route_service("/mcp", service)
     } else {
         let session_manager =
             Arc::new(NeverSessionManager::default().with_event_store(event_store));
         let service = StreamableHttpService::new(|| Ok(ProgressServer), session_manager, config);
-        axum::Router::new().nest_service("/mcp", service)
+        axum::Router::new().route_service("/mcp", service)
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

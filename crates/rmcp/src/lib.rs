@@ -4,6 +4,7 @@
 
 mod error;
 pub use error::{ErrorData, RmcpError};
+mod time;
 
 #[cfg(feature = "events")]
 pub mod events;

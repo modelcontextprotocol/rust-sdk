@@ -43,7 +43,7 @@ pub const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 
 /// Helper to generate an ISO 8601 timestamp for task metadata.
 pub fn current_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339()
+    crate::time::now_rfc3339()
 }
 
 /// Handle passed to a running task operation, allowing it to surface

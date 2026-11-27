@@ -21,6 +21,7 @@ features = [
   "auth-client-credentials-jwt",
   "auth-enterprise-managed",
   "base64",
+  "chrono",
   "client",
   "client-side-sse",
   "elicitation",
@@ -70,7 +71,7 @@ oauth2 = { version = "5.0", optional = true, default-features = false }
 jsonwebtoken = { version = "11", optional = true, features = ["aws_lc_rs"] }
 
 # for auto generate schema
-schemars = { version = "1.0", optional = true, features = ["chrono04"] }
+schemars = { version = "1.0", optional = true }
 
 # for image encoding
 base64 = { version = "0.23", optional = true }
@@ -125,16 +126,9 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 
 # macro
 rmcp-macros = { workspace = true, optional = true }
-[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-chrono = { version = "0.4.38", default-features = false, features = ["serde", "now"] }
-
-[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-chrono = { version = "0.4.38", default-features = false, features = [
-  "serde",
-  "clock",
-  "std",
-  "oldtime",
-] }
+# timestamps; `chrono` only backs the optional chrono-typed builder methods
+jiff = { version = "1", default-features = false, features = ["std"] }
+chrono = { version = "0.4.38", optional = true, default-features = false, features = ["alloc"] }
 
 # the stdio pipe transport reopens `/proc/self/fd` with `O_NONBLOCK`;
 # the child process transport sends `SIGTERM` during graceful shutdown
@@ -145,7 +139,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation"], optional = true }
 
 [features]
-default = ["base64", "macros", "server"]
+default = ["base64", "chrono", "macros", "server"]
 local = ["rmcp-macros?/local"]
 client = ["dep:tokio-stream"]
 server = ["transport-async-rw", "schemars", "dep:pastey", "uuid"]
@@ -229,11 +223,13 @@ auth = ["dep:async-trait", "dep:oauth2", "__reqwest", "dep:url"]
 auth-client-credentials-jwt = ["auth", "dep:jsonwebtoken", "uuid"]
 auth-enterprise-managed = ["auth", "base64"]
 schemars = ["dep:schemars"]
+# `chrono::DateTime` arguments for the `Annotations` builders, plus schemars chrono support
+chrono = ["dep:chrono", "schemars?/chrono04"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
-schemars = { version = "1.1.0", features = ["chrono04"] }
+schemars = "1.1.0"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
