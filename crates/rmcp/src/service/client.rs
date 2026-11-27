@@ -678,6 +678,12 @@ impl Subscription {
                 .resource_subscriptions
                 .as_ref()
                 .is_some_and(|uris| uris.contains(&update.params.uri)),
+            #[cfg(feature = "events")]
+            ServerNotification::CustomNotification(notification)
+                if notification.method == crate::events::LIST_CHANGED =>
+            {
+                self.acknowledged.events_list_changed == Some(true)
+            }
             ServerNotification::SubscriptionsAcknowledgedNotification(_)
             | ServerNotification::CancelledNotification(_)
             | ServerNotification::ProgressNotification(_)

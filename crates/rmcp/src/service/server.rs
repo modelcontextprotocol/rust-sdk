@@ -51,6 +51,10 @@ impl ServiceRole for RoleServer {
         }
     }
 
+    fn outbound_subscription_id(notification: &Self::Not) -> Option<RequestId> {
+        notification.get_meta().subscription_id()
+    }
+
     fn enforce_outbound_request(peer: &Peer<Self>) -> Result<(), ServiceError> {
         // Same order as `RequestContext::protocol_version`: the version the
         // current request names wins. Outside a handler, fall back to the version
@@ -238,6 +242,16 @@ impl SubscriptionSink {
                     "notifications/tasks",
                 ));
             }
+            #[cfg(feature = "events")]
+            ServerNotification::CustomNotification(notification)
+                if notification.method == crate::events::LIST_CHANGED =>
+            {
+                if self.accepted.events_list_changed != Some(true) {
+                    return Err(SubscriptionSendError::NotificationNotAccepted(
+                        crate::events::LIST_CHANGED,
+                    ));
+                }
+            }
             ServerNotification::CustomNotification(_) => {
                 return Err(SubscriptionSendError::UnsupportedNotification(
                     "custom notification",
@@ -250,6 +264,14 @@ impl SubscriptionSink {
             .set_subscription_id(self.id.clone());
         self.peer.send_notification(notification).await?;
         Ok(())
+    }
+
+    #[cfg(feature = "events")]
+    pub(crate) async fn notify_events_list_changed(&self) -> Result<(), SubscriptionSendError> {
+        self.send(ServerNotification::CustomNotification(
+            crate::model::CustomNotification::new(crate::events::LIST_CHANGED, None),
+        ))
+        .await
     }
 
     /// Send `notifications/tools/list_changed`.

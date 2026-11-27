@@ -11,6 +11,7 @@
 
 use serde_json::Value;
 
+#[cfg(any(feature = "client-side-sse", feature = "server-side-http"))]
 use super::http_header::{
     BASE64_HEADER_PREFIX, BASE64_HEADER_SUFFIX, HEADER_MCP_METHOD, HEADER_MCP_NAME,
     HEADER_MCP_PARAM_PREFIX,
@@ -77,7 +78,7 @@ fn requires_base64(value: &str) -> bool {
 }
 
 /// RFC 9110 §5.6.2 token character.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(feature = "client-side-sse", feature = "events"))]
 fn is_tchar(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
@@ -159,7 +160,7 @@ fn value_at<'a>(arguments: &'a Value, path: &[&str]) -> Option<&'a Value> {
 /// applied only to primitive (`string`/`integer`/`boolean`) properties reached
 /// from the root through `properties` keys alone. Returns the offending reason
 /// on the first violation.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(feature = "client-side-sse", feature = "events"))]
 pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Result<(), String> {
     if input_schema.contains_key("x-mcp-header") {
         return Err("x-mcp-header must annotate a property, not the schema root".to_owned());
@@ -203,7 +204,7 @@ pub(crate) fn validate_param_header_annotations(input_schema: &JsonObject) -> Re
 ///
 /// `on_chain` says whether `schema` is the root or a property reached from it
 /// through `properties` keys alone.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(feature = "client-side-sse", feature = "events"))]
 fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
     schema.iter().any(|(key, value)| match key.as_str() {
         "x-mcp-header" => !on_chain,
@@ -218,7 +219,7 @@ fn has_off_chain_annotation(schema: &JsonObject, on_chain: bool) -> bool {
 }
 
 /// Like [`has_off_chain_annotation`] for each value of a name-to-schema map.
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(feature = "client-side-sse", feature = "events"))]
 fn schema_map_has_off_chain_annotation(map: &Value, on_chain: bool) -> bool {
     map.as_object().is_some_and(|map| {
         map.values()
@@ -226,7 +227,7 @@ fn schema_map_has_off_chain_annotation(map: &Value, on_chain: bool) -> bool {
     })
 }
 
-#[cfg(feature = "client-side-sse")]
+#[cfg(any(feature = "client-side-sse", feature = "events"))]
 fn subschema_has_off_chain_annotation(value: &Value, on_chain: bool) -> bool {
     match value {
         Value::Object(schema) => has_off_chain_annotation(schema, on_chain),
@@ -276,6 +277,15 @@ pub(crate) fn standard_request_headers(
     request: &Value,
     tool_schema: Option<&JsonObject>,
 ) -> Vec<(http::HeaderName, http::HeaderValue)> {
+    request_headers(request, tool_schema, None)
+}
+
+#[cfg(feature = "client-side-sse")]
+pub(crate) fn request_headers(
+    request: &Value,
+    schema: Option<&JsonObject>,
+    routing_name: Option<&str>,
+) -> Vec<(http::HeaderName, http::HeaderValue)> {
     use http::{HeaderName, HeaderValue};
 
     let mut out = Vec::new();
@@ -294,13 +304,13 @@ pub(crate) fn standard_request_headers(
     };
 
     push(HEADER_MCP_METHOD, method);
-    if let Some(name) = extract_name(method, params) {
-        push(HEADER_MCP_NAME, &encode_header_value(&name));
+    let core_name = extract_name(method, params);
+    if let Some(name) = routing_name.or(core_name.as_deref()) {
+        push(HEADER_MCP_NAME, &encode_header_value(name));
     }
 
-    if method == "tools/call"
-        && let (Some(schema), Some(arguments)) =
-            (tool_schema, params.and_then(|p| p.get("arguments")))
+    if (method == "tools/call" || routing_name.is_some())
+        && let (Some(schema), Some(arguments)) = (schema, params.and_then(|p| p.get("arguments")))
     {
         for (path, header) in param_header_annotations(schema) {
             let Some(arg) = value_at(arguments, &path) else {
@@ -340,7 +350,24 @@ pub(crate) fn validate_request_headers(
         Some(_) => {}
     }
 
-    if let Some(expected) = extract_name(method, params) {
+    validate_routing_headers(
+        headers,
+        method,
+        params,
+        extract_name(method, params).as_deref(),
+        tool_schema.filter(|_| method == "tools/call"),
+    )
+}
+
+#[cfg(feature = "server-side-http")]
+pub(crate) fn validate_routing_headers(
+    headers: &http::HeaderMap,
+    method: &str,
+    params: Option<&Value>,
+    name: Option<&str>,
+    schema: Option<&JsonObject>,
+) -> Result<(), String> {
+    if let Some(expected) = name {
         match header_str(headers, HEADER_MCP_NAME)? {
             None => return Err(format!("missing required Mcp-Name header for `{method}`")),
             Some(raw) => {
@@ -355,16 +382,14 @@ pub(crate) fn validate_request_headers(
         }
     }
 
-    if method == "tools/call"
-        && let Some(schema) = tool_schema
-    {
+    if let Some(schema) = schema {
         let arguments = params.and_then(|p| p.get("arguments"));
         for (path, header) in param_header_annotations(schema) {
             let prop = path.join(".");
             let full = format!("{HEADER_MCP_PARAM_PREFIX}{header}");
             let header_value = header_str(headers, &full)?;
             let arg = arguments.and_then(|a| value_at(a, &path));
-            let body_value = arg.filter(|v| !v.is_null()).and_then(primitive_to_string);
+            let body_value = arg.and_then(primitive_to_string);
 
             match (header_value, body_value) {
                 (None, None) => {}

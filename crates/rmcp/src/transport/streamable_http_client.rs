@@ -54,6 +54,28 @@ fn build_request_headers(
     if *version >= ProtocolVersion::STANDARD_HEADERS
         && let Ok(value) = serde_json::to_value(message)
     {
+        #[cfg(all(feature = "events", feature = "client"))]
+        if let ClientJsonRpcMessage::Request(request) = message
+            && let crate::model::ClientRequest::CustomRequest(custom) = &request.request
+            && let Some(schema) = custom
+                .extensions
+                .get::<crate::events::client::RoutingSchema>()
+        {
+            headers.retain(|name, _| {
+                name.as_str() != "mcp-name" && !name.as_str().starts_with("mcp-param-")
+            });
+            let name = custom
+                .params
+                .as_ref()
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str);
+            headers.extend(mcp_headers::request_headers(
+                &value,
+                schema.0.as_deref(),
+                name,
+            ));
+            return headers;
+        }
         let schema = value
             .get("method")
             .and_then(Value::as_str)

@@ -135,11 +135,34 @@ impl<H: ServerHandler> Service<RoleServer> for H {
             ClientRequest::InitializeRequest(request) => self
                 .initialize(request.params, context)
                 .await
-                .map(ServerResult::InitializeResult),
-            ClientRequest::DiscoverRequest(_request) => self
-                .discover(context)
-                .await
-                .map(ServerResult::DiscoverResult),
+                .map(|response| {
+                    #[cfg(feature = "events")]
+                    let response = {
+                        let mut response = response;
+                        crate::events::server::set_advertisement(
+                            self.events(),
+                            &mut response.capabilities,
+                            false,
+                        );
+                        response
+                    };
+                    ServerResult::InitializeResult(response)
+                }),
+            ClientRequest::DiscoverRequest(_request) => {
+                self.discover(context).await.map(|response| {
+                    #[cfg(feature = "events")]
+                    let response = {
+                        let mut response = response;
+                        crate::events::server::set_advertisement(
+                            self.events(),
+                            &mut response.capabilities,
+                            is_2026_07_28_or_later && requires_request_metadata,
+                        );
+                        response
+                    };
+                    ServerResult::DiscoverResult(response)
+                })
+            }
             ClientRequest::PingRequest(_request) => {
                 if !legacy_request {
                     Err(McpError::method_not_found::<PingRequestMethod>())
@@ -180,12 +203,38 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                     Err(McpError::method_not_found::<SubscriptionsListenRequestMethod>())
                 } else {
                     let requested = request.params.notifications;
-                    let Some(candidate) = self.accepted_subscription_filter(&requested) else {
+                    let candidate = self.accepted_subscription_filter(&requested);
+                    #[cfg(feature = "events")]
+                    let events = self.events();
+                    #[cfg(feature = "events")]
+                    let (candidate, watcher) = {
+                        let mut candidate = candidate;
+                        let mut watcher = None;
+                        if let Some(events) = events
+                            && is_2026_07_28_or_later
+                            && requested.events_list_changed == Some(true)
+                        {
+                            candidate.get_or_insert_default().events_list_changed = Some(true);
+                            watcher = Some((events, events.revision()));
+                        }
+                        (candidate, watcher)
+                    };
+                    let Some(candidate) = candidate else {
                         return Err(
                             McpError::method_not_found::<SubscriptionsListenRequestMethod>(),
                         );
                     };
                     let server_info = self.get_info();
+                    #[cfg(feature = "events")]
+                    let server_info = {
+                        let mut info = server_info;
+                        crate::events::server::set_advertisement(
+                            events,
+                            &mut info.capabilities,
+                            is_2026_07_28_or_later,
+                        );
+                        info
+                    };
                     let advertised = requested.supported_by(&server_info.capabilities);
                     let handler_accepted = requested.intersection(&candidate);
                     let accepted = handler_accepted.intersection(&advertised);
@@ -206,7 +255,22 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                         SubscriptionContext::establish(context, requested, accepted).await?;
                     // The 2026-07-28 schema defines a final result for graceful
                     // server teardown; explicit stdio cancellation remains a notification.
-                    self.listen(subscription).await.map(|()| {
+                    #[cfg(feature = "events")]
+                    let listener = if let Some((events, revision)) = watcher {
+                        let sink = subscription.sink().clone();
+                        let listener = self.listen(subscription);
+                        tokio::pin!(listener);
+                        tokio::select! {
+                            biased;
+                            result = &mut listener => result,
+                            () = events.notify(revision, sink) => listener.await,
+                        }
+                    } else {
+                        self.listen(subscription).await
+                    };
+                    #[cfg(not(feature = "events"))]
+                    let listener = self.listen(subscription).await;
+                    listener.map(|()| {
                         let mut result = SubscriptionsListenResult::complete(subscription_id);
                         result.meta.set_server_info(server_implementation);
                         ServerResult::SubscriptionsListenResult(result)
@@ -251,10 +315,24 @@ impl<H: ServerHandler> Service<RoleServer> for H {
                 .list_tools(request.params, context)
                 .await
                 .map(ServerResult::ListToolsResult),
-            ClientRequest::CustomRequest(request) => self
-                .on_custom_request(request, context)
-                .await
-                .map(ServerResult::CustomResult),
+            ClientRequest::CustomRequest(request) => {
+                #[cfg(feature = "events")]
+                if request.method.starts_with("events/")
+                    && let Some(events) = self.events()
+                {
+                    if !is_2026_07_28_or_later || !requires_request_metadata {
+                        return Err(crate::events::wire::EventsError::MethodNotFound.into());
+                    }
+                    return events
+                        .dispatch(request, context)
+                        .await
+                        .map(ServerResult::CustomResult)
+                        .map_err(Into::into);
+                }
+                self.on_custom_request(request, context)
+                    .await
+                    .map(ServerResult::CustomResult)
+            }
             ClientRequest::GetTaskRequest(request) => {
                 validate_tasks_capability::<GetTaskMethod, _>(self, &context)?;
                 self.get_task(request.params, context)
@@ -539,6 +617,9 @@ macro_rules! server_handler_methods {
         /// intersects the returned filter with both `requested` and the notification
         /// capabilities advertised by [`Self::get_info`] before acknowledging it.
         /// Categories that were not requested or advertised are always removed.
+        /// When `Self::events` installs the SDK Events runtime, it owns
+        /// `events_list_changed`: it accepts the category when requested on a
+        /// supported revision, even when this method returns `None`.
         fn accepted_subscription_filter(
             &self,
             requested: &SubscriptionFilter,
@@ -635,6 +716,18 @@ macro_rules! server_handler_methods {
         fn get_tool(&self, _name: &str) -> Option<Tool> {
             None
         }
+
+        /// Install the Events Beta runtime for modern discovery and dispatch.
+        ///
+        /// `Some` hands `events/*` to the SDK instead of `on_custom_request`.
+        /// The SDK generates the capability in modern `server/discover` only
+        /// and rejects legacy Events requests with JSON-RPC `-32601`.
+        /// `None` leaves custom dispatch and capability advertisement alone.
+        #[cfg(feature = "events")]
+        fn events(&self) -> Option<&crate::events::server::EventsServer> {
+            None
+        }
+
         fn on_custom_request(
             &self,
             request: CustomRequest,
@@ -915,6 +1008,11 @@ macro_rules! impl_server_handler_for_wrapper {
 
             fn get_tool(&self, name: &str) -> Option<Tool> {
                 (**self).get_tool(name)
+            }
+
+            #[cfg(feature = "events")]
+            fn events(&self) -> Option<&crate::events::server::EventsServer> {
+                (**self).events()
             }
 
             fn on_custom_request(

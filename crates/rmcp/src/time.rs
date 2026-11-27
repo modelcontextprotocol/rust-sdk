@@ -19,7 +19,7 @@ pub(crate) fn now_unix_millis() -> i64 {
 
 /// Formats `timestamp` in UTC with a `+00:00` offset and 0, 3, 6 or 9
 /// fractional digits, whichever is the shortest that is exact.
-fn rfc3339(timestamp: Timestamp) -> String {
+pub(crate) fn rfc3339(timestamp: Timestamp) -> String {
     let nanos = timestamp.subsec_nanosecond();
     let digits = if nanos == 0 {
         0

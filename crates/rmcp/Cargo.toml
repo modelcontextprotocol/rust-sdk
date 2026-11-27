@@ -25,6 +25,9 @@ features = [
   "client",
   "client-side-sse",
   "elicitation",
+  "events",
+  "events-webhook",
+  "events-webhook-receiver",
   "macros",
   "request-state",
   "reqwest",
@@ -146,6 +149,12 @@ elicitation = ["dep:url"]
 # SEP-2322 requestState integrity helper (HMAC-SHA256 seal/open codec)
 request-state = ["dep:hmac", "dep:zeroize", "base64"]
 skills-fs = ["server", "base64", "dep:cap-std", "dep:cap-fs-ext", "dep:yaml_serde", "dep:windows-sys"]
+# MCP Events Beta catalog, polling, and push; role and transport features stay independent.
+events = []
+# Standard Webhooks verification and the low-level Events client RPCs.
+events-webhook-receiver = ["events", "base64", "dep:hmac", "dep:http", "dep:rand", "dep:zeroize", "zeroize/serde"]
+# Events server dispatcher with HTTPS-only outbound delivery.
+events-webhook = ["server", "events-webhook-receiver", "reqwest", "dep:url", "dep:bytes", "tokio/net"]
 
 # reqwest http client
 __reqwest = ["dep:reqwest"]
@@ -219,6 +228,7 @@ chrono = ["dep:chrono", "schemars?/chrono04"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
 schemars = "1.1.0"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 hyper = { version = "1", features = ["server", "http1"] }

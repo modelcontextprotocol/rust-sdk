@@ -22,6 +22,9 @@ pub struct NeverSessionManager {
 
 impl NeverSessionManager {
     /// Configure resumable SSE storage without enabling sessions.
+    ///
+    /// Modern long-lived requests such as `subscriptions/listen` are never
+    /// persisted and are cancelled when the client disconnects.
     pub fn with_event_store(mut self, event_store: Arc<dyn EventStore>) -> Self {
         self.event_store = Some(event_store);
         self

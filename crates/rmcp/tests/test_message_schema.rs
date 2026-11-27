@@ -17,6 +17,22 @@ mod tests {
             serde_json::from_str(actual).expect("Failed to parse actual schema as JSON");
         let expected_json: serde_json::Value =
             serde_json::from_str(&expected).expect("Failed to parse expected schema as JSON");
+        #[cfg(feature = "events")]
+        let expected_json = {
+            // Regenerate by running this test with `events` enabled, then
+            // copy the Events-only `definitions.SubscriptionFilter.properties`
+            // entries from the generated *_current.json into the overlay.
+            // Do not overwrite the feature-off snapshot with that output.
+            let mut expected = expected_json;
+            let overlay = include_str!("test_message_schema/events_subscription_filter.json");
+            let map: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(overlay).expect("valid Events schema overlay");
+            expected["definitions"]["SubscriptionFilter"]["properties"]
+                .as_object_mut()
+                .expect("subscription filter properties")
+                .extend(map);
+            expected
+        };
 
         if actual_json == expected_json {
             println!("{} schema matches expected", name);
@@ -36,12 +52,14 @@ mod tests {
         );
 
         // UPDATE_SCHEMA=1 cargo test -p rmcp --test test_message_schema --features="server client schemars"
-        if std::env::var("UPDATE_SCHEMA").is_ok() {
+        if std::env::var("UPDATE_SCHEMA").is_ok() && !cfg!(feature = "events") {
             println!("UPDATE_SCHEMA is set, updating expected file");
             std::fs::write(expected_file, actual).expect("Failed to update expected schema file");
             println!("Updated {}", expected_file);
         } else {
-            println!("Set UPDATE_SCHEMA=1 to auto-update expected schemas");
+            println!(
+                "Set UPDATE_SCHEMA=1 without `events` to update the core snapshots; update the Events overlay separately"
+            );
             panic!("Schema validation failed");
         }
     }

@@ -25,10 +25,11 @@ use super::session::{
 use crate::{
     RoleServer,
     model::{
-        ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ErrorCode,
-        ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
+        ClientCapabilities, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString,
+        ErrorCode, ErrorData, GetExtensions, GetMeta, Implementation, InitializeRequest,
         InitializeRequestParams, InitializedNotification, JsonObject, JsonRpcError,
         ProtocolVersion, RequestId, ServerConfig, ServerJsonRpcMessage, ServerResult,
+        SubscriptionsListenRequestMethod,
     },
     service::{
         NotificationContext, RequestContext, Service, negotiate_protocol_version,
@@ -473,6 +474,12 @@ fn message_has_per_request_protocol_version(message: &ClientJsonRpcMessage) -> b
         }
         _ => false,
     }
+}
+
+/// Identifies connection-bound requests: do not persist their SSE events,
+/// send priming events or event IDs, and cancel them on response drop.
+fn is_long_lived_request(method: &str) -> bool {
+    method == SubscriptionsListenRequestMethod::VALUE
 }
 
 struct NegotiatingStatelessHttpService<S>(S);
@@ -1640,8 +1647,11 @@ where
         first: Option<ServerJsonRpcMessage>,
         receiver: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
         request_ct: CancellationToken,
+        long_lived: bool,
     ) -> BoxResponse {
-        if let Some(event_store) = self.session_manager.event_store() {
+        // Long-lived requests are bound to this connection. Do not prime or
+        // store their SSE frames, and cancel them when the response is dropped.
+        if !long_lived && let Some(event_store) = self.session_manager.event_store() {
             let stream = self.persisted_stateless_stream(first, receiver, request_ct, event_store);
             sse_stream_response(
                 stream,
@@ -1670,6 +1680,12 @@ where
         mut request: crate::model::JsonRpcRequest<ClientRequest>,
         parts: http::request::Parts,
     ) -> HttpResult<BoxResponse> {
+        let method = request.request.method();
+        #[cfg(feature = "events")]
+        let sdk_events_stream = method == crate::events::STREAM && service.events().is_some();
+        #[cfg(not(feature = "events"))]
+        let sdk_events_stream = false;
+        let long_lived = is_long_lived_request(method) || sdk_events_stream;
         let request_meta_malformed = !request
             .request
             .get_meta()
@@ -1720,7 +1736,11 @@ where
             ServerJsonRpcMessage::Response(_) | ServerJsonRpcMessage::Error(_)
         );
         let status = jsonrpc_http_status(&first, request_meta_malformed);
-        if terminal && (self.config.json_response || status != http::StatusCode::OK) {
+        if terminal
+            && (self.config.json_response
+                || status != http::StatusCode::OK
+                || (sdk_events_stream && matches!(&first, ServerJsonRpcMessage::Error(_))))
+        {
             // This message is the whole reply, so `receiver` is dropped here and
             // anything the handler emits afterwards is undeliverable. Cancel it so
             // a still-running handler stops instead of running on unobserved: its
@@ -1731,7 +1751,7 @@ where
             return jsonrpc_message_response(first, status);
         }
 
-        Ok(self.stateless_sse_response(Some(first), receiver, request_ct))
+        Ok(self.stateless_sse_response(Some(first), receiver, request_ct, long_lived))
     }
 
     /// Looks up `name`'s input schema for SEP-2243 `Mcp-Param-*` validation.
@@ -2440,6 +2460,9 @@ where
                         // on service created
                         let _ = service.waiting().await;
                     });
+                    // This path cannot serve a long-lived listen: ServerHandler
+                    // rejects legacy `subscriptions/listen` with -32601. Both
+                    // SSE branches below can therefore pass `long_lived = false`.
                     if self.config.json_response {
                         // Prefer JSON for a terminal first message. If the handler
                         // emits an intermediate notification or request, preserve
@@ -2482,10 +2505,15 @@ where
                                 .body(Full::new(Bytes::from(body)).boxed())
                                 .expect("valid response"))
                         } else {
-                            Ok(self.stateless_sse_response(Some(message), receiver, request_ct))
+                            Ok(self.stateless_sse_response(
+                                Some(message),
+                                receiver,
+                                request_ct,
+                                false,
+                            ))
                         }
                     } else {
-                        Ok(self.stateless_sse_response(None, receiver, request_ct))
+                        Ok(self.stateless_sse_response(None, receiver, request_ct, false))
                     }
                 }
                 ClientJsonRpcMessage::Notification(_notification) => {
@@ -2572,8 +2600,8 @@ pin_project! {
     /// Cancels an unpersisted stateless request when its response is dropped.
     ///
     /// Persisted requests keep running so another connection can resume them.
-    /// Without an event store, dropping the stream fires the request's
-    /// cancellation token. Natural completion disarms the guard.
+    /// Dropping an unpersisted stream fires the request's cancellation token.
+    /// Natural completion disarms the guard.
     struct CancelOnDisconnect<S> {
         #[pin]
         inner: S,

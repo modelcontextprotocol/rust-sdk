@@ -1148,7 +1148,7 @@ pub type CancelledNotification =
 ///
 /// This preserves the raw `method` name and `params` payload so handlers can
 /// deserialize them into domain-specific types.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct CustomNotification {
@@ -1184,7 +1184,8 @@ impl CustomNotification {
 ///
 /// This preserves the raw `method` name and `params` payload so handlers can
 /// deserialize them into domain-specific types.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[cfg_attr(not(feature = "events"), derive(Debug))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct CustomRequest {
@@ -1196,6 +1197,32 @@ pub struct CustomRequest {
     /// this is similar with the Extensions in `http` crate
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub extensions: Extensions,
+}
+
+#[cfg(feature = "events")]
+impl std::fmt::Debug for CustomRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("CustomRequest");
+        debug.field("method", &self.method);
+        // A raw JSON-RPC subscribe still carries the signing key in params.
+        if self.method == "events/subscribe" {
+            return debug.field("params", &"<redacted>").finish_non_exhaustive();
+        }
+        debug
+            .field("params", &self.params)
+            .field("extensions", &self.extensions)
+            .finish()
+    }
+}
+
+#[cfg(all(test, feature = "events"))]
+#[test]
+fn events_subscribe_debug_redacts_params() {
+    let params = Some(serde_json::json!({"delivery":{"secret":"whsec_fixture"}}));
+    let subscribe = CustomRequest::new("events/subscribe", params.clone());
+    assert!(!format!("{subscribe:?}").contains("whsec_fixture"));
+    let unrelated = CustomRequest::new("custom", params);
+    assert!(format!("{unrelated:?}").contains("whsec_fixture"));
 }
 
 impl CustomRequest {
@@ -2295,6 +2322,10 @@ pub struct SubscriptionFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
     pub resources_list_changed: Option<bool>,
+    #[cfg(feature = "events")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schemars", schemars(with = "bool"))]
+    pub events_list_changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schemars", schemars(with = "Vec<String>"))]
     pub resource_subscriptions: Option<Vec<String>>,
@@ -2336,6 +2367,10 @@ impl SubscriptionFilter {
             resources_list_changed: (self.resources_list_changed == Some(true)
                 && other.resources_list_changed == Some(true))
             .then_some(true),
+            #[cfg(feature = "events")]
+            events_list_changed: (self.events_list_changed == Some(true)
+                && other.events_list_changed == Some(true))
+            .then_some(true),
             resource_subscriptions,
         }
     }
@@ -2346,6 +2381,8 @@ impl SubscriptionFilter {
             (self.tools_list_changed, other.tools_list_changed),
             (self.prompts_list_changed, other.prompts_list_changed),
             (self.resources_list_changed, other.resources_list_changed),
+            #[cfg(feature = "events")]
+            (self.events_list_changed, other.events_list_changed),
         ]
         .into_iter()
         .all(|(accepted, requested)| accepted != Some(true) || requested == Some(true));
@@ -2381,6 +2418,10 @@ impl SubscriptionFilter {
                     .as_ref()
                     .is_some_and(|resources| resources.list_changed == Some(true)))
             .then_some(true),
+            #[cfg(feature = "events")]
+            events_list_changed: (self.events_list_changed == Some(true)
+                && crate::events::advertises_list_changes(capabilities))
+            .then_some(true),
             resource_subscriptions: capabilities
                 .resources
                 .as_ref()
@@ -2399,6 +2440,13 @@ pub struct SubscriptionFilterBuilder {
 }
 
 impl SubscriptionFilterBuilder {
+    /// Opt in to `notifications/events/list_changed` from an Events server.
+    #[cfg(feature = "events")]
+    pub fn events_list_changed(mut self) -> Self {
+        self.filter.events_list_changed = Some(true);
+        self
+    }
+
     /// Opt in to `notifications/tools/list_changed`.
     pub fn tools_list_changed(mut self) -> Self {
         self.filter.tools_list_changed = Some(true);
