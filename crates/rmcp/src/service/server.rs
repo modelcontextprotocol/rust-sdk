@@ -670,6 +670,16 @@ where
                     ct,
                 ));
             }
+            // Notifications carry no response obligation, and before the first
+            // request there is nothing for one to act on (no in-flight requests to
+            // cancel or report progress for), so drop it and keep waiting for the
+            // committing request instead of ending the session.
+            ClientJsonRpcMessage::Notification(notification) => {
+                tracing::debug!(
+                    notification = ?notification.notification,
+                    "dropping a client notification received before the first request"
+                );
+            }
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,
