@@ -11,9 +11,9 @@ use std::{
     io,
     pin::Pin,
     sync::{Mutex, MutexGuard},
+    time::{Duration, SystemTime},
 };
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -171,7 +171,7 @@ pub struct CheckQuery {
     /// Position to resume strictly after; `None` means return an empty batch at the current head.
     pub cursor: Option<String>,
     /// Earliest eligible timestamp during age-limited replay.
-    pub age_floor: Option<DateTime<Utc>>,
+    pub age_floor: Option<SystemTime>,
     /// Maximum number of items to return.
     pub max_events: usize,
     /// Maximum compact JSON bytes in a batch.
@@ -684,12 +684,14 @@ fn source_error(message: &'static str) -> EventsError {
     EventsError::Remote(Box::new(crate::ErrorData::internal_error(message, None)))
 }
 
-fn age_floor(cursor: Option<&str>, max_age_ms: Option<u64>) -> Option<DateTime<Utc>> {
-    cursor
-        .and(max_age_ms)
-        .and_then(|age| i64::try_from(age).ok())
-        .and_then(chrono::TimeDelta::try_milliseconds)
-        .and_then(|age| Utc::now().checked_sub_signed(age))
+fn age_floor(cursor: Option<&str>, max_age_ms: Option<u64>) -> Option<SystemTime> {
+    let max_age_ms = cursor.and(max_age_ms)?;
+    // Keep treating values outside the former signed millisecond range as unbounded.
+    if max_age_ms > i64::MAX as u64 {
+        return None;
+    }
+    let age = Duration::from_millis(max_age_ms);
+    SystemTime::now().checked_sub(age)
 }
 
 // None means the occurrence cannot fit the poll byte budget.
@@ -718,7 +720,10 @@ fn event_bytes(event: &EventOccurrence) -> Result<Option<usize>, EventsError> {
     match serde_json::to_writer(&mut counter, event) {
         Ok(()) => Ok(Some(counter.bytes)),
         Err(_) if counter.overflow => Ok(None),
-        Err(_) => Err(source_error("invalid occurrence")),
+        Err(_) => {
+            tracing::warn!(event = %event.name, "invalid Events occurrence");
+            Err(source_error("invalid occurrence"))
+        }
     }
 }
 
@@ -802,7 +807,7 @@ mod tests {
         batch.events.push(EventOccurrence::new(
             "id",
             "sample",
-            Utc::now(),
+            crate::time::now_rfc3339(),
             JsonObject::new(),
         ));
         let result = checked_result(batch.clone(), &query, false).unwrap();

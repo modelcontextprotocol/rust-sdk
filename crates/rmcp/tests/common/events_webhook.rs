@@ -1,9 +1,10 @@
-use std::{convert::Infallible, sync::atomic::AtomicBool};
+use std::{convert::Infallible, sync::atomic::AtomicBool, time::SystemTime};
 
 use axum::body::{Body, Bytes, to_bytes};
 use http::{HeaderMap, Request, Response, StatusCode};
 use hyper::{body::Incoming, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
+use jiff::Timestamp;
 use rmcp::events::{
     server::WebhookEgress,
     webhook::{
@@ -45,7 +46,7 @@ impl Post {
             &self.headers,
             &self.body,
             std::slice::from_ref(secret),
-            chrono::Utc::now(),
+            SystemTime::now(),
         )?
         .message)
     }
@@ -288,8 +289,9 @@ async fn authenticated_delivery_rotation_watermark_skip_and_removal() {
         assert_eq!(auth.load(Ordering::SeqCst), 1);
     })
     .await;
-    assert!(grant.refresh_before.unwrap() > chrono::Utc::now());
-    assert!(grant.refresh_before.unwrap() < chrono::Utc::now() + Duration::from_secs(3600));
+    let deadline: Timestamp = grant.refresh_before.unwrap().parse().unwrap();
+    assert!(deadline > Timestamp::now());
+    assert!(deadline < Timestamp::now() + Duration::from_secs(3600));
     let initial = grant.cursor.clone().unwrap();
     let new = WebhookSecret::generate();
     options.secret = new.clone();
@@ -300,8 +302,12 @@ async fn authenticated_delivery_rotation_watermark_skip_and_removal() {
     assert!(refreshed.delivery_status.unwrap().active);
 
     for id in ["first", "second"] {
-        emit.emit(Some(id.into()), chrono::Utc::now(), JsonObject::new())
-            .unwrap();
+        emit.emit(
+            Some(id.into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
+        .unwrap();
     }
     let (first, second) = {
         let a = receive(&mut posts).await;
@@ -346,7 +352,7 @@ async fn authenticated_delivery_rotation_watermark_skip_and_removal() {
     );
     emit.emit(
         Some("too-large-at-receiver".into()),
-        chrono::Utc::now(),
+        Timestamp::now().to_string(),
         JsonObject::new(),
     )
     .unwrap();
@@ -355,11 +361,11 @@ async fn authenticated_delivery_rotation_watermark_skip_and_removal() {
         matches!(rejected.check(&new), WebhookMessage::Occurrence(event) if event.event_id == "too-large-at-receiver")
     );
     rejected.respond(StatusCode::PAYLOAD_TOO_LARGE);
-    let at = chrono::Utc::now();
+    let at = Timestamp::now().to_string();
     let mut oversized = rmcp::events::wire::EventOccurrence::new(
         "oversized",
         "source",
-        at,
+        &at,
         serde_json::from_value(json!({"large": ""})).unwrap(),
     );
     let padding = 256 * 1024 - serde_json::to_vec(&oversized).unwrap().len();
@@ -387,7 +393,7 @@ async fn authenticated_delivery_rotation_watermark_skip_and_removal() {
     tokio::time::resume();
     emit.emit(
         Some("rotated".into()),
-        chrono::Utc::now(),
+        Timestamp::now().to_string(),
         JsonObject::new(),
     )
     .unwrap();
@@ -668,8 +674,12 @@ async fn unrelated_changes_do_not_restart_webhook_authorization_or_stall_retries
     let (api, stop, service, peer) = access(runtime.clone()).await;
     let options = WebhookOptions::new(url, WebhookSecret::generate());
     activate(&api, &mut posts, &options, || {}).await;
-    emit.emit(Some("retry".into()), chrono::Utc::now(), JsonObject::new())
-        .unwrap();
+    emit.emit(
+        Some("retry".into()),
+        Timestamp::now().to_string(),
+        JsonObject::new(),
+    )
+    .unwrap();
     let post = receive(&mut posts).await;
     let message = post.headers["webhook-id"].clone();
 
@@ -728,7 +738,7 @@ async fn retry_preserves_message_and_expiry_cancels_worker() {
                         batch.events.push(rmcp::events::wire::EventOccurrence::new(
                             "upstream",
                             "source",
-                            chrono::Utc::now(),
+                            Timestamp::now().to_string(),
                             JsonObject::new(),
                         ));
                         Ok(batch)

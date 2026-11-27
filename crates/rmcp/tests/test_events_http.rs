@@ -278,13 +278,13 @@ async fn concurrent_push_http_streams_release_unary_slots_and_cancel_independent
         let Some(EventUpdate::Checkpoint(b_start)) = b.next().await else { panic!("second activation"); };
         assert_ne!(a_start, b_start);
         assert_eq!(api.list_page(None).await.unwrap().events.len(), 2);
-        first.emit(Some("a".into()), chrono::Utc::now(), JsonObject::new()).unwrap();
-        second.emit(Some("b".into()), chrono::Utc::now(), JsonObject::new()).unwrap();
+        first.emit(Some("a".into()), jiff::Timestamp::now().to_string(), JsonObject::new()).unwrap();
+        second.emit(Some("b".into()), jiff::Timestamp::now().to_string(), JsonObject::new()).unwrap();
         assert!(matches!(a.next().await, Some(EventUpdate::Occurrence(event)) if event.event_id == "a"));
         assert!(matches!(b.next().await, Some(EventUpdate::Occurrence(event)) if event.event_id == "b"));
         drop(a);
         assert!(matches!(b.next().await, Some(EventUpdate::Checkpoint(cursor)) if cursor != b_start));
-        second.emit(Some("continued".into()), chrono::Utc::now(), JsonObject::new()).unwrap();
+        second.emit(Some("continued".into()), jiff::Timestamp::now().to_string(), JsonObject::new()).unwrap();
         assert!(matches!(b.next().await, Some(EventUpdate::Occurrence(event)) if event.event_id == "continued"));
         assert_eq!(api.list_page(None).await.unwrap().events.len(), 2);
         drop(b);

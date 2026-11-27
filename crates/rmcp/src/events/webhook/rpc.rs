@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use zeroize::Zeroizing;
 
@@ -83,9 +82,9 @@ pub struct WebhookSubscription {
     pub(in crate::events) result_type: ResultType,
     /// Stable server-derived routing handle (not a credential).
     pub id: String,
-    /// Expiry. `None` is a grant with no expiry.
-    #[serde(deserialize_with = "Deserialize::deserialize")]
-    pub refresh_before: Option<DateTime<Utc>>,
+    /// RFC 3339 expiry. `None` is a grant with no expiry.
+    #[serde(deserialize_with = "read_optional_timestamp")]
+    pub refresh_before: Option<String>,
     /// Latest safe checkpoint. Do not persist a null checkpoint.
     pub cursor: Option<String>,
     /// The server had to start after the requested checkpoint.
@@ -103,10 +102,22 @@ pub struct WebhookSubscription {
 pub struct WebhookSubscriptionStatus {
     /// Whether delivery is active.
     pub active: bool,
-    /// Time of the last successful acknowledgement.
-    pub last_delivery_at: Option<DateTime<Utc>>,
+    /// RFC 3339 time of the last successful acknowledgement.
+    #[serde(default, deserialize_with = "read_optional_timestamp")]
+    pub last_delivery_at: Option<String>,
     /// Fixed error category, not endpoint response content.
     pub last_error: Option<String>,
+}
+
+fn read_optional_timestamp<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let timestamp = Option::<String>::deserialize(deserializer)?;
+    if let Some(value) = &timestamp {
+        // These fields are passed through, not compared or normalized.
+        crate::events::wire::timestamp_offset(value).map_err(serde::de::Error::custom)?;
+    }
+    Ok(timestamp)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -187,6 +198,31 @@ mod tests {
         let result: WebhookSubscription = serde_json::from_value(wire.clone()).unwrap();
         assert!(result.result_type.is_complete());
         assert!(result.refresh_before.is_none());
+        let deadline = "9999-12-31T23:59:59Z";
+        let finite: WebhookSubscription = serde_json::from_value(json!({
+            "id": "sub_fixture", "refreshBefore": deadline, "deliveryStatus": {"active": true}
+        }))
+        .unwrap();
+        assert_eq!(finite.refresh_before.as_deref(), Some(deadline));
+        assert!(finite.delivery_status.unwrap().last_delivery_at.is_none());
+        let status: WebhookSubscriptionStatus = serde_json::from_value(json!({
+            "active": true, "lastDeliveryAt": deadline
+        }))
+        .unwrap();
+        assert_eq!(status.last_delivery_at.as_deref(), Some(deadline));
+        assert!(
+            serde_json::from_value::<WebhookSubscription>(
+                json!({"id":"sub_fixture", "refreshBefore":"not-a-timestamp"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<WebhookSubscription>(json!({
+                "id":"sub_fixture", "refreshBefore": deadline,
+                "deliveryStatus": {"active": true, "lastDeliveryAt": "not-a-timestamp"}
+            }))
+            .is_err()
+        );
         assert!(
             serde_json::from_value::<WebhookSubscription>(
                 json!({"id":"sub_fixture", "refreshBefore":null, "resultType":"task"})

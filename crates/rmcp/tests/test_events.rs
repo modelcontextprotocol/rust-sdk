@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use chrono::Utc;
 use futures::StreamExt;
+use jiff::Timestamp;
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, ErrorData, RoleClient, ServerHandler, ServiceError,
     ServiceExt,
@@ -288,13 +288,21 @@ events_test!(push_stdio_isolates_streams_and_fences_final_after_cancel, {
     assert_eq!(unary["result"]["events"].as_array().unwrap().len(), 2);
 
     first
-        .emit(Some("a".into()), Utc::now(), JsonObject::new())
+        .emit(
+            Some("a".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
         .unwrap();
     let event = wire.frame(json!("one"), "event").await;
     assert_eq!(event["eventId"], "a");
     assert_ne!(event["cursor"], one["cursor"]);
     second
-        .emit(Some("b".into()), Utc::now(), JsonObject::new())
+        .emit(
+            Some("b".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
         .unwrap();
     assert_eq!(wire.frame(json!(2), "event").await["eventId"], "b");
     assert_eq!(
@@ -311,10 +319,18 @@ events_test!(push_stdio_isolates_streams_and_fences_final_after_cancel, {
     assert_eq!(unary["id"], 4);
     assert_eq!(unary["result"]["events"].as_array().unwrap().len(), 2);
     first
-        .emit(Some("discarded".into()), Utc::now(), JsonObject::new())
+        .emit(
+            Some("discarded".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
         .unwrap();
     second
-        .emit(Some("continued".into()), Utc::now(), JsonObject::new())
+        .emit(
+            Some("continued".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
         .unwrap();
     assert_eq!(wire.frame(json!(2), "event").await["eventId"], "continued");
     runtime.remove("second").unwrap();
@@ -333,16 +349,16 @@ events_test!(push_gap_precedes_replay_and_regrants_heartbeat, {
     let runtime = EventsServer::new();
     let emit = runtime.register_emit(push_descriptor("source")).unwrap();
     let mut wire = Wire::connect(runtime).await;
-    let now = Utc::now();
+    let now = Timestamp::now();
     wire.request(json!(1), "events/stream", json!({"name":"source"}))
         .await;
     let start = wire.frame(json!(1), "active").await["cursor"].clone();
     for (id, timestamp) in [
         ("a", now),
-        ("old", now - chrono::TimeDelta::days(1)),
+        ("old", now - Duration::from_secs(86_400)),
         ("b", now),
     ] {
-        emit.emit(Some(id.into()), timestamp, JsonObject::new())
+        emit.emit(Some(id.into()), timestamp.to_string(), JsonObject::new())
             .unwrap();
         assert_eq!(wire.frame(json!(1), "event").await["eventId"], id);
     }
@@ -408,7 +424,7 @@ events_test!(
                             batch.events.push(EventOccurrence::new(
                                 "recovered",
                                 "source",
-                                Utc::now(),
+                                Timestamp::now().to_string(),
                                 JsonObject::new(),
                             ));
                             Ok(batch)
@@ -458,7 +474,7 @@ events_test!(push_age_floor_ends_after_immediate_backlog_drain, {
                         page.events.push(EventOccurrence::new(
                             "replay",
                             "source",
-                            Utc::now(),
+                            Timestamp::now().to_string(),
                             JsonObject::new(),
                         ));
                     }
@@ -467,7 +483,7 @@ events_test!(push_age_floor_ends_after_immediate_backlog_drain, {
                         page.events.push(EventOccurrence::new(
                             "live",
                             "source",
-                            Utc::now() - chrono::TimeDelta::days(1),
+                            (Timestamp::now() - Duration::from_secs(86_400)).to_string(),
                             JsonObject::new(),
                         ));
                     }
@@ -556,8 +572,12 @@ events_test!(push_replacement, {
             .await;
         wire.frame(json!(2), "active").await;
         runtime.replace(source(), Replacement::Additive).unwrap();
-        emit.emit(Some("still-open".into()), Utc::now(), JsonObject::new())
-            .unwrap();
+        emit.emit(
+            Some("still-open".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
+        .unwrap();
         assert_eq!(wire.frame(json!(2), "event").await["eventId"], "still-open");
         runtime
             .replace(
@@ -642,7 +662,14 @@ events_test!(
         let runtime = EventsServer::new();
         runtime
             .register_check(push_descriptor("source"), |_, _, query| async move {
-                let sample = |id| EventOccurrence::new(id, "source", Utc::now(), JsonObject::new());
+                let sample = |id| {
+                    EventOccurrence::new(
+                        id,
+                        "source",
+                        Timestamp::now().to_string(),
+                        JsonObject::new(),
+                    )
+                };
                 let mut batch = CheckedBatch::new("batch-end");
                 batch.next_poll_ms = Some(1_000);
                 match query.cursor.as_deref() {
@@ -736,13 +763,13 @@ events_test!(managed_poll_drains_progress_then_observes_floor, {
                         batch.events.push(EventOccurrence::new(
                             "a",
                             "source",
-                            Utc::now(),
+                            Timestamp::now().to_string(),
                             JsonObject::new(),
                         ));
                         batch.events.push(EventOccurrence::new(
                             "b",
                             "source",
-                            Utc::now(),
+                            Timestamp::now().to_string(),
                             JsonObject::new(),
                         ));
                     }
@@ -1201,7 +1228,7 @@ events_test!(
         for index in 1..=3 {
             emit.emit(
                 Some(index.to_string()),
-                Utc::now(),
+                Timestamp::now().to_string(),
                 object(json!({"blob":"x".repeat(100 * 1024)})),
             )
             .unwrap();
@@ -1246,16 +1273,20 @@ events_test!(
             Err(EventsError::NotFound { .. })
         ));
         assert!(matches!(
-            emit.emit(None, Utc::now(), JsonObject::new()),
+            emit.emit(None, Timestamp::now().to_string(), JsonObject::new()),
             Err(EventsError::NotFound { .. })
         ));
         let new = runtime.register_emit(descriptor("emit")).unwrap();
         assert!(matches!(
-            emit.emit(None, Utc::now(), JsonObject::new()),
+            emit.emit(None, Timestamp::now().to_string(), JsonObject::new()),
             Err(EventsError::NotFound { .. })
         ));
-        new.emit(Some("new".into()), Utc::now(), JsonObject::new())
-            .unwrap();
+        new.emit(
+            Some("new".into()),
+            Timestamp::now().to_string(),
+            JsonObject::new(),
+        )
+        .unwrap();
         let gap = events.poll(poll.clone()).await.unwrap();
         assert!(gap.truncated && gap.has_more);
         poll.cursor = gap.cursor;
@@ -1285,14 +1316,22 @@ events_test!(emit_filter_advances_cursor, {
     let events = EventsClient::new(client.peer().clone());
     let mut poll = PollParams::new("emit");
     poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
-    emit.emit(Some("filtered".into()), Utc::now(), JsonObject::new())
-        .unwrap();
+    emit.emit(
+        Some("filtered".into()),
+        Timestamp::now().to_string(),
+        JsonObject::new(),
+    )
+    .unwrap();
     let quiet = events.poll(poll.clone()).await.unwrap();
     assert!(quiet.events.is_empty());
     assert_ne!(quiet.cursor, poll.cursor);
     poll.cursor = quiet.cursor;
-    emit.emit(Some("kept".into()), Utc::now(), JsonObject::new())
-        .unwrap();
+    emit.emit(
+        Some("kept".into()),
+        Timestamp::now().to_string(),
+        JsonObject::new(),
+    )
+    .unwrap();
     let result = events.poll(poll).await.unwrap();
     assert_eq!(result.events[0].event_id, "kept");
     client.cancel().await.unwrap();
@@ -1312,10 +1351,14 @@ events_test!(oversized_emit_does_not_advance_replay, {
     let events = EventsClient::new(client.peer().clone());
     let mut poll = PollParams::new("emit");
     poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
-    emit.emit(Some("kept".into()), Utc::now(), JsonObject::new())
-        .unwrap();
+    emit.emit(
+        Some("kept".into()),
+        Timestamp::now().to_string(),
+        JsonObject::new(),
+    )
+    .unwrap();
     assert!(matches!(
-        emit.emit(None, Utc::now(), object(json!({"blob":"x".repeat(256 * 1024 + 1)}))),
+        emit.emit(None, Timestamp::now().to_string(), object(json!({"blob":"x".repeat(256 * 1024 + 1)}))),
         Err(EventsError::ResourceExhausted { limit, max: Some(262_144) }) if limit == "eventBytes"
     ));
     let result = events.poll(poll.clone()).await.unwrap();
@@ -1341,13 +1384,14 @@ events_test!(
         let mut poll = PollParams::new("emit");
         poll.cursor = events.poll(poll.clone()).await.unwrap().cursor;
         let initial = poll.cursor.clone();
-        let now = Utc::now();
+        let now = Timestamp::now();
         for (id, time) in [
             ("first", now),
-            ("old", now - chrono::TimeDelta::hours(2)),
+            ("old", now - Duration::from_secs(7_200)),
             ("last", now),
         ] {
-            emit.emit(Some(id.into()), time, JsonObject::new()).unwrap();
+            emit.emit(Some(id.into()), time.to_string(), JsonObject::new())
+                .unwrap();
         }
         poll.max_age_ms = Some(3_600_000);
         poll.max_events = Some(1);
@@ -1363,8 +1407,12 @@ events_test!(
             "last"
         );
         for i in 0..260 {
-            emit.emit(Some(format!("ring-{i}")), now, JsonObject::new())
-                .unwrap();
+            emit.emit(
+                Some(format!("ring-{i}")),
+                now.to_string(),
+                JsonObject::new(),
+            )
+            .unwrap();
         }
         poll.cursor = initial;
         let gap = events.poll(poll.clone()).await.unwrap();
@@ -1629,7 +1677,7 @@ events_test!(
 
 events_test!(check_byte_cut_and_age_floor_including_large_unsigned_age, {
     let runtime = EventsServer::new();
-    let now = Utc::now();
+    let now = Timestamp::now();
     runtime
         .register_check(
             descriptor("a"),
@@ -1651,7 +1699,7 @@ events_test!(check_byte_cut_and_age_floor_including_large_unsigned_age, {
                     let mut event = EventOccurrence::new(
                         index.to_string(),
                         "a",
-                        now,
+                        now.to_string(),
                         object(json!({"data":"x".repeat(100 * 1024)})),
                     );
                     event.cursor = Some(index.to_string());

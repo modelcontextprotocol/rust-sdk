@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -114,9 +114,9 @@ pub struct EventOccurrence {
     pub event_id: String,
     /// Event type name.
     pub name: String,
-    /// When the event occurred, in UTC.
-    #[serde(serialize_with = "utc_timestamp")]
-    pub timestamp: DateTime<Utc>,
+    /// When the event occurred, as RFC 3339. Serialized in UTC.
+    #[serde(deserialize_with = "read_timestamp", serialize_with = "utc_timestamp")]
+    pub timestamp: String,
     /// Object payload matching the advertised schema.
     pub data: JsonObject,
     /// Optional occurrence metadata.
@@ -129,16 +129,18 @@ pub struct EventOccurrence {
 
 impl EventOccurrence {
     /// Construct an occurrence without item cursor or metadata.
+    ///
+    /// `timestamp` must be an RFC 3339 timestamp and is validated when serialized.
     pub fn new(
         event_id: impl Into<String>,
         name: impl Into<String>,
-        timestamp: DateTime<Utc>,
+        timestamp: impl Into<String>,
         data: JsonObject,
     ) -> Self {
         Self {
             event_id: event_id.into(),
             name: name.into(),
-            timestamp,
+            timestamp: timestamp.into(),
             data,
             meta: None,
             cursor: None,
@@ -146,11 +148,83 @@ impl EventOccurrence {
     }
 }
 
-fn utc_timestamp<S: serde::Serializer>(
-    time: &DateTime<Utc>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&time.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+const INVALID_TIMESTAMP: &str = "expected an RFC 3339 Events timestamp";
+
+pub(super) fn timestamp_offset(value: &str) -> Result<usize, &'static str> {
+    // Jiff also accepts ISO 8601 basic notation and reduced precision. Require
+    // the RFC 3339 separators, seconds and explicit offset before parsing.
+    let (date_time, rest) = value
+        .as_bytes()
+        .split_at_checked(19)
+        .ok_or(INVALID_TIMESTAMP)?;
+    if !date_time
+        .iter()
+        .enumerate()
+        .all(|(index, &byte)| match index {
+            4 | 7 => byte == b'-',
+            10 => matches!(byte, b'T' | b't'),
+            13 | 16 => byte == b':',
+            _ => byte.is_ascii_digit(),
+        })
+    {
+        return Err(INVALID_TIMESTAMP);
+    }
+    let offset = match rest {
+        [b'.', fraction @ ..] => {
+            let digits = fraction
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if digits == 0 {
+                return Err(INVALID_TIMESTAMP);
+            }
+            &fraction[digits..]
+        }
+        _ => rest,
+    };
+    match offset {
+        [b'Z' | b'z'] => {}
+        [
+            b'+' | b'-',
+            h1 @ b'0'..=b'2',
+            h2 @ b'0'..=b'9',
+            b':',
+            b'0'..=b'5',
+            b'0'..=b'9',
+        ] if (*h1, *h2) <= (b'2', b'3') => {}
+        _ => return Err(INVALID_TIMESTAMP),
+    }
+    Ok(value.len() - offset.len())
+}
+
+pub(super) fn parse_timestamp(value: &str) -> Result<Timestamp, &'static str> {
+    // The offset starts after 19 date/time bytes, an optional dot and the
+    // fraction. Jiff accepts at most nine fractional digits.
+    const NANOSECOND_END: usize = 19 + 1 + 9;
+    const FIRST_FOUR_DIGIT_YEAR: Timestamp = Timestamp::constant(-62_167_219_200, 0);
+    let offset = timestamp_offset(value)?;
+    let parsed = if offset > NANOSECOND_END {
+        let truncated = format!("{}{}", &value[..NANOSECOND_END], &value[offset..]);
+        truncated.parse()
+    } else {
+        value.parse()
+    }
+    .map_err(|_| INVALID_TIMESTAMP)?;
+    if parsed < FIRST_FOUR_DIGIT_YEAR {
+        return Err(INVALID_TIMESTAMP);
+    }
+    Ok(parsed)
+}
+
+fn read_timestamp<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let timestamp = String::deserialize(deserializer)?;
+    parse_timestamp(&timestamp).map_err(serde::de::Error::custom)?;
+    Ok(timestamp)
+}
+
+fn utc_timestamp<S: serde::Serializer>(time: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    let time = parse_timestamp(time).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_str(&crate::time::rfc3339(time))
 }
 
 pub(super) fn complete<'de, D: serde::Deserializer<'de>>(
@@ -490,14 +564,55 @@ mod tests {
     fn malformed_timestamp_rejects_the_page_and_its_checkpoint() {
         let occurrence =
             |id, timestamp| json!({"eventId": id,"name":"x","timestamp":timestamp,"data":{}});
-        let result = serde_json::from_value::<PollResult>(json!({
-            "resultType":"complete","cursor":"resume","events":[
-                occurrence("iso-basic","20261124T120000Z"), occurrence("good","2026-11-24T12:00:00Z")
-            ]
-        }));
+        for invalid in [
+            "20261124T120000Z",
+            "2026-11-24T12:00Z",
+            "2026-11-24T12:00:00",
+            "2026-11-24T12:00:00+24:00",
+            "2026-02-30T12:00:00Z",
+            "0000-01-01T00:00:00+01:00",
+        ] {
+            let result = serde_json::from_value::<PollResult>(json!({
+                "resultType":"complete","cursor":"resume","events":[
+                    occurrence("bad", invalid), occurrence("good", "2026-11-24T12:00:00Z")
+                ]
+            }));
+            assert!(
+                result.is_err(),
+                "must not expose a cursor past {invalid}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn occurrence_serializes_the_same_instant_in_utc() {
+        let event = EventOccurrence::new(
+            "id",
+            "x",
+            "2026-11-24T12:00:00.123+02:00",
+            JsonObject::new(),
+        );
+        let wire = serde_json::to_value(event).unwrap();
+        assert_eq!(wire["timestamp"], "2026-11-24T10:00:00.123+00:00");
+        let parsed: EventOccurrence = serde_json::from_value(wire).unwrap();
+        assert_eq!(parsed.timestamp, "2026-11-24T10:00:00.123+00:00");
         assert!(
-            result.is_err(),
-            "must not expose a cursor past an unparsed occurrence: {result:?}"
+            parse_timestamp("0000-01-01T00:00:00Z").is_ok(),
+            "year zero is valid when the UTC year is still four digits"
+        );
+    }
+
+    #[test]
+    fn occurrence_preserves_peer_fraction_and_truncates_to_nanoseconds_on_output() {
+        let peer_timestamp = "2026-11-24T12:00:00.123456789999+02:00";
+        let event: EventOccurrence = serde_json::from_value(json!({
+            "eventId": "id", "name":"x", "timestamp": peer_timestamp, "data": {}
+        }))
+        .unwrap();
+        assert_eq!(event.timestamp, peer_timestamp);
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["timestamp"],
+            "2026-11-24T10:00:00.123456789+00:00"
         );
     }
 

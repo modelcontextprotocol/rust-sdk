@@ -99,7 +99,7 @@ impl Egress {
         if literal.is_some_and(|ip| !self.policy.allows(ip)) {
             return Err(Reason::ConnectionRefused);
         }
-        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let timestamp = jiff::Timestamp::now().as_second().to_string();
         let mut signature = secrets.0.signature(message, &timestamp, &body);
         if let Some(previous) = secrets.1 {
             signature.push(' ');

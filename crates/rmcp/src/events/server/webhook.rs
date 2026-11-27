@@ -6,6 +6,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use futures::{StreamExt, stream::FuturesUnordered};
+use jiff::Timestamp;
 use reqwest::{StatusCode, Url};
 use tokio::time::{Instant, sleep_until, timeout_at};
 use tokio_util::sync::CancellationToken;
@@ -67,7 +68,7 @@ struct Grant {
 
 struct GrantData {
     lease: Instant,
-    refresh_before: DateTime<Utc>,
+    refresh_before: String,
     context: RequestContext<RoleServer>,
     context_revision: u64,
     permitted: Shared<Descriptor>,
@@ -75,7 +76,7 @@ struct GrantData {
     old_secret: Option<(Instant, WebhookSecret)>,
     cursor: Option<String>,
     truncated: bool,
-    last_delivery: Option<DateTime<Utc>>,
+    last_delivery: Option<String>,
     error: Option<Reason>,
     termination: Option<ErrorData>,
 }
@@ -240,12 +241,12 @@ impl GrantData {
         WebhookSubscription {
             result_type: ResultType::COMPLETE,
             id: id.into(),
-            refresh_before: Some(self.refresh_before),
+            refresh_before: Some(self.refresh_before.clone()),
             cursor: self.cursor.clone(),
             truncated: std::mem::take(&mut self.truncated),
             delivery_status: refreshing.then(|| WebhookSubscriptionStatus {
                 active: true,
-                last_delivery_at: self.last_delivery,
+                last_delivery_at: self.last_delivery.clone(),
                 last_error: self.error.map(|reason| reason.category().into()),
             }),
         }
@@ -273,7 +274,7 @@ impl Grant {
             ));
         }
         data.lease = Instant::now() + duration;
-        data.refresh_before = Utc::now() + duration;
+        data.refresh_before = crate::time::rfc3339(Timestamp::now() + duration);
         let response = data.response(&self.id, true);
         self.changed.notify_waiters();
         Some(response)
@@ -479,7 +480,7 @@ impl EventsServer {
         context.ct = stop.clone();
         let mut data = GrantData {
             lease: Instant::now() + duration,
-            refresh_before: Utc::now() + duration,
+            refresh_before: crate::time::rfc3339(Timestamp::now() + duration),
             context,
             context_revision: 0,
             permitted: descriptor.clone(),
@@ -772,7 +773,7 @@ impl Worker {
                     let status = response.status();
                     if status.is_success() {
                         let mut data = lock(&self.grant.data);
-                        data.last_delivery = Some(Utc::now());
+                        data.last_delivery = Some(crate::time::now_rfc3339());
                         data.error = None;
                         return sequence;
                     }

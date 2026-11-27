@@ -1,6 +1,6 @@
 //! An Events check source with one sample event.
 
-use std::{future::ready, sync::OnceLock};
+use std::{future::ready, sync::OnceLock, time::SystemTime};
 
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -9,6 +9,7 @@ use rmcp::{
         wire::{DeliveryMode, EventOccurrence, EventsError},
     },
     model::JsonObject,
+    task_manager::current_timestamp,
     transport::stdio,
 };
 
@@ -36,14 +37,15 @@ async fn main() -> anyhow::Result<()> {
                 None if sample_time.get().is_none() => batch.end = "0".into(),
                 None | Some("1") => {}
                 Some("0") => {
-                    let time = *sample_time.get_or_init(chrono::Utc::now);
-                    if query.age_floor.is_some_and(|floor| time < floor) {
+                    let (time, timestamp) =
+                        sample_time.get_or_init(|| (SystemTime::now(), current_timestamp()));
+                    if query.age_floor.is_some_and(|floor| *time < floor) {
                         batch.start = Some("1".into());
                     } else {
                         batch.events.push(EventOccurrence::new(
                             "sample",
                             "demo.sample",
-                            time,
+                            timestamp,
                             JsonObject::new(),
                         ));
                     }

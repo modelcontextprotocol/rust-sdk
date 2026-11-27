@@ -1,11 +1,11 @@
 //! Standard Webhooks authentication for the Events Beta.
 
-use std::fmt;
+use std::{fmt, time::SystemTime};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use http::HeaderMap;
+use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -150,7 +150,7 @@ pub fn verify_webhook<'a>(
     headers: &'a HeaderMap,
     body: &[u8],
     secrets: &[WebhookSecret],
-    now: DateTime<Utc>,
+    now: SystemTime,
 ) -> Result<VerifiedWebhook<'a>, EventsError> {
     let invalid = || EventsError::InvalidParams("invalid webhook delivery".into());
     if body.len() > MAX_BODY {
@@ -172,7 +172,10 @@ pub fn verify_webhook<'a>(
         return Err(invalid());
     }
     let seconds: i64 = timestamp.parse().map_err(|_| invalid())?;
-    if now.timestamp().abs_diff(seconds) > 300 {
+    let now = Timestamp::try_from(now).map_err(|_| invalid())?;
+    // Unix seconds are rounded down, including for instants before 1970.
+    let now_seconds = now.as_second() - i64::from(now.subsec_nanosecond() < 0);
+    if now_seconds.abs_diff(seconds) > 300 {
         return Err(invalid());
     }
     let signatures = header("webhook-signature").ok_or_else(invalid)?;
@@ -273,9 +276,12 @@ mod tests {
         let new = WebhookSecret::generate();
         let bad = WebhookSecret::generate();
         let id = "msg_verification_example";
-        let seconds = 1649367553_i64;
+        let seconds = 1649367553_u64;
         let timestamp = seconds.to_string();
-        let now = |offset| DateTime::from_timestamp(seconds + offset, 0).unwrap();
+        let now = |offset| {
+            SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(seconds.checked_add_signed(offset).unwrap())
+        };
         let body = br#"{ "type": "verification", "challenge": "sample" }"#;
         let signature = format!(
             "v1a,unused {} {}",
@@ -313,8 +319,9 @@ mod tests {
     fn authenticates_future_controls_and_tolerates_missing_or_null_gap_cursor() {
         let secret = WebhookSecret::generate();
         let id = "msg_control_example";
-        let now = DateTime::from_timestamp(1649367553, 0).unwrap();
-        let timestamp = now.timestamp().to_string();
+        let seconds = 1649367553;
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        let timestamp = seconds.to_string();
         let mut headers = HeaderMap::new();
         headers.insert("webhook-id", id.parse().unwrap());
         headers.insert("x-mcp-subscription-id", "sub_abc".parse().unwrap());
