@@ -670,11 +670,16 @@ where
                     ct,
                 ));
             }
-            // A notification during the bootstrap window (e.g. notifications/cancelled,
-            // the only client->server notification in 2026-07-28) must be tolerated,
-            // not treated as a fatal error. Before any request there is nothing to
-            // cancel, so drop it and keep waiting for the committing request.
-            ClientJsonRpcMessage::Notification(_) => {}
+            // Notifications carry no response obligation, and before the first
+            // request there is nothing for one to act on (no in-flight requests to
+            // cancel or report progress for), so drop it and keep waiting for the
+            // committing request instead of ending the session.
+            ClientJsonRpcMessage::Notification(notification) => {
+                tracing::debug!(
+                    notification = ?notification.notification,
+                    "dropping a client notification received before the first request"
+                );
+            }
             other => {
                 return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
                     other,
